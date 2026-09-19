@@ -1,0 +1,47 @@
+/* beautify-select · 手帐风自定义下拉组件样式（plugin-kit）
+   依赖 CSS 变量：--card --ink --ink-soft --line --accent --accent-deep --accent-soft
+   可选覆盖（不覆盖用默认薄荷绿）：
+     --dd-ring        展开时触发栏光圈
+     --dd-shadow      面板阴影
+     --dd-thumb       滚动条滑块
+     --dd-thumb-hover 滚动条滑块 hover
+   用法：配合 beautify-select.js，对原生 <select> 调用 beautifySelect(sel) */
+.dd { position: relative; min-width: 0; }
+.dd-native { display: none; }
+.dd-trigger {
+  width: 100%; min-height: 38px;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--card);
+  padding: 8px 12px; cursor: pointer; font-family: inherit; font-size: 14px; color: var(--ink);
+  text-align: left; transition: border-color .16s, background-color .16s, box-shadow .16s;
+}
+.dd-trigger:hover { border-color: var(--accent); background-color: var(--accent-soft); }
+.dd.open .dd-trigger { border-color: var(--accent); box-shadow: 0 0 0 2px var(--dd-ring, rgba(93,174,142,.16)); }
+.dd-label { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dd-caret { width: 14px; height: 14px; flex-shrink: 0; color: var(--accent-deep); transition: transform .18s ease; }
+.dd.open .dd-caret { transform: rotate(180deg); }
+.dd-panel {
+  position: absolute; left: 0; right: 0; top: calc(100% + 5px); z-index: 40;
+  background: var(--card); border: 1px dashed var(--line); border-radius: 13px;
+  box-shadow: 0 12px 28px var(--dd-shadow, rgba(69,75,67,.16));
+  padding: 5px; max-height: 248px; overflow-y: auto; display: none;
+}
+.dd.open .dd-panel { display: block; }
+.dd-opt {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border-radius: 8px; cursor: pointer;
+  font-size: 14px; color: var(--ink); min-width: 0;
+  transition: background-color .12s;
+}
+.dd-opt:hover { background: var(--accent-soft); }
+.dd-opt.on { background: var(--accent-soft); color: var(--accent-deep); font-weight: 600; }
+.dd-check { width: 15px; flex-shrink: 0; color: var(--accent-deep); font-size: 12px; visibility: hidden; }
+.dd-opt.on .dd-check { visibility: visible; }
+.dd-opt-text { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dd-panel::-webkit-scrollbar { width: 8px; height: 8px; }
+.dd-panel::-webkit-scrollbar-track { background: transparent; }
+.dd-panel::-webkit-scrollbar-thumb { background: var(--dd-thumb, #c9dfd3); border-radius: 99px; border: 2px solid var(--card); }
+.dd-panel::-webkit-scrollbar-thumb:hover { background: var(--dd-thumb-hover, #5dae8e); }
+.dd-panel { scrollbar-width: thin; scrollbar-color: var(--dd-thumb, #c9dfd3) transparent; }
+/* 面板溢出容器时提升该容器层级（组件 JS 展开时自动加类，收起时移除），防止下层内容穿模 */
+.dd-open-card { position: relative; z-index: 30; }
