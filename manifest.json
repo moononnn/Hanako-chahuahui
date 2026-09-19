@@ -1,0 +1,45 @@
+{
+  "manifestVersion": 2,
+  "id": "chahuahui",
+  "name": "茶话会",
+  "version": "0.7.287",
+  "entry": "index.js",
+  "description": "茶话会：像 QQ 一样跟伙伴闲聊。主对话框面对面谈正事，这里围炉聊八卦。",
+  "icon": "assets/icon.png",
+  "minAppVersion": "0.942.0",
+  "capabilities": [
+    "app/models.infer",
+    "app/agents.read",
+    "app/resources.read"
+  ],
+  "network": {
+    "allowedHosts": ["news.google.com"],
+    "methods": ["GET"],
+    "defaultTimeoutMs": 8000,
+    "maxResponseBytes": 1048576
+  },
+  "contributes": {
+    "cards": [
+      {
+        "id": "panel",
+        "title": "茶话会",
+        "description": "好友列表与聊天窗口。",
+        "face": {
+          "image": "assets/cover.webp"
+        },
+        "route": "/panel.html",
+        "realization": "page",
+        "siteNavEntry": true,
+        "detached": {
+          "route": "/panel.html"
+        },
+        "detachedDefaultSize": {
+          "width": 1080,
+          "height": 800
+        },
+        "cardForm": "flush",
+        "titlebar": "solid"
+      }
+    ]
+  }
+}

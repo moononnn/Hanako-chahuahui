@@ -1,0 +1,3739 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>茶话会</title>
+  <script>
+    // 样式表得现拉，不能等缓存。
+    //
+    // 宿主给静态文件挂了长缓存，于是出过这样的事：代码改了、重启了，界面还是老样子
+    // （背景铺不上、选图预览还是裁的）。给地址挂一个本次加载的时间戳，每次都对一次。
+    // 脚本同步跑在 head 里，body 还没开始画，不会闪。
+    for (const href of ["assets/panel.css"]) {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = `${href}?t=${Date.now()}`;
+      document.head.appendChild(link);
+    }
+  </script>
+</head>
+<body>
+  <div class="shell" id="shell">
+    <button class="rail-btn" id="btn-unfold" title="展开伙伴展板" aria-label="展开伙伴展板" hidden>
+      <svg class="ico" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+        <path d="M6.4 3.6 10.6 8l-4.2 4.4" />
+      </svg>
+      <span class="rail-dot" id="rail-dot" hidden></span>
+    </button>
+
+    <aside class="friends">
+      <div class="friends-head">
+        <div class="friends-head-text">
+          <h1>
+            <svg class="mark" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 9.5h11l-1.3 6.9a2 2 0 0 1-1.97 1.6H8.27a2 2 0 0 1-1.97-1.6L5 9.5Z"/>
+              <path d="M16 11h1.4a2.4 2.4 0 0 1 0 4.8h-2.2"/>
+              <path d="M9.3 6.8c0-.9.7-1.4.7-2.3M12.3 6.8c0-.9.7-1.4.7-2.3"/>
+            </svg>
+            茶话会
+          </h1>
+          <p id="subtitle">回房间，随便聊两句</p>
+        </div>
+        <button class="icon-btn" id="btn-fold" title="收起伙伴展板" aria-label="收起伙伴展板">
+          <svg class="ico" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <path d="M9.6 3.6 5.4 8l4.2 4.4" />
+          </svg>
+        </button>
+      </div>
+      <ul class="friend-list" id="friends"></ul>
+    </aside>
+
+    <section class="chat" id="chat">
+      <div class="chat-head">
+        <span class="chat-av" id="chat-avatar" title="双击戳一下" hidden>
+          <span class="ph">?</span>
+          <img class="im" alt="" hidden>
+        </span>
+        <span class="title" id="chat-title">挑个人说话</span>
+        <span class="spacer"></span>
+        <button class="head-tool" id="btn-appearance" type="button" title="聊天背景" aria-label="打开聊天背景" disabled>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 15.5 13.8 5.7a2.1 2.1 0 0 1 3 3L7 18.5H4v-3Z"/><path d="m11.8 7.7 2.5 2.5M5.5 4.5v3M4 6h3M15.5 13.5v3M14 15h3"/></svg>
+        </button>
+        <button class="head-tool" id="btn-settings" type="button" title="茶话会设置" aria-label="打开茶话会设置">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8.2 2.8h3.6l.5 2a5.9 5.9 0 0 1 1.2.7l1.9-.8 1.8 3.1-1.5 1.4a6.7 6.7 0 0 1 0 1.5l1.5 1.4-1.8 3.1-1.9-.8a5.9 5.9 0 0 1-1.2.7l-.5 2H8.2l-.5-2a5.9 5.9 0 0 1-1.2-.7l-1.9.8-1.8-3.1 1.5-1.4a6.7 6.7 0 0 1 0-1.5L2.8 7.8l1.8-3.1 1.9.8a5.9 5.9 0 0 1 1.2-.7l.5-2Z"/><circle cx="10" cy="10" r="2.2"/></svg>
+        </button>
+      </div>
+      <div class="appearance-popover" id="appearance-popover" hidden>
+        <div class="appearance-head"><strong>聊天背景</strong><button class="appearance-close" id="appearance-close" type="button" aria-label="关闭">×</button></div>
+        <div class="appearance-preview" id="appearance-preview"><span>选一张背景，看看聊天里的效果</span></div>
+        <div class="appearance-gallery" id="appearance-gallery"></div>
+        <div class="appearance-actions"><button class="soft-tool" id="appearance-pick" type="button">上传背景</button><button class="text-tool" id="appearance-clear" type="button">清除当前背景</button><input id="appearance-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></div>
+        <label class="appearance-opacity"><span>背景明暗</span><input id="appearance-opacity" type="range" min="0" max="100" step="1"><b id="appearance-opacity-value">52%</b></label>
+      </div>
+      <div class="stream" id="stream">
+        <div class="empty" id="empty-tip">左边点一位伙伴，就能开始聊了<span class="empty-hint">还没有伙伴？点右上角齿轮，去『伙伴管理』建一个茶话会角色</span></div>
+      </div>
+      <div class="composer">
+        <div class="emoji-drawer" id="emoji-drawer" hidden>
+          <div class="emoji-tabs" id="emoji-tabs" role="tablist" aria-label="表情选择"></div>
+          <div class="sticker-new-group" id="sticker-new-group" hidden>
+            <input id="sticker-new-group-name" type="text" maxlength="12" placeholder="给这个分组起个名字" aria-label="新分组名">
+            <button class="sticker-tool" id="sticker-new-group-ok" type="button">好</button>
+            <button class="sticker-tool" id="sticker-new-group-cancel" type="button">算了</button>
+          </div>
+          <div class="emoji-grid" id="emoji-grid" hidden></div>
+          <div class="sticker-picker" id="sticker-picker" hidden>
+            <div class="sticker-picker-head">
+              <span id="sticker-picker-title">表情包</span>
+              <span class="picker-spacer"></span>
+              <button class="sticker-tool" id="sticker-group-delete" type="button" hidden>删分组</button>
+              <button class="sticker-tool" id="sticker-manage" type="button">管理</button>
+              <button class="sticker-add" id="sticker-add" type="button">添加</button>
+            </div>
+            <div class="sticker-tools" id="sticker-search-row">
+              <input id="sticker-search" type="search" placeholder="在图库里找一张…" aria-label="搜索表情包">
+            </div>
+            <div class="sticker-grid" id="sticker-grid"></div>
+            <div class="sticker-empty" id="sticker-empty" hidden>
+              <p id="sticker-empty-text">图库还空着</p>
+              <button class="sticker-add-empty" id="sticker-add-empty" type="button">从表情包图库添加</button>
+            </div>
+          </div>
+          <div class="sticker-import" id="sticker-import" hidden>
+            <div class="sticker-picker-head">
+              <button class="sticker-back" id="sticker-import-back" type="button">‹ 返回图库</button>
+              <span class="picker-spacer"></span>
+              <button class="sticker-tool" id="sticker-import-retry" type="button" hidden>重试</button>
+            </div>
+            <div class="sticker-tools">
+              <input id="source-search" type="search" placeholder="搜索情绪、场景或关键词…" aria-label="搜索表情包图库">
+            </div>
+            <div class="sticker-note" id="sticker-import-note" hidden></div>
+            <div class="sticker-source-grid" id="sticker-source-grid"></div>
+            <div class="sticker-import-foot">
+              <span id="sticker-selected-count">已选 0 张</span>
+              <input id="new-sticker-group" type="text" maxlength="40" placeholder="新分组名（可选）" aria-label="新分组名">
+              <button id="sticker-import-confirm" type="button">添加到图库</button>
+            </div>
+          </div>
+        </div>
+        <div class="pending-image" id="pending-image" hidden>
+          <button class="pending-image-view" id="pending-image-view" type="button" title="点击放大查看待发送图片">
+            <img id="pending-image-thumb" alt="待发送图片">
+            <span class="pending-image-badge">图片</span>
+          </button>
+          <div class="pending-image-copy">
+            <strong id="pending-image-state">准备发给 ta</strong>
+            <span id="pending-image-name">图片</span>
+          </div>
+          <button class="pending-image-remove" id="pending-image-remove" type="button" title="取消这张图片" aria-label="取消这张图片">×</button>
+        </div>
+        <div class="pending-sticker" id="pending-sticker" hidden>
+          <div class="pending-sticker-view">
+            <img id="pending-sticker-thumb" alt="待发送表情包">
+            <span class="pending-image-badge">表情包</span>
+          </div>
+          <div class="pending-image-copy">
+            <strong id="pending-sticker-state">准备发给 ta</strong>
+            <span id="pending-sticker-name">表情包</span>
+          </div>
+          <button class="pending-image-remove" id="pending-sticker-remove" type="button" title="取消这张表情包" aria-label="取消这张表情包">×</button>
+        </div>
+        <div class="status-line" id="status" role="status" aria-live="polite"></div>
+        <div class="composer-row">
+          <button class="emoji-btn image-btn" id="btn-image" type="button" title="添加图片" aria-label="添加图片" disabled>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.2" y="3.5" width="13.6" height="13" rx="2"></rect><circle cx="7.2" cy="7.5" r="1.2"></circle><path d="m4.8 14.2 3.4-3.4 2.4 2.2 1.8-1.7 2.8 2.9M14.8 3.2v4.2M12.7 5.3h4.2"></path></svg>
+          </button>
+          <input id="image-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+          <button class="emoji-btn" id="btn-emoji" type="button" title="表情和表情包" aria-label="打开表情和表情包" disabled>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.2"></circle><path d="M6.8 11.8c.9 1.1 1.9 1.6 3.2 1.6s2.3-.5 3.2-1.6M7.2 8h.1M12.7 8h.1"></path></svg>
+          </button>
+          <textarea id="input" rows="1" placeholder="说点什么…" title="Enter 发送，Shift+Enter 换行" aria-label="输入消息" disabled></textarea>
+          <button class="send" id="btn-send" type="button" title="发送" aria-label="发送" disabled>
+            <svg class="send-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="m3.2 9.1 13.5-5.4-3.4 13.1-3.1-5.1-7-2.6Z"></path><path d="m10.2 11.7 6.5-8"></path></svg>
+            <svg class="send-confirm" viewBox="0 0 20 20" aria-hidden="true"><path d="m4.2 10.2 3.7 3.7 8-8"></path></svg>
+          </button>
+        </div>
+      </div>
+    </section>
+    <div class="settings-view" id="settings-view" hidden>
+      <iframe id="settings-frame" title="茶话会设置" loading="lazy"></iframe>
+    </div>
+  </div>
+
+  <div class="image-lightbox" id="image-lightbox" hidden role="dialog" aria-modal="true" aria-label="查看图片">
+    <button class="image-lightbox-close" id="image-lightbox-close" type="button" aria-label="关闭图片预览">×</button>
+    <img id="image-lightbox-image" alt="图片预览">
+  </div>
+
+  <!-- 认识 ta：没完成初步认识的伙伴不能开始聊。性格是这应用的魂，得先一起聊过一遍。 -->
+  <div class="ob" id="ob" hidden>
+    <div class="ob-card">
+      <header class="ob-head">
+        <h2 id="ob-title">先认识一位伙伴</h2>
+        <p id="ob-sub"></p>
+      </header>
+      <div class="ob-body" id="ob-body"></div>
+      <footer class="ob-foot">
+        <span class="ob-step" id="ob-step"></span>
+        <span class="ob-gap"></span>
+        <button class="ob-btn ghost" id="ob-back" type="button" hidden>上一步</button>
+        <button class="ob-btn primary" id="ob-next" type="button">下一步</button>
+      </footer>
+    </div>
+  </div>
+
+  <script type="module">
+    import { hana } from "./assets/sdk.js";
+    import { analyzeBackgroundUrl, buttonThemeFromSample } from "./assets/background-adaptive.js";
+
+    const el = {
+      shell: document.getElementById("shell"),
+      fold: document.getElementById("btn-fold"),
+      unfold: document.getElementById("btn-unfold"),
+      railDot: document.getElementById("rail-dot"),
+      friends: document.getElementById("friends"),
+      chat: document.getElementById("chat"),
+      stream: document.getElementById("stream"),
+      input: document.getElementById("input"),
+      send: document.getElementById("btn-send"),
+      imageButton: document.getElementById("btn-image"),
+      imageFile: document.getElementById("image-file"),
+      pendingImage: document.getElementById("pending-image"),
+      pendingImageView: document.getElementById("pending-image-view"),
+      pendingImageThumb: document.getElementById("pending-image-thumb"),
+      pendingImageState: document.getElementById("pending-image-state"),
+      pendingImageName: document.getElementById("pending-image-name"),
+      pendingImageRemove: document.getElementById("pending-image-remove"),
+      pendingSticker: document.getElementById("pending-sticker"),
+      pendingStickerThumb: document.getElementById("pending-sticker-thumb"),
+      pendingStickerState: document.getElementById("pending-sticker-state"),
+      pendingStickerName: document.getElementById("pending-sticker-name"),
+      pendingStickerRemove: document.getElementById("pending-sticker-remove"),
+      imageLightbox: document.getElementById("image-lightbox"),
+      imageLightboxClose: document.getElementById("image-lightbox-close"),
+      imageLightboxImage: document.getElementById("image-lightbox-image"),
+      chatAvatar: document.getElementById("chat-avatar"),
+      title: document.getElementById("chat-title"),
+      settingsButton: document.getElementById("btn-settings"),
+      appearanceButton: document.getElementById("btn-appearance"),
+      settingsView: document.getElementById("settings-view"),
+      settingsFrame: document.getElementById("settings-frame"),
+      appearancePopover: document.getElementById("appearance-popover"),
+      appearanceClose: document.getElementById("appearance-close"),
+      appearancePreview: document.getElementById("appearance-preview"),
+      appearanceGallery: document.getElementById("appearance-gallery"),
+      appearancePick: document.getElementById("appearance-pick"),
+      appearanceClear: document.getElementById("appearance-clear"),
+      appearanceFile: document.getElementById("appearance-file"),
+      appearanceOpacity: document.getElementById("appearance-opacity"),
+      appearanceOpacityValue: document.getElementById("appearance-opacity-value"),
+      status: document.getElementById("status"),
+      subtitle: document.getElementById("subtitle"),
+      emptyTip: document.getElementById("empty-tip"),
+      emojiButton: document.getElementById("btn-emoji"),
+      emojiDrawer: document.getElementById("emoji-drawer"),
+      emojiTabs: document.getElementById("emoji-tabs"),
+      stickerNewGroup: document.getElementById("sticker-new-group"),
+      stickerNewGroupName: document.getElementById("sticker-new-group-name"),
+      stickerNewGroupOk: document.getElementById("sticker-new-group-ok"),
+      stickerNewGroupCancel: document.getElementById("sticker-new-group-cancel"),
+      emojiGrid: document.getElementById("emoji-grid"),
+      stickerPicker: document.getElementById("sticker-picker"),
+      stickerSearch: document.getElementById("sticker-search"),
+      stickerSearchRow: document.getElementById("sticker-search-row"),
+      stickerAdd: document.getElementById("sticker-add"),
+      stickerAddEmpty: document.getElementById("sticker-add-empty"),
+      stickerManage: document.getElementById("sticker-manage"),
+      stickerGroupDelete: document.getElementById("sticker-group-delete"),
+      stickerGrid: document.getElementById("sticker-grid"),
+      stickerEmpty: document.getElementById("sticker-empty"),
+      stickerEmptyText: document.getElementById("sticker-empty-text"),
+      stickerImport: document.getElementById("sticker-import"),
+      stickerImportBack: document.getElementById("sticker-import-back"),
+      stickerImportRetry: document.getElementById("sticker-import-retry"),
+      stickerImportNote: document.getElementById("sticker-import-note"),
+      sourceSearch: document.getElementById("source-search"),
+      stickerSourceGrid: document.getElementById("sticker-source-grid"),
+      stickerSelectedCount: document.getElementById("sticker-selected-count"),
+      newStickerGroup: document.getElementById("new-sticker-group"),
+      stickerImportConfirm: document.getElementById("sticker-import-confirm"),
+    };
+
+    let partners = [];
+    let current = null;
+    let lastPartnerId = null;
+    let busy = false;
+    // 请求被后端拒绝或失败时先把原话寄存在对应伙伴名下，切回来还能接着发。
+    const pendingDrafts = new Map();
+    let inputOwner = null;
+    let inputRevision = 0;
+    let pendingImage = null;
+    let imageChoiceSeq = 0;
+    let pendingSticker = null;
+    let openPartnerSeq = 0;
+    let partnersLoadSeq = 0;
+    /** 已经画过的消息 id，用来增量补新消息（戳一下之后要等ta回应） */
+    let seenIds = new Set();
+    /** 聊天窗里要不要给两边挂头像（设置里开的，默认关，跟以前一样） */
+    let showMessageAvatars = false;
+    /** 默认关闭：打开后才给伙伴回复显示重新生成/编辑入口。 */
+    let messageRefineEnabled = false;
+    /** id → 表情。跟叫法表同源（后端随 /partners 发下来），不在前端另拄一份 */
+    let actionEmoji = new Map();
+    /** 画当前这一屏时用的是哪种外观；跟设置对不上就整段重画 */
+    let paintedWithAvatars = null;
+    /** 当前这个窗的全部消息（重画时要拿回来） */
+    let currentMessages = [];
+    /** 聊天请求只对发起时那一代窗口有效；切窗后旧回包一律丢掉。 */
+    let threadViewSeq = 0;
+    /** 重画或切窗会让正在播放/补画的旧任务失效，避免旧任务重新往新窗口塞气泡。 */
+    let renderGeneration = 0;
+    let liveDots = null;
+    let appendNewQueue = Promise.resolve();
+    /** 从设置页跳进来的单次建档动作；消费后立刻清掉 URL，避免 bootChat 重入。 */
+    let launchAction = null;
+    let appearanceBackground = null;
+    let appearanceGalleryUrls = [];
+    let appearanceOpacityTimer = null;
+    let statusTimer = null;
+    let armedBackgroundFile = "";
+    let armedBackgroundTimer = null;
+
+    /**
+     * 左边那块伙伴展板收不收。
+     *
+     * 茶话会经常跟主对话框并排开着，窗口一窄，展板占着 244px 就显得挤；
+     * 收起来聊天区整块让过去。她自己点过就认她的，没点过就看窗口宽窄自己走——
+     * 而且窗口宽窄一变就重新判（以前只在开场判一次，先把窗口拉宽、再拉窄，展板就赖着不让位）。
+     * 手动那笔只在她当时那一档宽度里算数，跨过档位就还给自动，不然一次点击会按着窄窗不让收。
+     */
+    const FOLD_KEY = "chahuahui.listCollapsed";
+    const FOLD_AUTO_WIDTH = 820;
+    /** 窄到这个份上展板就浮到聊天区上（跟 CSS 里那条断点对齐），选完伙伴自己收 */
+    const NARROW_WIDTH = 600;
+    /** 她手动点的收/展；null = 没点过，跟着窗口宽窄走 */
+    let foldManual = null;
+    /** 上一回的自动判断，用来认出「跨档了」 */
+    let foldAutoLast = null;
+
+    const autoFolds = () => window.innerWidth < FOLD_AUTO_WIDTH;
+    const isNarrow = () => window.innerWidth < NARROW_WIDTH;
+
+    function applyFolded(collapsed, { persist = true } = {}) {
+      const fold = Boolean(collapsed);
+      el.shell.classList.toggle("list-collapsed", fold);
+      el.unfold.hidden = !fold;
+      if (el.emptyTip?.isConnected) {
+        el.emptyTip.innerHTML = fold
+          ? "伙伴展板收起来了<br>点左边的把手展开"
+          : "左边点一位伙伴<br>就能开始聊了";
+      }
+      if (persist) {
+        try { localStorage.setItem(FOLD_KEY, fold ? "1" : "0"); } catch { /* 记不住就算了，这一轮照用 */ }
+      }
+    }
+
+    /** 该收还是该展：她手动点过就认她的，没点过看窗口宽窄 */
+    function foldWanted() {
+      return foldManual === null ? autoFolds() : foldManual;
+    }
+
+    function syncFold({ persist = false } = {}) {
+      applyFolded(foldWanted(), { persist });
+    }
+
+    {
+      let stored = null;
+      try { stored = localStorage.getItem(FOLD_KEY); } catch { /* 读不到就当没选过 */ }
+      if (stored !== null) foldManual = stored === "1";
+      foldAutoLast = autoFolds();
+      syncFold();
+    }
+
+    // 窗口宽窄一変就重新判；跨过档位就把手动那笔让开，回到自动
+    window.addEventListener("resize", () => {
+      const nowAuto = autoFolds();
+      if (nowAuto !== foldAutoLast) {
+        foldAutoLast = nowAuto;
+        foldManual = null;
+      }
+      if (foldWanted() !== el.shell.classList.contains("list-collapsed")) syncFold();
+    });
+
+    function foldByHand(value) {
+      foldManual = value;
+      applyFolded(value);
+    }
+
+    // 窄窗下展板是盖在聊天区上的浮层，选完人得把它收回去，不然聊天窗一直被盖着
+    function foldAfterPick() {
+      if (isNarrow() && !el.shell.classList.contains("list-collapsed")) {
+        applyFolded(true, { persist: false });
+      }
+    }
+
+    el.fold.addEventListener("click", () => foldByHand(true));
+    el.unfold.addEventListener("click", () => foldByHand(false));
+
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    /**
+     * 头像现拉现用。
+     * 图在后端现读 Hana 那边的头像文件，所以 Hana 里换了头像，这边跟着换；
+     * 请求要带 App 票据，不能用裸 img src（宿主会判 403），所以走 blob。
+     * 拉不到就不放图，退回一个字。
+     */
+    const AVATAR_TTL_MS = 5 * 60 * 1000;
+    /** agentId → { at, url }；拉不到也记一笔，免得每轮轮询都去敲一遍 */
+    const avatarCache = new Map();
+
+    async function loadAvatar(agentId) {
+      const hit = avatarCache.get(agentId);
+      if (hit && Date.now() - hit.at < AVATAR_TTL_MS) return hit.url;
+      let url = null;
+      try {
+        const res = await hana.api.fetch(`avatar/${encodeURIComponent(agentId)}`, { method: "GET" });
+        if (res.ok) {
+          const blob = await res.blob();
+          if (blob.size > 0) url = URL.createObjectURL(blob);
+        }
+      } catch { /* 没头像就算了，退回一个字 */ }
+      const prev = avatarCache.get(agentId)?.url;
+      if (prev && prev !== url) URL.revokeObjectURL(prev);
+      avatarCache.set(agentId, { at: Date.now(), url });
+      return url;
+    }
+
+    /**
+     * 表情包：气泡里存的是哨兵串，真正的图走后端现读现发。
+     * 跟头像一样得带 App 票据，裸 img src 会被判 403，所以走 blob。
+     */
+    const STICKER_PREFIX = "\u0001stk:";
+    const stickerCache = new Map();
+
+    function stickerIdOf(text) {
+      return typeof text === "string" && text.startsWith(STICKER_PREFIX)
+        ? text.slice(STICKER_PREFIX.length)
+        : "";
+    }
+
+    /**
+     * 老消息里可能残留的光杆标记（模型漏写关键词那次的产物，形如「[表情]」）。
+     * 已经存进账本的历史改不了，这一层把它挡在屏幕外，免得聊天里冒出三个字。
+     */
+    const BARE_MARKER_RE = /^\s*[\[【［]\s*表情包?\s*[:：]?\s*[\]】］]\s*$/;
+    function isBareStickerMarker(text) {
+      return typeof text === "string" && BARE_MARKER_RE.test(text);
+    }
+
+    /**
+     * 取一张图。图库里的图跟「来源图库」的图走两条路：
+     * 图库走 /sticker/:agentId/:id（自己复制的，跟伙伴无关），
+     * 来源走 /source-sticker/:id（导入页要看全库，不能被伙伴白名单筛）。
+     */
+    async function loadStickerImage(stickerId, { source = false, agentId = current } = {}) {
+      const imageId = String(stickerId || "");
+      if (!imageId) return null;
+      if (!source && !agentId) return null;
+      const key = source ? `src\u0000${imageId}` : `own\u0000${String(agentId)}\u0000${imageId}`;
+      if (stickerCache.has(key)) return stickerCache.get(key);
+      const path = source
+        ? `source-sticker/${encodeURIComponent(imageId)}`
+        : `sticker/${encodeURIComponent(agentId)}/${encodeURIComponent(imageId)}`;
+      let url = null;
+      try {
+        const res = await hana.api.fetch(path, { method: "GET" });
+        if (res.ok) {
+          const blob = await res.blob();
+          if (blob.size > 0) url = URL.createObjectURL(blob);
+        }
+      } catch { /* 读不到就当没这张图，这一条不显示 */ }
+      stickerCache.set(key, url);
+      return url;
+    }
+
+    /** 兼容老名字：聊天气泡只要一张图，不关心来源。 */
+    function loadSticker(stickerId, agentId = current) {
+      return loadStickerImage(stickerId, { agentId });
+    }
+
+    /**
+     * 图多得吓人（三百多张），一次全发请求会把宿主顶住。
+     * 排个队，最多四张同时在路上，画完自动补下一张。
+     */
+    const imageJobs = [];
+    let imageRunning = 0;
+    const IMAGE_CONCURRENCY = 4;
+
+    function queueStickerImage(img, stickerId, options = {}) {
+      imageJobs.push({ img, stickerId, options });
+      pumpStickerImages();
+    }
+
+    function pumpStickerImages() {
+      while (imageRunning < IMAGE_CONCURRENCY && imageJobs.length) {
+        const job = imageJobs.shift();
+        imageRunning += 1;
+        void loadStickerImage(job.stickerId, job.options)
+          .then((url) => { if (url && job.img.isConnected) job.img.src = url; })
+          .catch(() => { /* 读不到就不放图 */ })
+          .finally(() => { imageRunning -= 1; pumpStickerImages(); });
+      }
+    }
+
+    /*
+     * 悬浮大预览：格子缩到五十来像素之后，单看小图认不出是哪一张。
+     * 鼠标停到格子上，就在光标边上浮一张大的。
+     * 节点挂在 body 上、fixed 定位，为的是躲开抽屉和网格两层滚动容器；
+     * 放它们里面的话，放大出来的部分会被 overflow 裁掉，越靠边的图越明显。
+     */
+    const hoverPreview = document.createElement("div");
+    hoverPreview.className = "sticker-hover-preview";
+    hoverPreview.hidden = true;
+    const hoverPreviewImg = document.createElement("img");
+    hoverPreviewImg.alt = "";
+    hoverPreview.appendChild(hoverPreviewImg);
+    document.body.appendChild(hoverPreview);
+    let hoverPreviewOwner = null;
+
+    function hideStickerPreview() {
+      hoverPreviewOwner = null;
+      hoverPreview.hidden = true;
+      hoverPreviewImg.removeAttribute("src");
+    }
+
+    function placeStickerPreview(event) {
+      const box = hoverPreview.getBoundingClientRect();
+      const gap = 16;
+      let left = event.clientX + gap;
+      let top = event.clientY + gap;
+      // 碰边就翻到光标另一侧，别把预览顶出屏幕
+      if (left + box.width > window.innerWidth - 8) left = event.clientX - gap - box.width;
+      if (top + box.height > window.innerHeight - 8) top = event.clientY - gap - box.height;
+      hoverPreview.style.left = `${Math.max(8, Math.round(left))}px`;
+      hoverPreview.style.top = `${Math.max(8, Math.round(top))}px`;
+    }
+
+    function showStickerPreview(img, event) {
+      // 图还没到就没什么好预览的，也不排队等它
+      const src = img.currentSrc || img.src;
+      if (!src) return;
+      if (hoverPreviewOwner === img) return;
+      hoverPreviewOwner = img;
+      hoverPreviewImg.src = src;
+      hoverPreview.hidden = false;
+      placeStickerPreview(event);
+    }
+
+    /** 两个网格共用一套，事件委托挂一次就够，重画时不用重绑 */
+    function bindStickerPreview(grid) {
+      grid.addEventListener("mouseover", (event) => {
+        const img = event.target;
+        if (!img || img.tagName !== "IMG") return;
+        if (!img.closest(".sticker-pick, .sticker-source-choice")) return;
+        showStickerPreview(img, event);
+      });
+      grid.addEventListener("mousemove", (event) => { if (hoverPreviewOwner) placeStickerPreview(event); });
+      grid.addEventListener("mouseout", (event) => { if (event.target === hoverPreviewOwner) hideStickerPreview(); });
+      // 滚动之后光标没动位，预览留在原地反而误事，先收起来
+      grid.addEventListener("scroll", hideStickerPreview, { passive: true });
+    }
+    bindStickerPreview(el.stickerGrid);
+    bindStickerPreview(el.stickerSourceGrid);
+
+    const BUILTIN_EMOJI = [
+      "😀", "😄", "😂", "🥹", "🥰", "😌", "😎", "🤔", "😮", "😳", "😤", "😅",
+      "🙄", "😑", "😶", "🥲", "😭", "😡", "🤗", "🫶", "👍", "👎", "👏", "✨",
+    ];
+    /** 自己挑进来的图库、自己建的分组、以及表情包插件那边的全库（只当进货来源） */
+    let stickerRows = [];
+    let stickerGroups = [];
+    let activeStickerGroup = "__all";
+    let emojiPage = "emoji";
+    let sourceRows = [];
+    let sourceMatched = [];
+    let sourceShown = 0;
+    let sourceAvailable = false;
+    let sourceReason = "";
+    let sourceHiddenUntagged = 0;
+    /** 图库是为哪个伙伴拉的；没拉过或换了人就得重拉 */
+    let stickerLoadedFor = null;
+    /** 正在添加图库：锁住那个按钮，挡住连点造成的重复提交 */
+    let importing = false;
+    const selectedSourceIds = new Set();
+    /** 管理态：缩略图角上冒一把叉，这会儿点图不发图，只删图 */
+    let manageMode = false;
+    let armedStickerId = "";
+    let armedGroupDelete = false;
+    /**
+     * 来源一批批往下画，画完在末尾留个哨兵：它一露头就补下一批（见 renderSourceMore）。
+     * 批次不能取消——每张图都是一次请求加一次解码，三百多张一起上，卡的是宿主，
+     * 跟格子变小没关系。但她也不该为这个数字操心，所以“再看”那个按钮换成滑到底自己续。
+     */
+    const SOURCE_BATCH = 40;
+    /** 图库超过这个数才摆搜索框；小格子一屏能放开四十来张，够看就不用找 */
+    const SEARCH_FROM = 20;
+    /**
+     * 一次点「添加到图库」分几趟送。
+     * 送一趟就能报一个实在的数字（“正在添加 16/40”），不是转圈糊弄；
+     * 整批一次发过去她要盯着一个不动的界面等十几秒。
+     */
+    const IMPORT_CHUNK = 8;
+
+    /**
+     * 顶上那一排：Emoji、表情包（就是全部）、她建的每个分组、＋。
+     * 以前末尾还挂个「收起」，现在点抽屉外面就收，那个按钮不必罢了。
+     * 分组直接升格成 tab，不再藏在第二层。
+     */
+    function renderStickerTabs() {
+      el.emojiTabs.innerHTML = "";
+      const put = (label, { active = false, extra = "", title = "", onClick = null } = {}) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `emoji-tab${active ? " active" : ""}${extra ? ` ${extra}` : ""}`;
+        button.textContent = label;
+        if (title) button.title = title;
+        if (onClick) button.addEventListener("click", onClick);
+        el.emojiTabs.appendChild(button);
+      };
+      put("Emoji", { active: emojiPage === "emoji", onClick: () => setEmojiPage("emoji") });
+      put("表情包", {
+        active: emojiPage === "sticker" && activeStickerGroup === "__all",
+        onClick: () => pickStickerGroup("__all"),
+      });
+      for (const group of stickerGroups) {
+        put(group.name, {
+          active: emojiPage === "sticker" && activeStickerGroup === group.id,
+          onClick: () => pickStickerGroup(group.id),
+        });
+      }
+      put("＋", {
+        extra: "add",
+        title: "新建分组",
+        onClick: () => (el.stickerNewGroup.hidden ? openNewGroupRow() : closeNewGroupRow()),
+      });
+    }
+
+    function setEmojiPage(page) {
+      emojiPage = page === "sticker" ? "sticker" : "emoji";
+      const stickers = emojiPage === "sticker";
+      el.emojiGrid.hidden = stickers;
+      el.stickerPicker.hidden = !stickers;
+      el.stickerImport.hidden = true;
+      if (!stickers) imageJobs.length = 0;
+      clearSourceSentinel();
+      hideStickerPreview();
+      renderStickerTabs();
+    }
+
+    /**
+     * 切分组：同一个抽屉里换页。
+     * 图库拉过一次就不重复敲后端，但「一次都没拉过」和「换了伙伴」必须拉——
+     * 少了这一步，添加页会拿初始值把「还没拉」误判成「读不出来」。
+     */
+    async function ensureStickerLibrary() {
+      if (stickerLoadedFor === current) return;
+      await loadStickerLibrary();
+    }
+
+    function pickStickerGroup(groupId) {
+      activeStickerGroup = groupId;
+      manageMode = false;
+      armedStickerId = "";
+      armedGroupDelete = false;
+      el.stickerManage.textContent = "管理";
+      el.stickerGroupDelete.textContent = "删分组";
+      el.stickerGroupDelete.hidden = true;
+      setEmojiPage("sticker");
+      renderStickerRows();
+      void ensureStickerLibrary();
+    }
+
+    function openEmojiDrawer(page = "emoji") {
+      if (!current) return;
+      el.emojiDrawer.hidden = false;
+      setEmojiPage(page);
+      /*
+       * 打开就拉，不分哪一页。
+       * 顶上那排 tab 是拿图库数据画的（她建的分组全在里面），
+       * 挂到「点了 tab 才拉」就晚了——第一次打开抽屉分组是空的，
+       * 得先点一下「表情包」它们才冒出来。
+       */
+      void loadStickerLibrary();
+    }
+
+    function closeEmojiDrawer() {
+      el.emojiDrawer.hidden = true;
+      armedStickerId = "";
+      armedGroupDelete = false;
+      closeNewGroupRow();
+      hideStickerPreview();
+    }
+
+    function renderEmojiGrid() {
+      el.emojiGrid.innerHTML = "";
+      for (const emoji of BUILTIN_EMOJI) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "emoji-choice";
+        button.textContent = emoji;
+        button.title = `插入 ${emoji}`;
+        button.addEventListener("click", () => {
+          const start = el.input.selectionStart ?? el.input.value.length;
+          const end = el.input.selectionEnd ?? start;
+          el.input.value = `${el.input.value.slice(0, start)}${emoji}${el.input.value.slice(end)}`;
+          el.input.selectionStart = el.input.selectionEnd = start + emoji.length;
+          autosizeInput();
+          el.input.focus();
+        });
+        el.emojiGrid.appendChild(button);
+      }
+    }
+
+    function rowsForGroup() {
+      const query = String(el.stickerSearch.value || "").trim().toLowerCase();
+      return stickerRows.filter((row) => {
+        if (activeStickerGroup !== "__all" && !(row.groupIds || []).includes(activeStickerGroup)) return false;
+        if (!query) return true;
+        return [row.description, ...(row.emotion || []), ...(row.scene || []), ...(row.keywords || [])]
+          .join(" ").toLowerCase().includes(query);
+      });
+    }
+
+    function renderStickerRows() {
+      /*
+       * 图库页没露脸就不画。
+       * 画一次就要把每一张图排进队列去取（一张一次请求加一次解码），
+       * 只是打开 Emoji 那一页却顺带取三百多张，白烧宿主。
+       * 数据先拉到（顶上那排 tab 要用），格子等露脸时再画。
+       */
+      if (el.emojiDrawer.hidden || el.stickerPicker.hidden) return;
+      const rows = rowsForGroup();
+      el.stickerGrid.innerHTML = "";
+      imageJobs.length = 0;
+      for (const row of rows) {
+        const cell = document.createElement("div");
+        const armed = armedStickerId === row.id;
+        cell.className = `sticker-choice${manageMode ? " managing" : ""}${armed ? " armed" : ""}`;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "sticker-pick";
+        button.title = row.description || row.emotion?.[0] || row.scene?.[0] || "发送表情包";
+        const img = document.createElement("img");
+        img.alt = button.title;
+        button.appendChild(img);
+        button.addEventListener("click", () => { if (!manageMode) selectSticker(row); });
+        cell.appendChild(button);
+        queueStickerImage(img, row.id);
+        if (manageMode) {
+          const kill = document.createElement("button");
+          kill.type = "button";
+          kill.className = "sticker-kill";
+          kill.textContent = armed ? "再点" : "✕";
+          kill.title = armed ? "再点一下就从图库删掉" : "从图库删掉这张";
+          kill.addEventListener("click", () => void armOrRemoveSticker(row.id));
+          cell.appendChild(kill);
+        }
+        el.stickerGrid.appendChild(cell);
+      }
+      el.stickerEmpty.hidden = rows.length > 0;
+      // 图少的时候不摆这一行：一屏能看完，就没什么好找的。
+      // 按整个图库的大小算，不按当前分组算——切来切去忽隐忽现更像毛病。
+      const wantSearch = stickerRows.length > SEARCH_FROM;
+      el.stickerSearchRow.hidden = !wantSearch;
+      if (!wantSearch && el.stickerSearch.value) el.stickerSearch.value = "";
+      if (!rows.length) {
+        el.stickerEmptyText.textContent = stickerRows.length
+          ? "这个分组里还没有图"
+          : (sourceAvailable ? "图库还空着，去挑几张你喜欢的" : "图库还空着；表情包图库这会儿也读不出来");
+      }
+    }
+
+    async function loadStickerLibrary() {
+      const agentId = current;
+      try {
+        const [library, source] = await Promise.all([
+          api("GET", "library/stickers"),
+          api("GET", "sticker-source"),
+        ]);
+        if (current !== agentId) return;
+        stickerRows = library.stickers || [];
+        stickerGroups = library.groups || [];
+        sourceRows = source.stickers || [];
+        sourceAvailable = source.available === true;
+        sourceReason = String(source.reason || "");
+        sourceHiddenUntagged = Number(source.hiddenUntagged || 0);
+        if (activeStickerGroup !== "__all" && !stickerGroups.some((group) => group.id === activeStickerGroup)) {
+          activeStickerGroup = "__all";
+        }
+        stickerLoadedFor = agentId;
+        // 来源读不到时「添加」不藏起来：点进去讲明白为什么，还带重试。
+        // 藏起来只会让她以为功能没了。
+        renderStickerTabs();
+        renderStickerRows();
+      } catch (error) {
+        if (current !== agentId) return;
+        stickerRows = [];
+        stickerGroups = [];
+        sourceRows = [];
+        sourceAvailable = false;
+        sourceReason = "request-failed";
+        stickerLoadedFor = null;
+        renderStickerTabs();
+        renderStickerRows();
+        setStatus(`表情包读不出来：${error.message}`);
+      }
+    }
+
+    /** 来源没读到的时候要说人话，别拿一句“请确认插件已启动”冤枉人。 */
+    function sourceProblemText() {
+      const map = {
+        "not-found": "没找到表情包图库的快照文件。插件装了但快照还没生成时会这样。",
+        "read-failed": "读那份快照的时候被挡了一下，稍后再试。",
+        "bad-json": "快照文件读出来了，但内容是坏的。",
+        "schema-mismatch": "快照格式对不上，多半是表情包插件换过版本。",
+        "empty": "那边图库是空的，先去表情包里加几张。",
+        "no-data-dir": "应用没拿到自己的数据目录，这个不对劲。",
+        "request-failed": "请求没发出去。",
+      };
+      // 没拿到原因不能糊过去：把原样摆出来，下次一看就知道是哪儿没对上。
+      if (!sourceReason) return "表情包图库没读到，而且没说是什么原因（多半是后端还没重新装载）。";
+      return map[sourceReason] || `表情包图库读不出来：${sourceReason}`;
+    }
+
+    async function openStickerImport() {
+      selectedSourceIds.clear();
+      el.sourceSearch.value = "";
+      el.stickerPicker.hidden = true;
+      el.stickerImport.hidden = false;
+      el.stickerImportRetry.hidden = true;
+      el.stickerImportNote.hidden = true;
+      el.stickerSourceGrid.innerHTML = "";
+      el.stickerSelectedCount.textContent = "已选 0 张";
+      // 先把图库拉起一次再判断，不然「还没拉」会被当成「拉不到」。
+      await ensureStickerLibrary();
+      if (!sourceAvailable) {
+        const note = document.createElement("div");
+        note.className = "sticker-source-msg";
+        note.textContent = sourceProblemText();
+        el.stickerSourceGrid.appendChild(note);
+        el.stickerImportRetry.hidden = false;
+        return;
+      }
+      renderSourceRows();
+    }
+
+    function sourceQuery() {
+      return String(el.sourceSearch.value || "").trim().toLowerCase();
+    }
+
+    function renderSourceRows() {
+      const query = sourceQuery();
+      sourceMatched = sourceRows.filter((item) => (
+        !query || [item.description, ...(item.emotion || []), ...(item.scene || []), ...(item.keywords || [])]
+          .join(" ").toLowerCase().includes(query)
+      ));
+      sourceShown = 0;
+      clearSourceSentinel();
+      el.stickerSourceGrid.innerHTML = "";
+      imageJobs.length = 0;
+      appendSourceBatch(SOURCE_BATCH);
+      el.stickerImportNote.hidden = sourceHiddenUntagged <= 0;
+      if (sourceHiddenUntagged > 0) {
+        el.stickerImportNote.textContent = `已藏起 ${sourceHiddenUntagged} 张没标签的图（伙伴读不懂，所以不给选）`;
+      }
+    }
+
+    function appendSourceBatch(size) {
+      const slice = sourceMatched.slice(sourceShown, sourceShown + size);
+      sourceShown += slice.length;
+      for (const row of slice) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `sticker-source-choice${selectedSourceIds.has(row.id) ? " selected" : ""}`;
+        button.title = row.description || "选择表情包";
+        const img = document.createElement("img");
+        img.alt = button.title;
+        button.appendChild(img);
+        button.addEventListener("click", () => {
+          if (selectedSourceIds.has(row.id)) selectedSourceIds.delete(row.id);
+          else selectedSourceIds.add(row.id);
+          button.classList.toggle("selected", selectedSourceIds.has(row.id));
+          el.stickerSelectedCount.textContent = `已选 ${selectedSourceIds.size} 张`;
+        });
+        el.stickerSourceGrid.appendChild(button);
+        queueStickerImage(img, row.id, { source: true });
+      }
+      el.stickerSelectedCount.textContent = `已选 ${selectedSourceIds.size} 张`;
+      renderSourceMore();
+    }
+
+    let sourceSentinel = null;
+    let sourceWatcher = null;
+
+    function clearSourceSentinel() {
+      if (sourceWatcher) { sourceWatcher.disconnect(); sourceWatcher = null; }
+      if (sourceSentinel) { sourceSentinel.remove(); sourceSentinel = null; }
+    }
+
+    /**
+     * 末尾的哨兵：它一滑进视野（带一屏左右的提前量）就补下一批。
+     * 补到填满眼前这屏为止——窄窗口补到三十来张就停，宽窗口补到九十多，两边都不浪费。
+     * 每批之间隔着一次渲染，不会一下子卡住。
+     */
+    function renderSourceMore() {
+      clearSourceSentinel();
+      const rest = sourceMatched.length - sourceShown;
+      if (rest <= 0) return;
+      const sentinel = document.createElement("div");
+      sentinel.className = "sticker-source-sentinel";
+      sentinel.textContent = `往下滑，还有 ${rest} 张`;
+      el.stickerSourceGrid.appendChild(sentinel);
+      sourceSentinel = sentinel;
+      sourceWatcher = new IntersectionObserver((entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        appendSourceBatch(SOURCE_BATCH);
+      }, { root: el.stickerSourceGrid, rootMargin: "120px 0px" });
+      sourceWatcher.observe(sentinel);
+    }
+
+    /**
+     * 建分组：⚠️ 这里绝不能用 window.prompt。
+     * Hana 的 App 页面跑在 webview 里，Electron 根本不实现原生输入弹窗，
+     * 调下去既不弹窗也不报错，名字永远是空的——表现就是「点了＋没反应」。
+     * 所以改成在抽屉里就地摊开一行输入。
+     */
+    function openNewGroupRow() {
+      el.stickerNewGroup.hidden = false;
+      el.stickerNewGroupName.value = "";
+      el.stickerNewGroupName.focus();
+    }
+
+    function closeNewGroupRow() {
+      el.stickerNewGroup.hidden = true;
+      el.stickerNewGroupName.value = "";
+    }
+
+    async function submitNewGroup() {
+      const name = el.stickerNewGroupName.value.trim();
+      if (!name) {
+        el.stickerNewGroupName.focus();
+        setStatus("先给分组起个名字");
+        return;
+      }
+      try {
+        const created = await api("POST", "library/groups", { name });
+        closeNewGroupRow();
+        await loadStickerLibrary();
+        if (created?.group?.id) pickStickerGroup(created.group.id);
+      } catch (error) {
+        setStatus(`分组没建成：${error.message}`);
+      }
+    }
+
+    /** 删图分两步：先变「再点」，再点才真删——不留神点错还有个刹车。 */
+    async function armOrRemoveSticker(stickerId) {
+      if (armedStickerId !== stickerId) {
+        armedStickerId = stickerId;
+        renderStickerRows();
+        return;
+      }
+      armedStickerId = "";
+      try {
+        await api("DELETE", `library/stickers/${encodeURIComponent(stickerId)}`);
+        stickerCache.delete(`own\u0000${String(current)}\u0000${stickerId}`);
+        await loadStickerLibrary();
+        setStatus("已从图库删掉；以前发出去的那条还留着");
+      } catch (error) {
+        setStatus(`删不掉：${error.message}`);
+        renderStickerRows();
+      }
+    }
+
+    /** 删分组同样两步。图不跟着删，只退回「全部」。 */
+    async function armOrRemoveGroup() {
+      const group = stickerGroups.find((row) => row.id === activeStickerGroup);
+      if (!group) return;
+      if (!armedGroupDelete) {
+        armedGroupDelete = true;
+        el.stickerGroupDelete.textContent = "再点一次";
+        return;
+      }
+      armedGroupDelete = false;
+      el.stickerGroupDelete.textContent = "删分组";
+      try {
+        await api("DELETE", `library/groups/${encodeURIComponent(group.id)}`);
+        activeStickerGroup = "__all";
+        await loadStickerLibrary();
+        setStatus(`分组「${group.name}」删了，里面的图退回「全部」`);
+      } catch (error) {
+        setStatus(`分组删不掉：${error.message}`);
+      }
+    }
+
+    /**
+     * 添加到图库。
+     *
+     * 两件事必须做，都是她实机撞出来的：
+     * 一是锁住按钮——取字节是一张一次宿主往返，一批几十张要等好几秒，
+     *   没锁的话她会以为卡死、连点好几下，那就是重复提交；
+     * 二是把数字摆出来——分趟送，每趟完就报“正在添加 x/y”，
+     *   等待感是设计题，只要它在动，体感就完全不同。
+     */
+    async function confirmStickerImport() {
+      if (importing) return;
+      if (!selectedSourceIds.size) return setStatus("先选几张表情包");
+      const ids = [...selectedSourceIds];
+      let groupId = activeStickerGroup === "__all" ? "" : activeStickerGroup;
+      const newName = el.newStickerGroup.value.trim();
+      importing = true;
+      el.stickerImportConfirm.disabled = true;
+      el.stickerImportConfirm.textContent = "正在添加…";
+      let imported = 0;
+      let duplicates = 0;
+      try {
+        if (newName) {
+          const created = await api("POST", "library/groups", { name: newName });
+          groupId = created.group.id;
+        }
+        for (let at = 0; at < ids.length; at += IMPORT_CHUNK) {
+          const slice = ids.slice(at, at + IMPORT_CHUNK);
+          el.stickerImportNote.hidden = false;
+          el.stickerImportNote.textContent = `正在添加 ${Math.min(at + slice.length, ids.length)}/${ids.length}…`;
+          const result = await api("POST", "library/import", { sourceIds: slice, groupId });
+          imported += result?.imported ?? 0;
+          duplicates += result?.duplicates ?? 0;
+        }
+        el.stickerImportNote.hidden = true;
+        el.newStickerGroup.value = "";
+        selectedSourceIds.clear();
+        el.stickerImport.hidden = true;
+        el.stickerPicker.hidden = false;
+        await loadStickerLibrary();
+        if (groupId) pickStickerGroup(groupId);
+        setStatus(
+          duplicates
+            ? `图库里多了 ${imported} 张（${duplicates} 张本来就有，直接并进分组了）`
+            : `图库里多了 ${imported} 张`,
+        );
+      } catch (error) {
+        // 断了就留在这一页：选中的还在、按钮也解开了，再点一次接着加（重了的自己会去重）。
+        el.stickerImportNote.hidden = false;
+        el.stickerImportNote.textContent = `加到一半断了：${error.message}（已经加进去的还在，可以再点一次接着加）`;
+        setStatus(`没加完：${error.message}`);
+      } finally {
+        importing = false;
+        el.stickerImportConfirm.disabled = false;
+        el.stickerImportConfirm.textContent = "添加到图库";
+      }
+    }
+
+    function selectSticker(row) {
+      if (!current || !row?.id || busy) return;
+      pendingSticker = { id: row.id, name: row.description || row.emotion?.[0] || "表情包" };
+      renderPendingSticker();
+      closeEmojiDrawer();
+      setStatus("表情包已放好，可以继续输入文字");
+      el.input.focus();
+    }
+
+    renderEmojiGrid();
+    renderStickerTabs();
+    el.emojiButton.addEventListener("click", () => {
+      if (el.emojiDrawer.hidden) openEmojiDrawer();
+      else closeEmojiDrawer();
+    });
+
+    /*
+     * 点外面就收。聊天区、伙伴展板、发送键，点哪儿都算外面。
+     * 三个得排掉：
+     * 一是开抽屉那一颗（它也在外面，不排会一关一开，看着像闪了一下）；
+     * 二是输入框（她只是想打字，抽屉这时候收掉像是被赶）；
+     * 三是“在不在抽屉里”必须看事件路径，不能用 contains：
+     *   分组 tab 一点就整排重画，被点的那颗当场脱离文档，
+     *   contains 会判成“不在抽屉里”，于是她点分类反而把抽屉点关了。
+     */
+    document.addEventListener("click", (event) => {
+      if (el.emojiDrawer.hidden) return;
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (el.input.contains(target)) return;
+      const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+      const inDrawer = path.length ? path.includes(el.emojiDrawer) : el.emojiDrawer.contains(target);
+      const inButton = path.length ? path.includes(el.emojiButton) : el.emojiButton.contains(target);
+      if (inDrawer || inButton) return;
+      closeEmojiDrawer();
+    });
+    el.stickerNewGroupOk.addEventListener("click", () => void submitNewGroup());
+    el.stickerNewGroupCancel.addEventListener("click", closeNewGroupRow);
+    el.stickerNewGroupName.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void submitNewGroup();
+      } else if (event.key === "Escape") {
+        closeNewGroupRow();
+      }
+    });
+    el.stickerAdd.addEventListener("click", () => void openStickerImport());
+    el.stickerAddEmpty.addEventListener("click", () => void openStickerImport());
+    el.stickerImportRetry.addEventListener("click", () => void (async () => {
+      await loadStickerLibrary();
+      await openStickerImport();
+    })());
+    el.stickerImportBack.addEventListener("click", () => { el.stickerImport.hidden = true; el.stickerPicker.hidden = false; });
+    el.stickerSearch.addEventListener("input", () => renderStickerRows());
+    el.sourceSearch.addEventListener("input", () => renderSourceRows());
+    el.stickerImportConfirm.addEventListener("click", () => void confirmStickerImport());
+    el.stickerManage.addEventListener("click", () => {
+      manageMode = !manageMode;
+      armedStickerId = "";
+      armedGroupDelete = false;
+      el.stickerManage.textContent = manageMode ? "完成" : "管理";
+      el.stickerGroupDelete.textContent = "删分组";
+      el.stickerGroupDelete.hidden = !(manageMode && activeStickerGroup !== "__all");
+      renderStickerRows();
+    });
+    el.stickerGroupDelete.addEventListener("click", () => void armOrRemoveGroup());
+    document.addEventListener("click", (event) => {
+      if (el.appearancePopover.hidden) return;
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+      const inPopover = path.length ? path.includes(el.appearancePopover) : el.appearancePopover.contains(target);
+      const inButton = path.length ? path.includes(el.appearanceButton) : el.appearanceButton.contains(target);
+      if (!inPopover && !inButton) closeAppearance();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      closeEmojiDrawer();
+      closeAppearance();
+    });
+
+    /** 把一张表情包放进来。读不到就整条撤掉，不留在那儿当破图。 */
+    async function stickerBubble(row, line, stickerId) {
+      const img = document.createElement("img");
+      img.className = "sticker loading";
+      img.alt = "表情包";
+      // 插在最前面：图在前、时间在后，她那边的 row-reverse 才会把时间甩到左边去
+      line.prepend(img);
+      const url = await loadSticker(stickerId);
+      if (!url || !img.isConnected) {
+        row.remove();
+        return;
+      }
+      img.src = url;
+      img.classList.remove("loading");
+    }
+
+    /**
+     * 把一个头像容器（里面有 .ph 占位字和 .im 图）填上真图。
+     *
+     * 聊天窗头部那个容器从头到尾就一个节点、谁来都往上填，所以每一笔都先记下
+     * 这次是替谁要的图：图回来的时候要是已经换成别人了（或者这位根本没有头像），
+     * 就把上一张摘干净、露出首字 —— 不然换站到没头像的伙伴身上，会一直挂着上一位的脸。
+     */
+    async function paintAvatar(box, agentId, fallbackText) {
+      if (!box) return;
+      const ph = box.querySelector(".ph");
+      const im = box.querySelector(".im");
+      if (ph) ph.textContent = (fallbackText || "?").slice(0, 1);
+      const want = String(agentId ?? "");
+      box.dataset.avatarWant = want;
+      const url = await loadAvatar(agentId);
+      if (!im || !box.isConnected || box.dataset.avatarWant !== want) return;
+      if (url) {
+        im.src = url;
+        im.hidden = false;
+        if (ph) ph.hidden = true;
+        return;
+      }
+      im.hidden = true;
+      im.removeAttribute("src");
+      if (ph) ph.hidden = false;
+    }
+
+    /**
+     * 卡里的请求必须带 App 票据。用 SDK 的 hana.api.fetch，
+     * 它会把 iframe URL 上的 appSurfaceSession 放进请求头；
+     * 直接用裸 fetch 会被宿主判 403。
+     */
+    async function api(method, sub, body, { timeoutMs = 30000 } = {}) {
+      const path = String(sub).replace(/^\//, "");
+      const init = { method };
+      if (body) {
+        init.headers = { "content-type": "application/json" };
+        init.body = JSON.stringify(body);
+      }
+      // 卡住不能一直转：等太久就把话说清楚（原话还在输入框里，可以重试）。
+      let timer = null;
+      const res = await Promise.race([
+        hana.api.fetch(path, init),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("等得太久了，没能连上。原话还在输入框里，待会儿再试一次。")), timeoutMs);
+        }),
+      ]).finally(() => {
+        if (timer) clearTimeout(timer);
+      });
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch { data = { ok: false, raw: text.slice(0, 300) }; }
+      if (!res.ok || data.ok === false) {
+        throw new Error(data?.error?.message || data?.raw || `HTTP ${res.status}`);
+      }
+      return data;
+    }
+
+    function setStatus(text) {
+      clearTimeout(statusTimer);
+      const next = String(text || "");
+      el.status.textContent = next;
+      if (!next) return;
+      statusTimer = setTimeout(() => {
+        el.status.textContent = "";
+        statusTimer = null;
+      }, 3200);
+    }
+    function scrollDown() { el.stream.scrollTop = el.stream.scrollHeight; }
+
+    /**
+     * 输入框跟着内容长：空着就一行，写多了自己长高。
+     * 上限交给 CSS 的 max-height —— 这里只报自然高，封顶以后就是框里滚，不把输入区抻大。
+     */
+    function autosizeInput() {
+      el.input.classList.toggle("is-multiline", el.input.value.includes("\n"));
+      el.input.style.height = "0px";
+      el.input.style.height = `${el.input.scrollHeight}px`;
+    }
+
+    /**
+     * 消息旁边那个头像框。
+     * 底色和首字常驻，图加载好了盖上去 —— 所以就算没头像、或图还没到，
+     * 排版的宽度也是稳的，不会一抽一抽地跳。
+     */
+    function messageAvatar(agentId, fallbackText) {
+      const box = document.createElement("span");
+      box.className = "msg-av";
+      const ph = document.createElement("span");
+      ph.className = "ph";
+      const im = document.createElement("img");
+      im.className = "im";
+      im.alt = "";
+      im.hidden = true;
+      box.append(ph, im);
+      void paintAvatar(box, agentId, fallbackText);
+      return box;
+    }
+
+    /** 这条消息是谁发的头像（她自己的走 __user，伙伴的走ta的 id）。 */
+    function avatarFor(role) {
+      if (role === "user") return messageAvatar("__user", "我");
+      const p = partners.find((x) => x.id === current);
+      const box = messageAvatar(current, p?.name || "?");
+      box.classList.add("poke-target");
+      box.title = "双击戳一下";
+      box.addEventListener("dblclick", () => void doAction(current));
+      return box;
+    }
+
+    /** 发送时间：今天只报钟点，昨天加个「昨天」，再早把日期带上。 */
+    function bubbleTimeText(at) {
+      const d = new Date(at ?? "");
+      if (Number.isNaN(d.getTime())) return "";
+      const clock = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+      const now = new Date();
+      const sameDay = (a, b) =>
+        a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+      if (sameDay(d, now)) return clock;
+      if (sameDay(d, new Date(now.getTime() - 86400000))) return `昨天 ${clock}`;
+      const date = `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
+      return d.getFullYear() === now.getFullYear() ? `${date} ${clock}` : `${d.getFullYear()} 年 ${date} ${clock}`;
+    }
+
+    /** 聊天流里的时间刻度：只在明显隔了一阵时出现。 */
+    function timeDividerText(at) {
+      const d = new Date(at ?? "");
+      if (Number.isNaN(d.getTime())) return "";
+      const now = new Date();
+      const sameDay = (a, b) =>
+        a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+      const clock = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+      if (sameDay(d, now)) return `今天 ${clock}`;
+      if (sameDay(d, new Date(now.getTime() - 86400000))) return `昨天 ${clock}`;
+      const date = `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
+      return d.getFullYear() === now.getFullYear() ? `${date} ${clock}` : `${d.getFullYear()} 年 ${date} ${clock}`;
+    }
+
+    function timeDivider(at) {
+      const text = timeDividerText(at);
+      if (!text) return null;
+      const node = document.createElement("div");
+      node.className = "time-divider";
+      node.textContent = text;
+      return node;
+    }
+
+    /** 发送时间：普通小字，跟在气泡外侧，鼠标停在那一行上才浮现。 */
+    function messageTime(at) {
+      const span = document.createElement("span");
+      span.className = "msg-time";
+      span.textContent = bubbleTimeText(at);
+      if (!span.textContent) span.hidden = true;
+      return span;
+    }
+
+    let lastRenderedConversationAt = null;
+
+    function bubble(role, text, anchor = null, at = null) {
+      el.emptyTip?.remove();
+      const parsedAt = Date.parse(at ?? "");
+      if (Number.isFinite(parsedAt) && lastRenderedConversationAt !== null
+        && parsedAt - lastRenderedConversationAt >= TIME_DIVIDER_GAP_MS) {
+        const divider = timeDivider(at);
+        if (divider) place(divider, anchor);
+      }
+      const row = document.createElement("div");
+      row.className = `row ${role === "user" ? "me" : "ta"}`;
+      if (showMessageAvatars) row.appendChild(avatarFor(role));
+      const col = document.createElement("div");
+      col.className = "msg-col";
+      // 气泡和时间并排站一层：时间贴着气泡外侧，底下那行「已读」不掺和它的对齐
+      const line = document.createElement("div");
+      line.className = "msg-line";
+      const time = messageTime(at);
+      const stickerId = stickerIdOf(text);
+      if (stickerId) {
+        line.append(time);
+        col.appendChild(line);
+        row.appendChild(col);
+        place(row, anchor);
+        if (Number.isFinite(parsedAt)) lastRenderedConversationAt = parsedAt;
+        scrollDown();
+        void stickerBubble(row, line, stickerId);
+        return { row, col, bubble: col };
+      }
+      const b = document.createElement("div");
+      b.className = "bubble";
+      b.textContent = text;
+      line.append(b, time);
+      col.appendChild(line);
+      row.appendChild(col);
+      place(row, anchor);
+      if (Number.isFinite(parsedAt)) lastRenderedConversationAt = parsedAt;
+      scrollDown();
+      return { row, col, bubble: b };
+    }
+
+    /** 这条该放哪儿：末尾还站着那个「正在输入」的话，就插在它前面。 */
+    function place(row, anchor) {
+      if (anchor?.isConnected) el.stream.insertBefore(row, anchor);
+      else el.stream.appendChild(row);
+    }
+
+    /** 未读小字。挂在气泡那一列里，不跟着头像跑；读到后就收起。 */
+    function tick(parent, text = "未读") {
+      const t = document.createElement("div");
+      t.className = "tick";
+      t.textContent = text;
+      parent.appendChild(t);
+      return t;
+    }
+
+    /** 已画过的未读小字也要跟着后端状态走，读到后收起。 */
+    const tickNodes = new Map();
+
+    function paintTick(node, read) {
+      if (!node) return;
+      if (read) {
+        node.remove();
+        return;
+      }
+      node.textContent = "未读";
+    }
+
+    /* 消息操作条：平时藏着，鼠标悬停在消息上才从这条气泡旁边浮出来。 */
+    const messageActions = document.createElement("div");
+    messageActions.className = "msg-actions";
+    messageActions.hidden = true;
+    document.body.appendChild(messageActions);
+    let actionRow = null;
+    let actionMessage = null;
+    let actionCloseTimer = null;
+    const ACTION_BAR_GAP = 8;
+    const ACTION_BAR_MARGIN = 8;
+
+    function scheduleCloseActions() {
+      clearTimeout(actionCloseTimer);
+      actionCloseTimer = setTimeout(() => closeMessageActions(), 100);
+    }
+    function keepActions() { clearTimeout(actionCloseTimer); }
+    function closeMessageActions() {
+      messageActions.hidden = true;
+      actionRow?.classList.remove("actions-open");
+      actionRow = null;
+      actionMessage = null;
+    }
+    function placeMessageActions(row) {
+      const anchor = row.querySelector(".bubble") || row;
+      const rect = anchor.getBoundingClientRect();
+      const box = messageActions.getBoundingClientRect();
+      const mine = row.classList.contains("me");
+      const left = Math.max(ACTION_BAR_MARGIN, Math.min(mine ? rect.right - box.width : rect.left, window.innerWidth - box.width - ACTION_BAR_MARGIN));
+      let top = rect.top - box.height - ACTION_BAR_GAP;
+      const below = top < ACTION_BAR_MARGIN;
+      if (below) top = rect.bottom + ACTION_BAR_GAP;
+      messageActions.classList.toggle("below", below);
+      messageActions.style.left = `${Math.round(left)}px`;
+      messageActions.style.top = `${Math.round(Math.max(ACTION_BAR_MARGIN, Math.min(top, window.innerHeight - box.height - ACTION_BAR_MARGIN)))}px`;
+    }
+    function actionButton(title, label, icon, handler) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.title = title;
+      button.innerHTML = `${icon}<span>${label}</span>`;
+      button.addEventListener("click", handler);
+      return button;
+    }
+    async function reloadCurrentThread(agentId = current, viewSeq = threadViewSeq) {
+      if (!agentId || current !== agentId || viewSeq !== threadViewSeq) return false;
+      const data = await api("GET", `thread/${encodeURIComponent(agentId)}`);
+      if (current !== agentId || viewSeq !== threadViewSeq) return false;
+      currentMessages = data.messages || [];
+      renderAll(currentMessages);
+      return true;
+    }
+    async function recallMessage(agentId, messageId, viewSeq = threadViewSeq) {
+      closeMessageActions();
+      try {
+        await api("POST", `thread/${encodeURIComponent(agentId)}/retract/${encodeURIComponent(messageId)}`);
+        await reloadCurrentThread(agentId, viewSeq);
+        await loadPartners();
+        if (current === agentId && viewSeq === threadViewSeq) setStatus("消息撤回了");
+      } catch (error) { if (current === agentId && viewSeq === threadViewSeq) setStatus(error.message || "这条消息现在不能撤回"); }
+    }
+    async function regenerateMessage(agentId, messageId, viewSeq = threadViewSeq) {
+      closeMessageActions();
+      setStatus("正在换一种说法…");
+      try {
+        await api("POST", `thread/${encodeURIComponent(agentId)}/refine/${encodeURIComponent(messageId)}/regenerate`);
+        await reloadCurrentThread(agentId, viewSeq);
+        if (current === agentId && viewSeq === threadViewSeq) setStatus("这条回复换好了");
+      } catch (error) { if (current === agentId && viewSeq === threadViewSeq) setStatus(error.message || "这次没生成出新的回复"); }
+    }
+    function openMessageEditor(message, agentId = current, viewSeq = threadViewSeq) {
+      closeMessageActions();
+      const layer = document.createElement("div");
+      layer.className = "message-editor-layer";
+      layer.innerHTML = '<div class="message-editor" role="dialog" aria-modal="true" aria-label="调整伙伴回复"><div class="message-editor-head"><b>调整这条回复</b><button type="button" class="message-editor-close" aria-label="关闭">×</button></div><textarea maxlength="4000"></textarea><div class="message-editor-foot"><button type="button" class="message-editor-cancel">先不改</button><button type="button" class="message-editor-save">采用这版回复</button></div></div>';
+      const textarea = layer.querySelector("textarea");
+      textarea.value = message.text || "";
+      const close = () => layer.remove();
+      layer.querySelector(".message-editor-close").addEventListener("click", close);
+      layer.querySelector(".message-editor-cancel").addEventListener("click", close);
+      layer.addEventListener("click", (event) => { if (event.target === layer) close(); });
+      layer.querySelector(".message-editor-save").addEventListener("click", async (event) => {
+        const button = event.currentTarget;
+        const text = textarea.value.trim();
+        if (!text) { setStatus("回复不能改成空白"); return; }
+        button.disabled = true;
+        button.textContent = "正在保存…";
+        try {
+          await api("POST", `thread/${encodeURIComponent(agentId)}/refine/${encodeURIComponent(message.id)}/edit`, { text });
+          close();
+          await reloadCurrentThread(agentId, viewSeq);
+          if (current === agentId && viewSeq === threadViewSeq) setStatus("这条回复换好了");
+        } catch (error) { button.disabled = false; button.textContent = "采用这版回复"; setStatus(error.message || "没保存上"); }
+      });
+      document.body.appendChild(layer);
+      textarea.focus();
+      textarea.select();
+    }
+    function isLatestAssistantMessage(message, agentId = current) {
+      if (!message?.id || !agentId) return false;
+      const latest = [...currentMessages].reverse().find((row) => row?.role === "assistant" && !row.recalled);
+      return latest?.id === message.id;
+    }
+    function isLatestUserMessage(message, agentId = current) {
+      if (!message?.id || !agentId) return false;
+      const latest = [...currentMessages].reverse().find((row) => row?.role === "user" && !row.recalled);
+      return latest?.id === message.id;
+    }
+
+    function openMessageActions(row, message, agentId = current) {
+      if (!row || !message?.id || !agentId) return;
+      const viewSeq = threadViewSeq;
+      keepActions();
+      if (actionRow === row && !messageActions.hidden) return;
+      closeMessageActions();
+      messageActions.replaceChildren();
+      const icon = {
+        back: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>',
+        refresh: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14-4L4 9"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14 4l2-2"/><path d="M20 20v-5h-5"/></svg>',
+        edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16-.7 4.7L8 20l11-11-4-4L4 16Z"/><path d="m13 6 4 4"/></svg>',
+      };
+      if (message.role === "user") {
+        messageActions.appendChild(actionButton("撤回这条消息", "撤回消息", icon.back, () => void recallMessage(agentId, message.id, viewSeq)));
+      } else if (messageRefineEnabled && isLatestAssistantMessage(message, agentId)) {
+        messageActions.append(
+          actionButton("重新生成这条回复", "重新生成", icon.refresh, () => void regenerateMessage(agentId, message.id, viewSeq)),
+          actionButton("调整这条回复", "编辑", icon.edit, () => openMessageEditor(message, agentId, viewSeq)),
+        );
+      } else return;
+      actionRow = row;
+      actionMessage = message;
+      row.classList.add("actions-open");
+      messageActions.hidden = false;
+      messageActions.style.left = "-9999px";
+      placeMessageActions(row);
+    }
+    function bindMessageActions(row, message, agentId = current) {
+      if (!row || !message?.id || !agentId || row.dataset.actionsBound === "1") return;
+      row.dataset.actionsBound = "1";
+      row.addEventListener("pointerenter", () => openMessageActions(row, message, agentId));
+      row.addEventListener("pointerleave", scheduleCloseActions);
+    }
+    messageActions.addEventListener("pointerenter", keepActions);
+    messageActions.addEventListener("pointerleave", scheduleCloseActions);
+    document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeMessageActions(); });
+    el.stream.addEventListener("scroll", closeMessageActions, { passive: true });
+    window.addEventListener("resize", closeMessageActions);
+
+    function typingIndicator() {
+      const row = document.createElement("div");
+      row.className = "row ta";
+      if (showMessageAvatars) row.appendChild(avatarFor("assistant"));
+      const box = document.createElement("div");
+      box.className = "typing";
+      box.innerHTML = "<i></i><i></i><i></i>";
+      row.appendChild(box);
+      el.stream.appendChild(row);
+      scrollDown();
+      return row;
+    }
+
+    /**
+     * 面对面时把回复「演」出来，而不是等轮询把整条一次画上去。
+     *
+     * 后端已经算好节奏递过来：`readAfterMs` 是 ta 多久看到这条，`items[].gapMs` 是
+     * 每条气泡之间隔多久（短句快、长句慢，对数式）。这里只负责按那个时间表摆出来——
+     * 未读 → 已读 → 正在输入 → 一条条蹦。这套是茶话会的核心手感，不能只剩轮询兜底。
+     *
+     * 她中途切走、或者这轮后端本来就没给回合（手机不在手，只排队），就什么都不做，
+     * 交给轮询补画；绝不在别人的窗口里乱塞气泡。
+     */
+    const liveSkipRepliedTo = new Set();
+    async function playLiveTurn(agentId, viewSeq, started, tickEl) {
+      const repliedTo = started.messageId;
+      const alive = () => current === agentId && viewSeq === threadViewSeq;
+      liveSkipRepliedTo.add(repliedTo);
+      let dots = null;
+      try {
+        await sleep(Math.max(300, Number(started.readAfterMs) || 0));
+        if (!alive()) return;
+        // 已读：小字收起，跟后端那套「读过就不占聊天流」同一条规矩
+        tickEl?.remove();
+        dots = typingIndicator();
+        let payload = null;
+        for (let i = 0; i < 240; i += 1) {
+          const state = await api("GET", `turns/${encodeURIComponent(started.turnId)}`);
+          if (!alive()) return;
+          if (state.status === "ready") { payload = state; break; }
+          if (state.status === "error") break;
+          await sleep(500);
+        }
+        if (!payload) return;
+        for (const item of payload.items || []) {
+          await sleep(Math.max(120, Number(item.gapMs) || 700));
+          if (!alive()) return;
+          bubble("assistant", item.text, null, new Date().toISOString());
+          // 三个点始终站在最新那条下面，不能跑到新消息头上去
+          el.stream.appendChild(dots);
+        }
+        // 这条已经在这儿演完了；记一笔，下一轮轮询别再把整条重画一遍
+        if (payload.replyMessageId) seenIds.add(payload.replyMessageId);
+      } catch {
+        /* 演出失败就当没演：轮询下一轮会把整条补上 */
+      } finally {
+        dots?.remove();
+        liveSkipRepliedTo.delete(repliedTo);
+      }
+    }
+
+    /** 小动作只留一条居中的淡字，回戳也统一双击伙伴头像。 */
+    function renderAction(m) {
+      el.emptyTip?.remove();
+      const row = document.createElement("div");
+      row.className = "poke-row";
+      const line = document.createElement("span");
+      line.className = "poke-line";
+      const emoji = actionEmoji.get(m.actionId);
+      line.textContent = emoji ? `${emoji} ${m.text}` : m.text;
+      row.appendChild(line);
+      el.stream.appendChild(row);
+      scrollDown();
+    }
+
+    /**
+     * 哪些自己的话已经落到盘上成「已读」了。
+     *
+     * 两种算数：① ta真看到过了（存了 readAt，后端落盘，刷新也在）；
+     * ② 老记录没有 readAt 但后面确实出现过ta的话——回都回了，肯定看过了。
+     * 两个都不占就是未读，照实摆出「未读」两个字。
+     */
+    function readUserIds(list) {
+      const out = new Set();
+      let sawAssistant = false;
+      for (let i = list.length - 1; i >= 0; i -= 1) {
+        const m = list[i];
+        if (!m) continue;
+        if (m.role === "assistant") sawAssistant = true;
+        else if (m.role === "user" && (m.readAt || sawAssistant)) out.add(m.id);
+      }
+      return out;
+    }
+
+    const TIME_DIVIDER_GAP_MS = 10 * 60 * 1000;
+
+    /** 画一条消息（历史与增量都走这里） */
+    function renderMessage(m, opts = {}) {
+      if (!m || (seenIds.has(m.id) && !opts.allowSeen)) return false;
+      if (!seenIds.has(m.id)) seenIds.add(m.id);
+      if (m.kind === "poke" || m.kind === "action") {
+        renderAction(m);
+      } else if (m.role === "user") {
+        if (m.recalled) {
+          const recalled = bubble("user", m.text || "你撤回了一条消息", null, m.at);
+          recalled.bubble.classList.add("recalled-bubble");
+          return true;
+        }
+        let col;
+        let row;
+        if (m.kind === "sticker" && Array.isArray(m.bubbles) && m.bubbles.length) {
+          let lastBubble = null;
+          for (const piece of m.bubbles) {
+            const rendered = bubble("user", piece, null, m.at);
+            row = rendered.row;
+            col = rendered.col;
+            lastBubble = rendered.bubble;
+          }
+          if (m.attachment?.id && lastBubble) {
+            const imageNode = document.createElement("img");
+            imageNode.className = "message-image";
+            imageNode.alt = m.attachment.name || "发送的图片";
+            imageNode.loading = "lazy";
+            lastBubble.appendChild(document.createElement("br"));
+            lastBubble.appendChild(imageNode);
+            mountAttachmentImage(imageNode, m.attachment.id, current, Boolean(opts.keepBottom));
+          }
+        } else {
+          const regular = bubble("user", m.text, null, m.at);
+          if (m.attachment?.id) {
+            const imageNode = document.createElement("img");
+            imageNode.className = "message-image";
+            imageNode.alt = m.attachment.name || "发送的图片";
+            imageNode.loading = "lazy";
+            regular.bubble.appendChild(document.createElement("br"));
+            regular.bubble.appendChild(imageNode);
+            mountAttachmentImage(imageNode, m.attachment.id, current, Boolean(opts.keepBottom));
+          }
+          row = regular.row;
+          col = regular.col;
+        }
+        // 只把真正需要注意的未读摆出来；已读不占聊天流的位置。
+        const read = Boolean(opts.read);
+        if (!read) tickNodes.set(m.id, tick(col));
+        if (isLatestUserMessage(m)) bindMessageActions(row, m);
+      } else {
+        const rawList = Array.isArray(opts.assistantPieces)
+          ? opts.assistantPieces
+          : (Array.isArray(m.bubbles) && m.bubbles.length ? m.bubbles : [m.text]);
+        // 光杆 [表情] 不渲染（老消息清不掉，屏幕上也别再看到它）；整条只剩它时才退回原文
+        const filtered = rawList.filter((piece) => !isBareStickerMarker(piece));
+        const list = filtered.length ? filtered : rawList;
+        let lastRow = null;
+        for (const piece of list) lastRow = bubble("assistant", piece, null, m.at).row;
+        if (lastRow && opts.bindAssistantActions !== false
+          && (m.role !== "assistant" || isLatestAssistantMessage(m))) bindMessageActions(lastRow, m);
+      }
+      return true;
+    }
+
+    function invalidateRendering() {
+      renderGeneration += 1;
+      liveDots?.remove();
+      liveDots = null;
+    }
+
+    /** 整段重画（改了外观开关之后用）。 */
+    function renderAll(list) {
+      invalidateRendering();
+      el.stream.innerHTML = "";
+      seenIds = new Set();
+      lastRenderedConversationAt = null;
+      tickNodes.clear();
+      if (!list.length) {
+        const tip = document.createElement("div");
+        tip.className = "empty";
+        const p = partners.find((x) => x.id === current);
+        tip.textContent = `跟${p?.name || "他"}没什么正经事，随便扯吧`;
+        el.stream.appendChild(tip);
+      } else {
+        const read = readUserIds(list);
+        for (const m of list) renderMessage(m, { read: read.has(m.id), keepBottom: true });
+        scrollDown();
+      }
+      paintedWithAvatars = showMessageAvatars;
+    }
+
+    /** 把线上已有的消息 id 都记成「画过了」，不重画。
+     *  实时那条路是自己一条条蹦出来的，不经过 seenIds；补这一下免得下一轮轮询又画一遍。
+     */
+    async function markAllSeen(agentId, viewSeq = threadViewSeq) {
+      try {
+        const data = await api("GET", `thread/${agentId}`);
+        if (current !== agentId || viewSeq !== threadViewSeq) return;
+        currentMessages = data.messages || [];
+        for (const m of currentMessages) if (m?.id) seenIds.add(m.id);
+      } catch { /* 记不上就下一轮轮询自己会处理 */ }
+    }
+
+    /** 把线上新到的消息补进来（已画的跳过）；外观开关变了就整段重画 */
+    const ASYNC_BUBBLE_GAP_MS = 680;
+    async function appendNewOnce(agentId, viewSeq) {
+      const generation = renderGeneration;
+      const data = await api("GET", `thread/${agentId}`);
+      if (current !== agentId || viewSeq !== threadViewSeq || generation !== renderGeneration) return 0;
+      currentMessages = data.messages || [];
+      if (paintedWithAvatars !== showMessageAvatars) {
+        renderAll(currentMessages);
+        return Math.max(1, currentMessages.length);
+      }
+      let added = 0;
+      const read = readUserIds(currentMessages);
+      for (const m of currentMessages) {
+        if (current !== agentId || viewSeq !== threadViewSeq || generation !== renderGeneration) return added;
+        // 正在「演」的那一轮由 playLiveTurn 一条条摆出来，轮询别抢着把整条先画上
+        if (m?.role === "assistant" && m.repliedTo && liveSkipRepliedTo.has(m.repliedTo)) continue;
+        if (m?.role === "assistant" && Array.isArray(m.bubbles) && m.bubbles.length > 1 && !seenIds.has(m.id)) {
+          for (let index = 0; index < m.bubbles.length; index += 1) {
+            if (current !== agentId || viewSeq !== threadViewSeq || generation !== renderGeneration) return added;
+            renderMessage(m, {
+              allowSeen: index > 0,
+              assistantPieces: [m.bubbles[index]],
+              bindAssistantActions: index === m.bubbles.length - 1,
+            });
+            if (index < m.bubbles.length - 1) await sleep(ASYNC_BUBBLE_GAP_MS);
+          }
+          added += 1;
+        } else if (renderMessage(m, { read: read.has(m.id) })) {
+          added += 1;
+        }
+      }
+      // 已经挂在屏幕上的未读小字也要跟着新状态走
+      for (const m of currentMessages) paintTick(tickNodes.get(m.id), read.has(m.id));
+      return added;
+    }
+    function appendNew(agentId) {
+      const viewSeq = threadViewSeq;
+      const run = appendNewQueue.then(() => appendNewOnce(agentId, viewSeq));
+      appendNewQueue = run.catch(() => 0);
+      return run;
+    }
+
+    /**
+     * 戳一下：只把她那一下放上去。
+     *
+     * 不摆「正在回复」的姿态——ta接不接、几时接，都是她看不到的事；
+     * 秒回一个戳也假，所以回不回的时机在后头。
+     */
+    async function doAction(agentId) {
+      if (!agentId || busy) return;
+      busy = true;
+      try {
+        const sent = await api("POST", `action/${agentId}`);
+        await appendNew(agentId);
+        await loadPartners();
+      } catch (error) {
+        setStatus(`没做成：${error.message}`);
+      } finally {
+        busy = false;
+      }
+    }
+
+
+    // 未读数来自同一轮 partners 轮询；聊天入口已经能直接打开并阅读消息，恢复视觉提醒。
+    const SHOW_UNREAD_BADGES = true;
+
+    function renderFriends() {
+      el.friends.innerHTML = "";
+      for (const p of partners) {
+        const li = document.createElement("li");
+        li.className = `friend${current === p.id ? " active" : ""}`;
+        li.innerHTML = `
+          <div class="avatar"><span class="ph"></span><img class="im" alt="" hidden></div>
+          <div class="who">
+            <div class="name"></div>
+            <div class="hint"></div>
+          </div>
+          <span class="badge" hidden></span>`;
+        li.querySelector(".name").textContent = p.name;
+        void paintAvatar(li.querySelector(".avatar"), p.id, p.name);
+        // 名字下面只放最后一句：没聊过的伙伴就空着，不拿人格设定当占位
+        const preview = String(p.lastMessage?.text ?? "").replace(/\s+/g, " ").trim();
+        li.querySelector(".hint").textContent = preview;
+        const badge = li.querySelector(".badge");
+        const unread = Number(p.unread ?? 0);
+        if (SHOW_UNREAD_BADGES && unread > 0) {
+          badge.hidden = false;
+          badge.textContent = unread > 99 ? "99+" : String(unread);
+        }
+        li.setAttribute("role", "button");
+        li.tabIndex = 0;
+        li.setAttribute("aria-label", `${p.name}${badge.hidden ? "" : `，${badge.textContent} 条没看`}`);
+        const openThis = () => openPartner(p.id);
+        li.addEventListener("click", openThis);
+        li.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openThis();
+          }
+        });
+        el.friends.appendChild(li);
+      }
+    }
+
+    function showNoPartner() {
+      threadViewSeq += 1;
+      closeMessageActions();
+      current = null;
+      currentMessages = [];
+      seenIds = new Set();
+      el.title.textContent = "选一位伙伴";
+      el.chatAvatar.hidden = true;
+      el.input.disabled = true;
+      el.send.disabled = true;
+      el.imageButton.disabled = true;
+      el.emojiButton.disabled = true;
+      el.appearanceButton.disabled = true;
+      closeEmojiDrawer();
+      closeAppearance();
+      el.stream.innerHTML = '<div class="empty" id="empty-tip">左边点一位伙伴，就能开始聊了<span class="empty-hint">还没有伙伴？点右上角齿轮，去『伙伴管理』建一个茶话会角色</span></div>';
+      el.emptyTip = document.getElementById("empty-tip");
+      clearChatBackground();
+    }
+
+    async function loadPartners() {
+      const loadSeq = ++partnersLoadSeq;
+      const data = await api("GET", "partners");
+      if (loadSeq !== partnersLoadSeq) return;
+      partners = data.partners || [];
+      lastPartnerId = data.lastPartnerId || null;
+      // 外观开关跟着轮询走：她在设置里改完，最迟一轮就生效
+      showMessageAvatars = Boolean(data.messageAvatars);
+      messageRefineEnabled = Boolean(data.messageRefine);
+      actionEmoji = new Map((data.actionStyles ?? []).map((style) => [style.id, style.emoji]));
+      // 账本读到坏文件时后端会把坏的挪走留档，这里告诉她一声，别让数据静默消失
+      if (data.dataWarning) {
+        setStatus(`有一份数据读到损坏，已经挪走留档（${data.dataWarning.file}），这次按空的算了。`);
+      }
+      const total = data.totalUnread ?? 0;
+      el.subtitle.textContent = total > 0 ? `${total} 条没看` : `${partners.length} 位伙伴`;
+      // 展板收起时也保留提醒，避免消息到了却完全没有入口提示。
+      if (el.railDot) el.railDot.hidden = !(total > 0);
+      const currentWasRemoved = current && !partners.some((partner) => partner.id === current);
+      renderFriends();
+      // 她在设置页换了图或者换了浓度，这儿最迟一轮跟上。
+      // 列表回包可能比当前聊天线程旧；缺背景时不能拿旧 null 清掉刚铺好的房间。
+      if (current) {
+        const currentPartner = partners.find((p) => p.id === current);
+        if (currentPartner?.background) void syncChatBackground(current, currentPartner.background);
+        el.imageButton.disabled = !(currentPartner?.imageCapability?.allowed);
+        el.imageButton.title = currentPartner?.imageCapability?.allowed ? "发送图片" : "当前伙伴没有通过测试的识图模型";
+      }
+      if (currentWasRemoved) {
+        const next = partners[0]?.id;
+        if (next) await openPartner(next);
+        else showNoPartner();
+      }
+    }
+
+    /** 取数轮询不等于人在看；在场只由聚焦页面的心跳续上。 */
+    let presenceTimer = null;
+    let presenceActive = false;
+    let presenceBound = false;
+    let presenceSeq = 0;
+    const presenceToken = globalThis.crypto?.randomUUID?.() || `panel-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    function postPresence(active) {
+      const seq = presenceSeq++;
+      void api("POST", "presence", { active, token: presenceToken, seq }).catch(() => {});
+    }
+
+    function stopPresence() {
+      if (presenceTimer) clearInterval(presenceTimer);
+      presenceTimer = null;
+      if (!presenceActive) return;
+      presenceActive = false;
+      postPresence(false);
+    }
+
+    function syncPresence() {
+      const active = document.visibilityState === "visible" && document.hasFocus();
+      if (!active) {
+        stopPresence();
+        return;
+      }
+      // 盯回窗口这一刻，画在眼前的就算看到了（轮询没焦点时补画过的那些，到这儿补上）
+      reportRead();
+      if (presenceActive) return;
+      presenceActive = true;
+      postPresence(true);
+      presenceTimer = setInterval(() => {
+        if (document.visibilityState !== "visible" || !document.hasFocus()) {
+          stopPresence();
+          return;
+        }
+        postPresence(true);
+      }, 20000);
+    }
+
+    function bindPresence() {
+      if (presenceBound) return;
+      presenceBound = true;
+      window.addEventListener("focus", syncPresence);
+      window.addEventListener("blur", stopPresence);
+      window.addEventListener("pagehide", stopPresence);
+      document.addEventListener("visibilitychange", syncPresence);
+      syncPresence();
+    }
+
+    /**
+     * 她真的看过才算已读。
+     *
+     * 以前是「拉一次记录就盖章」，可轮询也在走那条路：窗口开着、人跑去忙别的，
+     * 消息照样被标成已读，伙伴就拿着假收据来问「你咋不回我」。
+     * 现在只有页面可见、窗口有焦点、消息确实画在她眼前时才上报。
+     */
+    let lastReportedReadId = null;
+    function reportRead(agentId = current) {
+      if (!agentId || agentId !== current) return;
+      if (document.visibilityState !== "visible" || !document.hasFocus()) return;
+      const last = currentMessages[currentMessages.length - 1];
+      if (!last?.id || last.id === lastReportedReadId) return;
+      lastReportedReadId = last.id;
+      api("POST", `thread/${encodeURIComponent(agentId)}/read`, { throughId: last.id }).catch(() => {});
+    }
+
+    /** 隔一阵看一眼有没有人来消息（未读徒标就靠它）。 */
+    let pollTimer = null;
+    function startPolling() {
+      if (pollTimer) return;
+      pollTimer = setInterval(async () => {
+        if (document.visibilityState !== "visible") return;
+        try {
+          await loadPartners();
+          if (current) await appendNew(current);
+          reportRead();
+        } catch { /* 轮询失败不吵她 */ }
+      }, 5000);
+    }
+
+    /**
+     * 聊天窗的背景。图从后端现拉（带票据走 blob），每位伙伴一张。
+     *
+     * 铺在整个聊天窗上，不是只铺中间那条滚动带：上头尾两条工具栏是半透明的玻璃，
+     * 透出来的是同一张图，三块板拼起来的那道缝才消得掉。
+     * 气泡是实心的，所以图只在缝隙里露出来；看不清字的风险由那层暖白遮罩兜。
+     * 同一个人同一张图只更浓度，不重拉一遍。
+     */
+    let chatBgUrl = null;
+    let chatBgFor = null;
+    let chatBgStamp = null;
+    let sendButtonAdaptSeq = 0;
+    let chatBackgroundSyncSeq = 0;
+    let appearanceLoadSeq = 0;
+
+    function clearChatBackground() {
+      if (chatBgUrl) { URL.revokeObjectURL(chatBgUrl); chatBgUrl = null; }
+      chatBgFor = null;
+      chatBgStamp = null;
+      ++sendButtonAdaptSeq;
+      el.send.style.removeProperty("--send-bg");
+      el.send.style.removeProperty("--send-fg");
+      el.send.style.removeProperty("--send-border");
+      el.chat.style.removeProperty("--status-bg");
+      el.chat.style.removeProperty("--status-fg");
+      el.chat.style.removeProperty("--status-border");
+      el.chat.style.removeProperty("--bubble-me-bg");
+      el.chat.style.removeProperty("--bubble-me-border");
+      el.chat.style.removeProperty("--bubble-ta-bg");
+      el.chat.style.removeProperty("--bubble-ta-border");
+      el.chat.style.removeProperty("--bubble-me-fg");
+      el.chat.style.removeProperty("--bubble-ta-fg");
+      el.chat.style.removeProperty("--mc-veil");
+      el.chat.style.removeProperty("background-image");
+      el.chat.style.removeProperty("background-size");
+      el.chat.style.removeProperty("background-position");
+      el.chat.style.removeProperty("background-repeat");
+      el.chat.classList.remove("has-bg");
+    }
+
+    async function adaptSendButtonColor(url) {
+      const seq = ++sendButtonAdaptSeq;
+      const theme = buttonThemeFromSample(await analyzeBackgroundUrl(url));
+      if (seq !== sendButtonAdaptSeq || chatBgUrl !== url) return;
+      if (!theme) return;
+      el.send.style.setProperty("--send-bg", theme.background);
+      el.send.style.setProperty("--send-fg", theme.foreground);
+      el.send.style.setProperty("--send-border", theme.border);
+      el.chat.style.setProperty("--status-bg", theme.noticeBackground);
+      el.chat.style.setProperty("--status-fg", theme.noticeForeground);
+      el.chat.style.setProperty("--status-border", theme.noticeBorder);
+      el.chat.style.setProperty("--bubble-me-bg", theme.bubbleMeBackground);
+      el.chat.style.setProperty("--bubble-me-border", theme.bubbleMeBorder);
+      el.chat.style.setProperty("--bubble-ta-bg", theme.bubbleTaBackground);
+      el.chat.style.setProperty("--bubble-ta-border", theme.bubbleTaBorder);
+      el.chat.style.setProperty("--bubble-me-fg", theme.bubbleMeForeground);
+      el.chat.style.setProperty("--bubble-ta-fg", theme.bubbleTaForeground);
+    }
+
+    function paintChatBackground(opacity, url) {
+      const veil = Math.max(0, Math.min(100, Number(opacity))) / 100;
+      el.chat.style.setProperty("background-image", `linear-gradient(rgba(247, 244, 236, ${veil}), rgba(247, 244, 236, ${veil})), url("${url}")`);
+      el.chat.style.setProperty("background-size", "cover");
+      el.chat.style.setProperty("background-position", "center");
+      el.chat.style.setProperty("background-repeat", "no-repeat");
+      // 头尾那两条磨砂玻璃跟着同一个浓度走：她调暗背景，条子也一起变白
+      el.chat.style.setProperty("--mc-veil", String(veil));
+    }
+
+    function closeAppearance() {
+      appearanceLoadSeq += 1;
+      appearanceBackground = null;
+      el.appearancePopover.hidden = true;
+      for (const url of appearanceGalleryUrls) URL.revokeObjectURL(url);
+      appearanceGalleryUrls = [];
+    }
+
+    async function loadAppearance(agentId = current) {
+      if (!agentId) return;
+      const loadSeq = ++appearanceLoadSeq;
+      try {
+        const data = await api("GET", `backgrounds/${encodeURIComponent(agentId)}`);
+        if (loadSeq !== appearanceLoadSeq || current !== agentId) return;
+        const currentBg = data.current ?? partners.find((p) => p.id === agentId)?.background ?? null;
+        appearanceBackground = currentBg;
+        const opacity = Number.isFinite(Number(currentBg?.opacity)) ? Number(currentBg.opacity) : 52;
+        el.appearanceOpacity.value = String(opacity);
+        el.appearanceOpacityValue.textContent = `${opacity}%`;
+        el.appearanceClear.hidden = !currentBg;
+        el.appearanceGallery.replaceChildren();
+        for (const url of appearanceGalleryUrls) URL.revokeObjectURL(url);
+        appearanceGalleryUrls = [];
+        for (const item of data.backgrounds ?? []) {
+          const tile = document.createElement("div");
+          tile.className = "appearance-tile";
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "appearance-thumb";
+          button.classList.toggle("on", item.file === currentBg?.file);
+          const image = document.createElement("img"); image.alt = ""; button.appendChild(image);
+          button.title = item.file === currentBg?.file ? "当前背景" : "使用这张背景";
+          button.addEventListener("click", async () => {
+            button.disabled = true;
+            try {
+              const saved = await api("POST", `background/${encodeURIComponent(agentId)}`, { file: item.file, opacity: Number(el.appearanceOpacity.value) });
+              if (current !== agentId || loadSeq !== appearanceLoadSeq) return;
+              appearanceBackground = saved.background;
+              await syncChatBackground(agentId, appearanceBackground);
+              await loadAppearance(agentId);
+            } catch (error) { setStatus(`背景没换成：${error.message}`); } finally { button.disabled = false; }
+          });
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "appearance-remove";
+          remove.textContent = "删";
+          remove.title = "从背景图库删除这张图";
+          remove.addEventListener("click", async (event) => {
+            event.stopPropagation();
+            if (armedBackgroundFile !== item.file) {
+              armedBackgroundFile = item.file;
+              remove.textContent = "再删";
+              setStatus("再点一次，才会从背景图库里删除这张图");
+              clearTimeout(armedBackgroundTimer);
+              armedBackgroundTimer = setTimeout(() => { armedBackgroundFile = ""; remove.textContent = "删"; }, 3000);
+              return;
+            }
+            remove.disabled = true;
+            try {
+              await api("DELETE", `background/${encodeURIComponent(agentId)}?file=${encodeURIComponent(item.file)}&remove=1`);
+              if (current !== agentId || loadSeq !== appearanceLoadSeq) return;
+              if (currentBg?.file === item.file) await syncChatBackground(agentId, null);
+              await loadAppearance(agentId);
+              setStatus("背景图删掉了");
+            } catch (error) { setStatus(`背景图删不掉：${error.message}`); }
+            finally { remove.disabled = false; }
+          });
+          tile.append(button, remove);
+          el.appearanceGallery.appendChild(tile);
+          void hana.api.fetch(`background/${encodeURIComponent(agentId)}?file=${encodeURIComponent(item.file)}&v=${encodeURIComponent(item.at ?? "")}`).then((res) => res.ok ? res.blob() : null).then((blob) => {
+            if (!blob?.size || !button.isConnected || loadSeq !== appearanceLoadSeq || current !== agentId) return;
+            const url = URL.createObjectURL(blob);
+            if (loadSeq !== appearanceLoadSeq || current !== agentId) { URL.revokeObjectURL(url); return; }
+            appearanceGalleryUrls.push(url); image.src = url;
+          }).catch(() => {});
+        }
+        if (loadSeq !== appearanceLoadSeq || current !== agentId) return;
+        await paintAppearancePreview(agentId, currentBg);
+      } catch (error) {
+        if (loadSeq === appearanceLoadSeq && current === agentId) setStatus(`背景图库没读出来：${error.message}`);
+      }
+    }
+
+    async function paintAppearancePreview(agentId, background) {
+      if (!background?.file) {
+        el.appearancePreview.style.removeProperty("background-image");
+        el.appearancePreview.classList.remove("has-bg");
+        return;
+      }
+      try {
+        const res = await hana.api.fetch(`background/${encodeURIComponent(agentId)}?file=${encodeURIComponent(background.file)}&v=${encodeURIComponent(background.at ?? "")}`);
+        const blob = await res.blob();
+        if (!blob.size || current !== agentId) return;
+        const url = URL.createObjectURL(blob);
+        const opacity = Number(el.appearanceOpacity.value);
+        el.appearancePreview.style.backgroundImage = `linear-gradient(rgba(247,244,236,${opacity / 100}), rgba(247,244,236,${opacity / 100})), url("${url}")`;
+        el.appearancePreview.classList.add("has-bg");
+        el.appearancePreview.dataset.previewUrl = url;
+      } catch { /* 预览取不到时保留空状态 */ }
+    }
+
+    async function openAppearance() {
+      if (!current) return;
+      el.appearancePopover.hidden = false;
+      await loadAppearance(current);
+    }
+
+    window.__chahuahuiHana = hana;
+    function closeSettingsView() {
+      el.settingsView.hidden = true;
+      el.settingsFrame.src = "about:blank";
+    }
+    function openSettingsView() {
+      el.settingsFrame.src = `settings.html?embedded=1&t=${Date.now()}`;
+      el.settingsView.hidden = false;
+    }
+    window.addEventListener("message", (event) => {
+      if (event.source !== el.settingsFrame.contentWindow) return;
+      if (event.data?.type === "chahuahui:close-settings") {
+        closeSettingsView();
+        return;
+      }
+      if (event.data?.type !== "chahuahui:open-panel-action") return;
+      const action = event.data.action;
+      const value = String(event.data.value ?? "").trim();
+      if (action === "reshape") {
+        const partner = partners.find((row) => row.id === value);
+        if (!partner) return;
+        closeSettingsView();
+        current = null;
+        renderFriends();
+        void obStartRecognition(partner, { restart: true });
+        return;
+      }
+      if (action === "recognize") {
+        const partner = partners.find((row) => row.id === value);
+        if (!partner) return;
+        closeSettingsView();
+        current = null;
+        renderFriends();
+        void obPick(partner);
+        return;
+      }
+      if (action === "create") {
+        closeSettingsView();
+        obState = { ...emptyObState(), mode: "local-create" };
+        obOpen();
+        obRender();
+        startPolling();
+        bindPresence();
+      }
+    });
+    el.settingsButton.addEventListener("click", openSettingsView);
+    el.appearanceButton.addEventListener("click", () => void openAppearance());
+    el.appearanceClose.addEventListener("click", closeAppearance);
+    el.appearancePick.addEventListener("click", () => el.appearanceFile.click());
+    el.appearanceFile.addEventListener("change", async () => {
+      const file = el.appearanceFile.files?.[0];
+      el.appearanceFile.value = "";
+      if (!file || !current) return;
+      if (file.size > 12 * 1024 * 1024) return setStatus("这张图太大了，换一张小一点的（上限 12MB）");
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const saved = await api("POST", `background/${encodeURIComponent(current)}`, { base64: String(reader.result).split(",")[1] ?? "", opacity: Number(el.appearanceOpacity.value) });
+          appearanceBackground = saved.background;
+          await syncChatBackground(current, appearanceBackground);
+          await loadAppearance(current);
+          setStatus("背景换好了");
+        } catch (error) { setStatus(`背景没换成：${error.message}`); }
+      };
+      reader.readAsDataURL(file);
+    });
+    el.appearanceClear.addEventListener("click", async () => {
+      if (!current) return;
+      try { await api("DELETE", `background/${encodeURIComponent(current)}`); await syncChatBackground(current, null); await loadAppearance(current); setStatus("已清除当前背景"); }
+      catch (error) { setStatus(`背景没清掉：${error.message}`); }
+    });
+    el.appearanceOpacity.addEventListener("input", () => {
+      if (!appearanceBackground || !current) return;
+      const opacity = Number(el.appearanceOpacity.value);
+      el.appearanceOpacityValue.textContent = `${opacity}%`;
+      void paintAppearancePreview(current, appearanceBackground);
+      clearTimeout(appearanceOpacityTimer);
+      appearanceOpacityTimer = setTimeout(async () => {
+        try { const data = await api("POST", `background/${encodeURIComponent(current)}`, { opacity }); appearanceBackground = data.background; await syncChatBackground(current, appearanceBackground); }
+        catch (error) { setStatus(`明暗没存上：${error.message}`); }
+      }, 180);
+    });
+
+    async function syncChatBackground(agentId, background) {
+      if (!background?.file) {
+        ++chatBackgroundSyncSeq;
+        if (chatBgFor !== null || chatBgUrl) clearChatBackground();
+        return;
+      }
+      const tone = background.tone || "medium";
+      const stamp = background.at ?? "";
+      // 还是这间房、还是那张图：只有图已经下载好时才复用；下载中的重复同步不能短路掉唯一请求。
+      if (chatBgFor === agentId && chatBgStamp === stamp && chatBgUrl) {
+        paintChatBackground(background.opacity ?? ({ light: 34, medium: 52, heavy: 76 }[tone] ?? 52), chatBgUrl);
+        return;
+      }
+      const syncSeq = ++chatBackgroundSyncSeq;
+      clearChatBackground();
+      chatBgFor = agentId;
+      chatBgStamp = stamp;
+      el.chat.classList.add("has-bg");
+      try {
+        const res = await hana.api.fetch(`background/${encodeURIComponent(agentId)}?file=${encodeURIComponent(background.file)}&v=${encodeURIComponent(stamp)}`);
+        if (!res.ok) throw new Error("no background");
+        const blob = await res.blob();
+        if (!blob.size) throw new Error("empty");
+        // 回来时可能已经换人、换图了，别把上一位的房间贴到这一位身上
+        if (syncSeq !== chatBackgroundSyncSeq || chatBgFor !== agentId || chatBgStamp !== stamp) return;
+        chatBgUrl = URL.createObjectURL(blob);
+        adaptSendButtonColor(chatBgUrl);
+        // 直接铺在聊天窗本身。用内联 background-image，不赌伪元素背景层——
+        // webview 对那种画法不稳，这个坑踩过。
+        paintChatBackground(background.opacity ?? ({ light: 34, medium: 52, heavy: 76 }[tone] ?? 52), chatBgUrl);
+      } catch (error) {
+        // 旧房间的失败回包不能碰新房间的背景和提示。
+        if (syncSeq !== chatBackgroundSyncSeq || chatBgFor !== agentId || chatBgStamp !== stamp) return;
+        el.chat.classList.remove("has-bg");
+        setStatus(`背景没铺上：${error?.message || error}`);
+      }
+    }
+
+    function rememberComposerDraft() {
+      if (!inputOwner || !el.input.value.trim()) return;
+      pendingDrafts.set(inputOwner, { text: el.input.value.trim(), revision: inputRevision });
+    }
+
+    async function openPartner(agentId) {
+      // 点当前伙伴只收起列表，不重拉线程、不清输入框，也不打断正在进行的回复。
+      if (current === agentId) {
+        foldAfterPick();
+        return;
+      }
+      rememberComposerDraft();
+      inputOwner = agentId;
+      inputRevision += 1;
+      el.input.value = "";
+      autosizeInput();
+      const openSeq = ++openPartnerSeq;
+      ++threadViewSeq;
+      ++imageChoiceSeq;
+      closeMessageActions();
+      // 还没完成初步认识的伙伴进不了聊天窗，先一起聊一遍。故意拦的：性格得自己过一道手。
+      if (obPending?.has(agentId)) {
+        const target = partners.find((p) => p.id === agentId) ?? { id: agentId, name: agentId };
+        current = null;
+        renderFriends();
+        foldAfterPick();
+        void obPick(target);
+        return;
+      }
+      current = agentId;
+      renderFriends();
+      foldAfterPick();
+      const partner = partners.find((p) => p.id === agentId);
+      el.title.textContent = partner?.name || agentId;
+      el.chatAvatar.hidden = false;
+      void paintAvatar(el.chatAvatar, agentId, partner?.name || agentId);
+      el.input.disabled = false;
+      el.send.disabled = false;
+      el.imageButton.disabled = !(partner?.imageCapability?.allowed);
+      el.imageButton.title = partner?.imageCapability?.allowed ? "发送图片" : "当前伙伴没有通过测试的识图模型";
+      el.emojiButton.disabled = false;
+      el.appearanceButton.disabled = false;
+      closeAppearance();
+      clearPendingImage();
+      clearPendingSticker();
+      stickerRows = [];
+      stickerGroups = [];
+      activeStickerGroup = "__all";
+      emojiPage = "emoji";
+      sourceRows = [];
+      sourceAvailable = false;
+      sourceReason = "";
+      sourceHiddenUntagged = 0;
+      stickerLoadedFor = null;
+      manageMode = false;
+      armedStickerId = "";
+      armedGroupDelete = false;
+      renderStickerTabs();
+      closeEmojiDrawer();
+      setStatus("");
+      el.stream.innerHTML = "";
+      clearChatBackground(); // 新的人进来，先把上一位的房间收走
+      seenIds = new Set();
+      try {
+        const data = await api("GET", `thread/${agentId}`);
+        if (openSeq !== openPartnerSeq) return;
+        currentMessages = data.messages || [];
+        renderAll(currentMessages);
+        const draft = pendingDrafts.get(agentId);
+        if (draft && inputOwner === agentId) {
+          el.input.value = draft.text;
+          autosizeInput();
+          setStatus("刚才那条没送出去，已经替你留着了");
+        }
+        // 这间房的背景：拿这会儿的数据先铺一次，不等轮询那一轮
+        void syncChatBackground(agentId, data.pref?.background ?? null);
+        // 她真的看着这个窗：这一刻画到哪儿就算读到哪儿（不再拿「拉过一次」当看过）
+        reportRead(agentId);
+        // 徒标跟着刷新
+        await loadPartners();
+      } catch (error) {
+        if (openSeq === openPartnerSeq) setStatus(`打开失败：${error.message}`);
+      }
+    }
+
+    function readImageFile(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result ?? ""));
+        reader.onerror = () => reject(new Error("图片没读出来"));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function renderPendingImage() {
+      const image = pendingImage;
+      if (!image?.data) {
+        el.pendingImage.hidden = true;
+        el.pendingImageThumb.removeAttribute("src");
+        return;
+      }
+      el.pendingImageThumb.src = image.data;
+      el.pendingImageThumb.alt = image.name || "待发送图片";
+      el.pendingImageState.textContent = `准备发给 ${partners.find((partner) => partner.id === current)?.name || "ta"}`;
+      el.pendingImageName.textContent = image.name || "图片";
+      el.pendingImage.hidden = false;
+    }
+
+    function renderPendingSticker() {
+      const sticker = pendingSticker;
+      if (!sticker?.id) {
+        el.pendingSticker.hidden = true;
+        el.pendingStickerThumb.removeAttribute("src");
+        return;
+      }
+      el.pendingStickerState.textContent = `准备发给 ${partners.find((partner) => partner.id === current)?.name || "ta"}`;
+      el.pendingStickerName.textContent = sticker.name || "表情包";
+      el.pendingSticker.hidden = false;
+      el.pendingStickerThumb.removeAttribute("src");
+      void loadStickerImage(sticker.id, { agentId: current }).then((url) => {
+        if (pendingSticker === sticker && current && url) el.pendingStickerThumb.src = url;
+      });
+    }
+
+    function clearPendingSticker() {
+      pendingSticker = null;
+      renderPendingSticker();
+    }
+
+    function clearPendingImage() {
+      ++imageChoiceSeq;
+      pendingImage = null;
+      el.imageFile.value = "";
+      renderPendingImage();
+    }
+
+    function closeImageLightbox() {
+      el.imageLightbox.hidden = true;
+      el.imageLightboxImage.removeAttribute("src");
+    }
+
+    function showImageLightbox(src, alt = "图片预览") {
+      if (!src) return;
+      el.imageLightboxImage.src = src;
+      el.imageLightboxImage.alt = alt;
+      el.imageLightbox.hidden = false;
+    }
+
+    /**
+     * 历史图片不主动抓：进了视口（或快进视口）才去取。
+     *
+     * 以前是渲染时直接 loadAttachmentImage——打开一条图多的老线程，
+     * 所有历史图会同时开始下载、解码，画面就卡在那儿。现在交给观察器排队。
+     * 不支持 IntersectionObserver 就直接取，不影响功能。
+     */
+    let attachmentObserver = null;
+    function attachmentObserverFor() {
+      if (attachmentObserver) return attachmentObserver;
+      if (typeof IntersectionObserver !== "function") return null;
+      attachmentObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const node = entry.target;
+          attachmentObserver.unobserve(node);
+          void loadAttachmentImage(
+            node,
+            node.dataset.attachmentId,
+            node.dataset.attachmentOwner,
+            node.dataset.keepBottom === "1",
+          );
+        }
+      }, { root: el.stream, rootMargin: "400px 0px" });
+      return attachmentObserver;
+    }
+
+    /** 渲染图片消息时统一走这里：能观察就等进视口，不能就当场取。 */
+    function mountAttachmentImage(node, attachmentId, owner, keepBottom = false) {
+      node.dataset.attachmentId = String(attachmentId ?? "");
+      node.dataset.attachmentOwner = String(owner ?? "");
+      node.dataset.keepBottom = keepBottom ? "1" : "";
+      const observer = attachmentObserverFor();
+      if (!observer || !node.dataset.attachmentId) {
+        void loadAttachmentImage(node, attachmentId, owner, keepBottom);
+        return;
+      }
+      observer.observe(node);
+    }
+
+    async function loadAttachmentImage(imageNode, attachmentId, agentId, keepBottom = false) {
+      if (!imageNode || !attachmentId || !agentId) return;
+      try {
+        const res = await hana.api.fetch(`attachment/${encodeURIComponent(agentId)}/${encodeURIComponent(attachmentId)}`, { method: "GET" });
+        if (!res.ok) return;
+        const blob = await res.blob();
+        if (!blob.size) return;
+        const url = URL.createObjectURL(blob);
+        if (!imageNode.isConnected || current !== agentId) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        if (keepBottom) imageNode.addEventListener("load", () => {
+          if (current === agentId) scrollDown();
+        }, { once: true });
+        imageNode.src = url;
+      } catch { /* 历史图片读不到时保留占位，不影响文字聊天 */ }
+    }
+
+    function appendInlineImage(rendered, image) {
+      if (!rendered?.bubble || !image?.data) return;
+      const imageNode = document.createElement("img");
+      imageNode.className = "message-image";
+      imageNode.alt = image.name || "发送的图片";
+      imageNode.src = image.data;
+      imageNode.loading = "lazy";
+      rendered.bubble.appendChild(document.createElement("br"));
+      rendered.bubble.appendChild(imageNode);
+    }
+
+    async function send() {
+      if (busy || !current) return;
+      const agentId = current;
+      const turnSeq = threadViewSeq;
+      const text = el.input.value.trim();
+      const image = pendingImage;
+      const sticker = pendingSticker;
+      const imageChoiceVersion = imageChoiceSeq;
+      if (!text && !image && !sticker) return;
+      const inputVersion = inputRevision;
+      let accepted = false;
+
+      busy = true;
+      el.send.disabled = true;
+      el.imageButton.disabled = true;
+      el.send.classList.add("is-sent");
+      el.send.setAttribute("aria-label", "消息已送达");
+      el.input.value = "";
+      autosizeInput();
+
+      const optimisticPieces = [];
+      if (text) optimisticPieces.push(text);
+      else if (image) optimisticPieces.push("[图片]");
+      if (sticker) optimisticPieces.push(`${STICKER_PREFIX}${sticker.id}`);
+      let renderedUser = null;
+      const optimisticRows = [];
+      for (const piece of optimisticPieces) {
+        renderedUser = bubble("user", piece, null, new Date().toISOString());
+        optimisticRows.push(renderedUser.row);
+      }
+      appendInlineImage(renderedUser, image);
+      const { row, col } = renderedUser;
+      // 先摆上「未读」：她发出去那一刻就是未读，读到后收起（后端落盘的那一笔）
+      const tickEl = tick(col, "未读");
+      setStatus("");
+      scrollDown();
+
+      try {
+        const started = await api("POST", "turns", {
+          agentId,
+          text,
+          ...(image ? { image: { name: image.name, mimeType: image.mimeType, data: image.data } } : {}),
+          ...(sticker ? { stickerId: sticker.id } : {}),
+          // 她在不在看只是告诉后端「要不要演实时那套」；对方手机在不在手里跟这个无关
+          watching: document.visibilityState === "visible",
+        });
+        accepted = true;
+        if (pendingImage === image && imageChoiceSeq === imageChoiceVersion) clearPendingImage();
+        if (pendingSticker === sticker) clearPendingSticker();
+        const draft = pendingDrafts.get(agentId);
+        if (!draft || draft.revision <= inputVersion) pendingDrafts.delete(agentId);
+        // 消息一旦被后端接收，发送门立刻打开；伙伴的回复由轮询慢慢补进来。
+        // 这样她可以在 ta 打字或排期时继续说，不需要等上一轮演完。
+        if (current !== agentId || turnSeq !== threadViewSeq) return;
+        if (started.messageId) {
+          seenIds.add(started.messageId);
+          tickNodes.set(started.messageId, tickEl);
+          bindMessageActions(row, { id: started.messageId, role: "user", text, kind: sticker ? "sticker" : undefined });
+        }
+        // 后端只在「面对面（手机在手，包括打盹）」时才给回合；给了就演实时那套。
+        // 没给（手机不在手，只排队）就什么都不演，回复由轮询慢慢补。
+        if (started.turnId) void playLiveTurn(agentId, turnSeq, started, tickEl);
+      } catch (error) {
+        if (!accepted) {
+          // 乐观气泡只在 POST 被接受后才有正式身份；失败时必须收掉，避免留下假未读。
+          for (const optimisticRow of optimisticRows) optimisticRow.remove();
+          // 只有 POST 没被接受，才把原话当作待发送草稿；后续轮询失败不能诱导重复发送。
+          const edited = inputOwner === agentId && inputRevision !== inputVersion;
+          const existing = pendingDrafts.get(agentId);
+          if (!edited && (!existing || existing.revision <= inputVersion)) {
+            pendingDrafts.set(agentId, { text, revision: inputVersion });
+          }
+          if (current === agentId && turnSeq === threadViewSeq && !edited) {
+            el.input.value = text;
+            autosizeInput();
+            setStatus(`没送出去，原话给你留着：${error.message}`);
+          }
+        } else if (current === agentId && turnSeq === threadViewSeq) {
+          setStatus(`消息已经送达，但回复状态暂时取不到：${error.message}`);
+        }
+      } finally {
+        // 旧请求无论在哪个窗口结束，都要释放提交锁；但不能碰新窗口的按钮状态。
+        busy = false;
+        if (current !== agentId || turnSeq !== threadViewSeq) return;
+        el.send.disabled = false;
+        el.send.classList.remove("is-sent");
+        el.send.setAttribute("aria-label", "发送");
+        const partner = partners.find((item) => item.id === current);
+        el.imageButton.disabled = !current || !(partner?.imageCapability?.allowed);
+        el.input.focus();
+      }
+    }
+
+    el.send.addEventListener("click", send);
+    function clearImagePickFeedback() {
+      el.imageButton.classList.remove("is-busy");
+      el.imageButton.removeAttribute("aria-busy");
+    }
+
+    el.imageButton.addEventListener("click", () => {
+      if (el.imageButton.disabled) return;
+      el.imageButton.classList.add("is-busy");
+      el.imageButton.setAttribute("aria-busy", "true");
+      setStatus("正在打开图片选择…");
+      el.imageFile.click();
+    });
+    el.imageFile.addEventListener("cancel", () => {
+      clearImagePickFeedback();
+      setStatus("");
+    });
+    el.imageFile.addEventListener("change", async () => {
+      const file = el.imageFile.files?.[0];
+      el.imageFile.value = "";
+      if (!file) {
+        clearImagePickFeedback();
+        setStatus("");
+        return;
+      }
+      if (busy) {
+        clearImagePickFeedback();
+        return setStatus("上一张图片还在发送，请稍候");
+      }
+      el.imageButton.classList.add("is-busy");
+      el.imageButton.setAttribute("aria-busy", "true");
+      setStatus("正在读取图片…");
+      if (!current) return setStatus("先选一位伙伴");
+      if (file.size > 10 * 1024 * 1024) return setStatus("图片太大了，单张上限 10MB");
+      const owner = current;
+      const choice = ++imageChoiceSeq;
+      try {
+        const data = await readImageFile(file);
+        if (current !== owner || choice !== imageChoiceSeq) return;
+        pendingImage = { name: file.name, mimeType: file.type, data };
+        renderPendingImage();
+        clearImagePickFeedback();
+        setStatus("图片已放好，按发送交给 ta");
+      } catch (error) {
+        if (current === owner && choice === imageChoiceSeq) {
+          clearPendingImage();
+          clearImagePickFeedback();
+          setStatus(error.message || "图片没读出来");
+        }
+      }
+    });
+    el.pendingImageView.addEventListener("click", () => showImageLightbox(pendingImage?.data, pendingImage?.name || "待发送图片"));
+    el.pendingImageRemove.addEventListener("click", () => {
+      clearPendingImage();
+      setStatus("已取消这张图片");
+    });
+    el.pendingStickerRemove.addEventListener("click", () => {
+      clearPendingSticker();
+      setStatus("已取消这张表情包");
+    });
+    el.imageLightboxClose.addEventListener("click", closeImageLightbox);
+    el.imageLightbox.addEventListener("click", (event) => {
+      if (event.target === el.imageLightbox) closeImageLightbox();
+    });
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !el.imageLightbox.hidden) closeImageLightbox();
+    });
+    el.chatAvatar.addEventListener("dblclick", () => void doAction(current));
+    // 双击是鼠标语言，键盘也得能用同一个动作（回车/空格）
+    el.chatAvatar.tabIndex = 0;
+    el.chatAvatar.setAttribute("role", "button");
+    el.chatAvatar.setAttribute("aria-label", "戳一下");
+    el.chatAvatar.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        void doAction(current);
+      }
+    });
+    el.input.addEventListener("keydown", (event) => {
+      // 中文输入法敲回车是在选字，不能当成发送（设置页那一屏一直这么写，这里以前漏了）。
+      if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
+      event.preventDefault();
+      send();
+    });
+    el.input.addEventListener("input", () => {
+      inputOwner = current;
+      inputRevision += 1;
+      const draft = pendingDrafts.get(inputOwner);
+      if (draft && el.input.value.trim() !== draft.text) pendingDrafts.delete(inputOwner);
+      autosizeInput();
+    });
+    // ──────────────────────── 认识 ta ────────────────────────
+    //
+    // 装完第一次进来，还没完成初步认识的伙伴不能开始聊——性格是这应用的魂，得先一起聊一遍。
+    // 模型出的只是草稿（色 + 一批行为候选），挑哪些、叫什么名，人来定。
+
+    const obEl = {
+      root: document.getElementById("ob"),
+      title: document.getElementById("ob-title"),
+      sub: document.getElementById("ob-sub"),
+      body: document.getElementById("ob-body"),
+      step: document.getElementById("ob-step"),
+      back: document.getElementById("ob-back"),
+      next: document.getElementById("ob-next"),
+    };
+
+    const ROLE_TEXT = { base: "底色", main: "主色调", accent: "点缀" };
+    const ROLE_HINT = {
+      base: "始终在的那层，但不一定最显眼",
+      main: "平时最突出的那一面",
+      accent: "特定时候才露出来的",
+    };
+    const OB_MAX_PICK = 3;
+
+    let obQueue = [];
+    let obPending = null;
+    let obState = null;
+    let obStage = 1;
+
+    function obNode(tag, cls, text) {
+      const node = document.createElement(tag);
+      if (cls) node.className = cls;
+      if (text != null) node.textContent = text;
+      return node;
+    }
+
+    /** 还没完成初步认识的伙伴。返回 {pending, firstRun}；都完成了返回 null。读不出来也不拦。 */
+    async function onboardingPending() {
+      try {
+        const data = await api("GET", "onboarding");
+        const pending = data?.pending ?? [];
+        if (!pending.length) return null;
+        const total = Number(data?.total ?? pending.length);
+        // 一个都没完成初步认识（新装）→ 必须过队列；已经完成过的→不拦，别老用户一开就卡住
+        return { pending, firstRun: total > 0 && pending.length >= total };
+      } catch {
+        return null;
+      }
+    }
+
+    function emptyObState() {
+      return {
+        partner: null,
+        colors: [],
+        picked: new Map(),
+        ready: false,
+        running: false,
+        loadingDraft: false,
+        error: null,
+        warn: null,
+        steps: [],
+        progress: null,
+        portrait: [],
+        modeChoice: false,
+        mode: "quick",
+        questions: [],
+        recognition: null,
+        recognitionIndex: 0,
+        recognitionDraft: null,
+        recognitionDrafts: {},
+        recognitionSuggesting: false,
+        recognitionSuggestSeq: 0,
+        recognitionSaving: false,
+        recognitionSaveSeq: 0,
+        recognitionDraftSaveTimer: null,
+        recognitionDraftSavePromise: null,
+        recognitionSuggestions: [],
+        recognitionSuggestionError: "",
+        recognitionPrompt: "",
+        localName: "",
+        localDescription: "",
+      };
+    }
+
+    /** 把层显出来。obBegin 和 obPick 都得走这儿——少一处就会出现「点了没反应」。 */
+    function obOpen() {
+      obEl.root.hidden = false;
+      document.body.classList.add("ob-open");
+    }
+
+    /** 关掉认识层。进主界面之前必须走一步——不然层盖在上面，什么点了都"没反应"。 */
+    function obClose() {
+      obEl.root.hidden = true;
+      document.body.classList.remove("ob-open");
+      obState = null;
+    }
+
+    async function obCreateLocal() {
+      const name = String(obState.localName ?? "").trim();
+      if (!name) {
+        obEl.sub.textContent = "先给这位角色取个名字";
+        return;
+      }
+      obEl.next.disabled = true;
+      obEl.next.textContent = "存着…";
+      try {
+        const data = await api("POST", "local-partners", {
+          name,
+          description: obState.localDescription,
+        });
+        await loadPartners();
+        const partner = data.partner;
+        obQueue = [partner, ...obQueue.filter((row) => row.id !== partner.id)];
+        obState = { ...emptyObState(), partner, modeChoice: true };
+        obRender();
+      } catch (error) {
+        obEl.sub.textContent = `没存上：${error.message}`;
+        obEl.next.disabled = false;
+        obEl.next.textContent = "创建角色";
+      }
+    }
+
+    /** 认真认识 ta：选项只是抓手，修改和自由输入原样保存。 */
+    async function obStartRecognition(partner, options = {}) {
+      obOpen();
+      obEl.body.replaceChildren();
+      obEl.title.textContent = `正在打开和「${partner.name}」的认识流程…`;
+      obEl.sub.textContent = options.restart
+        ? "从头再来一遍，之前答的已经清掉了。"
+        : "把之前留下的回答接着看，也可以回头修改。";
+      try {
+        // 「重新认识」= 从头再做一遍：先把还在防抖里等着的旧草稿掉，再清空，
+        // 不然那笔草稿会在清空之后再写回来。
+        if (options.restart) {
+          if (obState) {
+            clearTimeout(obState.recognitionDraftSaveTimer);
+            obState.recognitionDraftSaveTimer = null;
+          }
+          await api("POST", `recognition/${encodeURIComponent(partner.id)}/restart`);
+        }
+        const data = await api("GET", `recognition/${encodeURIComponent(partner.id)}`);
+        const questions = data?.questions ?? [];
+        const recognition = data?.recognition ?? { answers: {}, current: questions[0]?.id ?? null };
+        const savedIndex = questions.findIndex((question) => question.id === recognition.current);
+        const draftIndex = questions.findIndex((question) => recognition.answers?.[question.id]?.draft === true);
+        const firstUnanswered = questions.findIndex((question) => !recognition.answers?.[question.id]);
+        // 兼容旧版本：没有草稿标记时，current 若仍停在已回答的早期题，优先接第一道未完成题。
+        const legacyResumeIndex = savedIndex >= 0 && !recognition.answers?.[questions[savedIndex]?.id]?.draft
+          && firstUnanswered > savedIndex ? firstUnanswered : savedIndex;
+        const index = draftIndex >= 0 ? draftIndex : legacyResumeIndex >= 0 ? legacyResumeIndex : firstUnanswered >= 0 ? firstUnanswered : 0;
+        obState = {
+          ...emptyObState(),
+          partner,
+          mode: "recognition",
+          questions,
+          recognition,
+          recognitionIndex: index < 0 ? 0 : index,
+        };
+        obRender();
+      } catch (error) {
+        obState = { ...emptyObState(), partner, modeChoice: true, error: `认识流程没打开：${error.message}` };
+        obRender();
+      }
+    }
+
+    function obChooseMode(mode) {
+      const partner = obState?.partner;
+      if (!partner) return;
+      obState.modeChoice = false;
+      if (mode === "recognition") {
+        void obStartRecognition(partner);
+      } else {
+        void obStartFor(partner);
+      }
+    }
+
+    /** 打开快速认识。第零步是挑人——不自动跑，用户想先认识谁就选谁。 */
+    async function obBegin() {
+      obState = emptyObState();
+      obStage = 0;
+      obOpen();
+      obRender();
+      return true;
+    }
+
+    /** 从伙伴清单点进来的正门：先让她选轻量认识还是认真认识。 */
+    async function obPick(partner) {
+      obState = { ...emptyObState(), partner, modeChoice: true };
+      obOpen();
+      obRender();
+    }
+
+    /** 选定一位，开跑。 */
+    async function obStartFor(partner, options = {}) {
+      const reshape = Boolean(options.reshape);
+      obOpen();
+      obQueue = reshape ? [partner] : [partner, ...obQueue.filter((row) => row.id !== partner.id)];
+      // 一进来就锁住：草稿还没到之前，「下一步」不能点（不然能一路点到交空数据）
+      obState = { ...emptyObState(), partner, reshape, running: true, loadingDraft: true };
+      obStage = 1;
+      obRender();
+      await obLoadDraft(partner, { force: Boolean(options.force) });
+    }
+
+    async function obLoadDraft(partner, { force = false } = {}) {
+      const agentId = partner.id;
+      if (!force) try {
+        const cached = await api("POST", "onboarding/draft", { agentId, peek: true });
+        if (cached?.draft?.colors?.length) {
+          obApplyDraft(cached.draft);
+          return;
+        }
+      } catch {
+        /* 没有现成的就现跑 */
+      }
+      obState.running = true;
+      obRender();
+      let started = null;
+      try {
+        started = await api("POST", "onboarding/draft", { agentId, force });
+      } catch (error) {
+        obState.running = false;
+        obState.loadingDraft = false;
+        obState.error = `跑不起来：${error.message}`;
+        obRender();
+        return;
+      }
+      // 启动那次回包就带着步骤表，接住它，别让进度页先空一轮
+      if (Array.isArray(started?.steps) && started.steps.length) obState.steps = started.steps;
+
+      // 按总时间收，不按次数。每轮请求自己可能等好几秒，按次数算实际能拖成半小时。
+      const deadline = Date.now() + 8 * 60 * 1000;
+      let miss = 0;
+      while (Date.now() < deadline) {
+        await sleep(1500);
+        try {
+          const now = await api("POST", "onboarding/draft", { agentId, peek: true });
+          miss = 0;
+          if (obState.warn) {
+            obState.warn = null;
+            obRender();
+          }
+          const draft = now?.draft;
+          if (draft?.colors?.length) {
+            obApplyDraft(draft);
+            return;
+          }
+          if (draft?.error) {
+            obState.running = false;
+            obState.loadingDraft = false;
+            obState.error = `跑挂了：${draft.error.message || "不知道为啥"}`;
+            obRender();
+            return;
+          }
+          if (Array.isArray(now?.steps) && now.steps.length) obState.steps = now.steps;
+          const next = now?.progress ?? null;
+          const moved = (next?.step ?? -1) !== (obState.progress?.step ?? -1);
+          obState.progress = next;
+          obState.lastPing = Date.now();
+          if (moved) obRender();
+          else obRenderClock();
+        } catch {
+          // 网络不顺不能装没事：连错三次就明说，别只让进度条停着
+          miss += 1;
+          if (miss >= 3 && !obState.warn) {
+            obState.warn = "连接好像不太顺，还在重试…";
+            obRender();
+          }
+        }
+      }
+      obState.running = false;
+      obState.loadingDraft = false;
+      obState.error = "等了八分钟还没出来。可能是模型这会儿慢，也可能是还没配置能用的文字模型，去 Hana 设置里确认一下再试。";
+      obRender();
+    }
+
+    function obApplyDraft(draft) {
+      obState.colors = (draft.colors ?? []).map((color) => {
+        const rows = (color.rows ?? []).map((row) => ({ id: row.id, text: row.text }));
+        return {
+          id: color.id,
+          name: color.name,
+          role: color.role,
+          alternatives: color.alternatives ?? [],
+          rows,
+          // 默认先勾前两条：不想细看的人点两下就过，想细调的人再动
+          picked: new Set(rows.slice(0, 2).map((row) => row.id)),
+        };
+      });
+      obState.portrait = (draft.portrait ?? []).map((row) => ({ title: row.title, text: row.text }));
+      obState.running = false;
+      obState.loadingDraft = false;
+      obState.warn = null;
+      obState.error = null;
+      obState.ready = true;
+      obState.error = null;
+      obRender();
+    }
+
+    /** 只刷「上次更新」那一行，不整屏重绘——重绘会打断正在看的人。 */
+    function obRenderClock() {
+      if (!obEl.clock) return;
+      const at = obState?.lastPing;
+      obEl.clock.textContent = at
+        ? `上次更新：${Math.max(0, Math.round((Date.now() - at) / 1000))} 秒前`
+        : "还没收到第一份进度";
+    }
+
+    function obRender() {
+      if (!obState) return;
+      obEl.body.replaceChildren();
+
+      if (obState.mode === "local-create") {
+        obEl.title.textContent = "新增茶话会角色";
+        obEl.sub.textContent = "这位角色只存在于茶话会，不会写进 Hana。";
+        obEl.step.textContent = "茶话会自己的角色";
+        obEl.back.hidden = false;
+        obEl.back.textContent = "先回去聊";
+        obEl.next.hidden = false;
+        obEl.next.disabled = false;
+        obEl.next.textContent = "创建角色";
+        const name = document.createElement("input");
+        name.className = "ob-name ob-local-input";
+        name.maxLength = 40;
+        name.placeholder = "角色名字";
+        name.value = obState.localName;
+        name.addEventListener("input", () => { obState.localName = name.value; });
+        obEl.body.appendChild(name);
+        const description = document.createElement("textarea");
+        description.className = "ob-portrait-text ob-rec-input";
+        description.rows = 5;
+        description.maxLength = 4000;
+        description.placeholder = "可以先写几句：ta是谁、你想怎么认识 ta（可留空，之后走认真认识）";
+        description.value = obState.localDescription;
+        description.addEventListener("input", () => { obState.localDescription = description.value; });
+        obEl.body.appendChild(description);
+        return;
+      }
+
+      if (obState.modeChoice) {
+        obEl.title.textContent = `先和「${obState.partner.name}」认识一下`;
+        obEl.sub.textContent = "想快一点，还是坐下来认真聊一遍？之后两条路还能接着补。";
+        obEl.step.textContent = "选择认识方式";
+        obEl.back.hidden = false;
+        obEl.back.textContent = "先回去聊";
+        obEl.next.hidden = true;
+        if (obState.error) obEl.body.appendChild(obNode("p", "ob-warn", obState.error));
+        const quick = obNode("button", "ob-pick", "先聊个大概");
+        quick.type = "button";
+        quick.addEventListener("click", () => obChooseMode("quick"));
+        const deep = obNode("button", "ob-pick", "认真认识 ta");
+        deep.type = "button";
+        deep.addEventListener("click", () => obChooseMode("recognition"));
+        obEl.body.append(quick, deep);
+        return;
+      }
+
+      if (obState.mode === "recognition") {
+        obRenderRecognition();
+        return;
+      }
+      if (obState.mode === "recognition-done") {
+        obRenderRecognitionDone();
+        return;
+      }
+
+      // 第零步：挑人。不自动跑——用户想先认识谁，就选谁。
+      if (obStage === 0) {
+        obEl.title.textContent = "先挑一位，认识一下";
+        obEl.sub.textContent = "伙伴得一个一个来。想先认识谁，点了 ta 就开始。";
+        obEl.step.textContent = `还有 ${obQueue.length} 位没认识`;
+        obEl.back.hidden = true;
+        obEl.next.hidden = true;
+        for (const partner of obQueue) {
+          const pick = obNode("button", "ob-pick", partner.name);
+          pick.type = "button";
+          pick.addEventListener("click", () => void obPick(partner));
+          obEl.body.appendChild(pick);
+        }
+        const add = obNode("button", "ob-pick", "＋ 新增角色");
+        add.type = "button";
+        add.addEventListener("click", () => {
+          obState = { ...emptyObState(), mode: "local-create" };
+          obRender();
+        });
+        obEl.body.appendChild(add);
+        return;
+      }
+
+      obEl.title.textContent = obState.reshape
+        ? `重新整理「${obState.partner.name}」的性格`
+        : `和「${obState.partner.name}」认识一下`;
+
+      if (obState.running) {
+        const steps = obState.steps ?? [];
+        const at = obState.progress?.step ?? -1;
+        obEl.sub.textContent = at >= 0 && steps[at]
+          ? `正在：${steps[at].label}`
+          : "模型正在翻它的材料，先认识一下 ta……";
+        obEl.step.textContent = steps.length ? `第 ${at + 1} / ${steps.length} 步` : "";
+        obEl.back.hidden = false;
+        obEl.back.textContent = "先回去聊";
+        obEl.next.hidden = true;
+        if (steps.length) {
+          const list = obNode("ol", "ob-steps");
+          for (let i = 0; i < steps.length; i += 1) {
+            const item = obNode("li", i === at ? "on" : i < at ? "done" : "");
+            item.appendChild(obNode("span", "ob-step-name", steps[i].label));
+            item.appendChild(obNode("span", "ob-step-note", steps[i].note));
+            list.appendChild(item);
+          }
+          obEl.body.appendChild(list);
+        }
+        obEl.body.appendChild(
+          obNode("p", "ob-wait", "整个过程三五分钟。这页会跟着它走到哪一步——一直不动，就是真有问题。"),
+        );
+        if (obState.warn) obEl.body.appendChild(obNode("p", "ob-warn", obState.warn));
+        obEl.clock = obNode("p", "ob-clock", "");
+        obEl.body.appendChild(obEl.clock);
+        obRenderClock();
+        return;
+      }
+      if (obState.error) {
+        obEl.sub.textContent = obState.error;
+        obEl.step.textContent = "";
+        obEl.back.hidden = true;
+        obEl.next.hidden = false;
+        obEl.next.disabled = false;
+        obEl.next.textContent = "再试一次";
+        return;
+      }
+
+      // 认识完一个、队列里还有人：问一句接着认识还是先去聊
+      if (obStage === 5) {
+        obEl.sub.textContent = "这一个认识好了。";
+        obEl.step.textContent = `还有 ${obQueue.length} 位没认识`;
+        obEl.back.hidden = false;
+        obEl.back.textContent = "先去聊";
+        obEl.next.hidden = false;
+        obEl.next.disabled = false;
+        obEl.next.textContent = "继续认识";
+        obEl.body.appendChild(obNode("p", "ob-wait", "还没完成初步认识的伙伴进不了聊天窗——这是故意的，性格得你自己过一道手。剩下的可以现在继续认识，也可以以后再说。"));
+        return;
+      }
+
+      obEl.back.textContent = "上一步";
+
+      obEl.next.hidden = false;
+      obEl.next.disabled = false;
+      obEl.step.textContent = `第 ${obStage} / 4 步`;
+      obEl.back.hidden = obStage <= 1 || obStage >= 5;
+      obEl.next.textContent = obStage >= 4 ? "就这么定" : "下一步";
+      obEl.sub.textContent = obStage === 1
+        ? "这是模型从 ta 的材料里理出来的几个色。名字不顺眼就改。答过的会一直留着，中途退出去也丢不了。"
+        : obStage === 2
+          ? "每个色底下给了一批行为候选，挑你觉得像 ta 的（最多三条）。"
+          : obStage === 3
+            ? "模型先猜了一版「它是怎样一个人」。说反了就改，说漏了就补，改完的才算你的。"
+            : "看一眼。定了以后还能改，别紧张。";
+
+      if (obStage === 1) obRenderColors();
+      else if (obStage === 2) obRenderRows();
+      else if (obStage === 3) obRenderPortrait();
+      else obRenderSummary();
+    }
+
+    function obColorHead(color) {
+      const head = obNode("div", "ob-color-head");
+      head.appendChild(obNode("span", `ob-role ${color.role}`, ROLE_TEXT[color.role] ?? "色"));
+      return head;
+    }
+
+    function obRenderColors() {
+      for (const color of obState.colors) {
+        const card = obNode("div", "ob-color");
+        const head = obColorHead(color);
+        const input = document.createElement("input");
+        input.className = "ob-name";
+        input.value = color.name;
+        input.maxLength = 8;
+        input.setAttribute("aria-label", "色名");
+        input.addEventListener("input", () => {
+          color.name = input.value.trim();
+        });
+        head.appendChild(input);
+        card.appendChild(head);
+        card.appendChild(obNode("p", "ob-hint", ROLE_HINT[color.role] ?? ""));
+        if (color.alternatives.length) {
+          const alts = obNode("div", "ob-alts");
+          alts.appendChild(obNode("span", "ob-alts-label", "或者："));
+          for (const name of color.alternatives) {
+            const chip = obNode("button", "ob-chip", name);
+            chip.type = "button";
+            chip.addEventListener("click", () => {
+              color.name = name;
+              input.value = name;
+            });
+            alts.appendChild(chip);
+          }
+          card.appendChild(alts);
+        }
+        obEl.body.appendChild(card);
+      }
+    }
+
+    function obRenderRows() {
+      for (const color of obState.colors) {
+        const card = obNode("div", "ob-color");
+        const head = obColorHead(color);
+        head.appendChild(obNode("strong", "ob-color-name", color.name));
+        head.appendChild(obNode("span", "ob-count", `${color.picked.size} / ${OB_MAX_PICK}`));
+        card.appendChild(head);
+        for (const row of color.rows) {
+          const on = color.picked.has(row.id);
+          const item = obNode("button", `ob-row${on ? " on" : ""}`);
+          item.type = "button";
+          item.appendChild(obNode("span", "ob-tick", on ? "✓" : ""));
+          item.appendChild(obNode("span", "ob-row-text", row.text));
+          item.addEventListener("click", () => {
+            if (color.picked.has(row.id)) color.picked.delete(row.id);
+            else if (color.picked.size < OB_MAX_PICK) color.picked.add(row.id);
+            obRender();
+          });
+          card.appendChild(item);
+        }
+        obEl.body.appendChild(card);
+      }
+    }
+
+    function obRenderPortrait() {
+      const rows = obState.portrait ?? [];
+      obEl.body.appendChild(
+        obNode(
+          "p",
+          "ob-tip",
+          "下面这几段是模型猜的「在它眼里，你是怎么看你自己的」。说反了就改，说漏了就补；改完的才算你的。",
+        ),
+      );
+      if (!rows.length) {
+        obEl.body.appendChild(obNode("p", "ob-wait", "这一版没写出来。跳过也行，以后还能自己补。"));
+        return;
+      }
+      rows.forEach((row, index) => {
+        const box = obNode("div", "ob-portrait");
+        box.appendChild(obNode("span", "ob-portrait-title", row.title));
+        const area = document.createElement("textarea");
+        area.className = "ob-portrait-text";
+        area.rows = 6;
+        area.value = row.text;
+        area.addEventListener("input", () => {
+          rows[index].text = area.value;
+        });
+        box.appendChild(area);
+        obEl.body.appendChild(box);
+      });
+    }
+
+    function obRenderSummary() {
+      for (const color of obState.colors) {
+        const card = obNode("div", "ob-color");
+        const head = obColorHead(color);
+        head.appendChild(obNode("strong", "ob-color-name", color.name));
+        card.appendChild(head);
+        for (const row of color.rows) {
+          if (!color.picked.has(row.id)) continue;
+          card.appendChild(obNode("p", "ob-final", row.text));
+        }
+        obEl.body.appendChild(card);
+      }
+    }
+
+    function obScheduleRecognitionDraft() {
+      const stateRef = obState;
+      if (!stateRef?.recognitionDraft?.questionId || !stateRef.partner?.id) return;
+      clearTimeout(stateRef.recognitionDraftSaveTimer);
+      stateRef.recognitionDraftSaveTimer = setTimeout(() => {
+        stateRef.recognitionDraftSaveTimer = null;
+        const draft = stateRef.recognitionDraft;
+        // 空白草稿不发：那会把已经认识好的档案打回「没做完」，旧答案也会被删掉。
+        const filled = (Array.isArray(draft.selected) && draft.selected.length)
+          || String(draft.note ?? "").trim()
+          || String(draft.text ?? "").trim()
+          || (Array.isArray(draft.scenarios) && draft.scenarios.length);
+        if (!filled) return;
+        const payload = {
+          questionId: draft.questionId,
+          selected: [...(draft.selected ?? [])],
+          note: draft.note ?? "",
+          text: draft.text ?? "",
+          scenarios: [...(draft.scenarios ?? [])],
+          draft: true,
+        };
+        const pending = api("POST", `recognition/${encodeURIComponent(stateRef.partner.id)}/answer`, payload).catch(() => null);
+        stateRef.recognitionDraftSavePromise = pending;
+        // 只清自己那一笔：旧请求完成时不能把还在飞的新请求标记抹掉。
+        pending.finally(() => {
+          if (stateRef.recognitionDraftSavePromise === pending) stateRef.recognitionDraftSavePromise = null;
+        });
+      }, 250);
+    }
+
+    async function obFlushRecognitionDraft(stateRef, draft) {
+      clearTimeout(stateRef.recognitionDraftSaveTimer);
+      stateRef.recognitionDraftSaveTimer = null;
+      if (stateRef.recognitionDraftSavePromise) await stateRef.recognitionDraftSavePromise;
+      if (obState !== stateRef || !stateRef.partner?.id) return;
+      const payload = {
+        questionId: draft.questionId,
+        selected: [...(draft.selected ?? [])],
+        note: draft.note ?? "",
+        text: draft.text ?? "",
+        scenarios: [...(draft.scenarios ?? [])],
+        draft: true,
+      };
+      stateRef.recognitionDraftSavePromise = api("POST", `recognition/${encodeURIComponent(stateRef.partner.id)}/answer`, payload)
+        .catch(() => null);
+      await stateRef.recognitionDraftSavePromise;
+      stateRef.recognitionDraftSavePromise = null;
+    }
+
+    function obRenderRecognition() {
+      const questions = obState.questions ?? [];
+      const question = questions[obState.recognitionIndex];
+      if (!question) {
+        obState.mode = "recognition-done";
+        obRender();
+        return;
+      }
+      const answer = obState.recognition?.answers?.[question.id] ?? {};
+      const savedDraft = obState.recognitionDrafts?.[question.id];
+      const draft = obState.recognitionDraft?.questionId === question.id
+        ? obState.recognitionDraft
+        : savedDraft ?? {
+          questionId: question.id,
+          selected: [...(answer.selected ?? [])],
+          note: answer.note ?? "",
+          text: answer.text ?? "",
+          scenarios: Array.isArray(answer.scenarios)
+            ? answer.scenarios.map((item) => ({ ...item }))
+            : answer.scenario ? [{ ...answer.scenario }] : [],
+          origin: answer.origin === "scenario" ? "scenario" : "user",
+        };
+      obState.recognitionDraft = draft;
+      obEl.title.textContent = `认真认识「${obState.partner.name}」`;
+      obEl.sub.textContent = question.title;
+      obEl.step.textContent = `第 ${obState.recognitionIndex + 1} / ${questions.length} 题`;
+      obEl.back.hidden = false;
+      obEl.back.disabled = Boolean(obState.recognitionSaving);
+      obEl.back.textContent = obState.recognitionIndex <= 0 ? "先回去聊" : "上一题";
+      obEl.next.hidden = false;
+      obEl.next.disabled = Boolean(obState.recognitionSaving);
+      obEl.next.textContent = obState.recognitionIndex === questions.length - 1 ? "认识好了" : "收下这句";
+      obEl.body.appendChild(obNode("p", "ob-tip", question.hint));
+
+      const options = obNode("div", "ob-rec-options");
+      for (const option of question.options ?? []) {
+        const on = draft.selected.includes(option.id);
+        const item = obNode("button", `ob-row${on ? " on" : ""}`);
+        item.type = "button";
+        item.appendChild(obNode("span", "ob-tick", on ? "✓" : ""));
+        item.appendChild(obNode("span", "ob-row-text", option.text));
+        item.addEventListener("click", () => {
+          // 挑最像的：到顶之后新选的把最早那条挤出去，不让「全都像」。
+          const limit = Number(question.maxSelect) > 0 ? Number(question.maxSelect) : 0;
+          let next = on
+            ? draft.selected.filter((id) => id !== option.id)
+            : [...draft.selected, option.id];
+          if (!on && limit > 0 && next.length > limit) next = next.slice(next.length - limit);
+          draft.selected = next;
+          obScheduleRecognitionDraft();
+          obRender();
+        });
+        options.appendChild(item);
+      }
+      obEl.body.appendChild(options);
+      const selectLimit = Number(question.maxSelect) > 0 ? Number(question.maxSelect) : 0;
+      if (selectLimit > 0) {
+        const picked = (draft.selected ?? []).length;
+        obEl.body.appendChild(obNode("p", "ob-rec-count",
+          picked >= selectLimit
+            ? `已经挑满 ${selectLimit} 个了，再选会顶掉最早那个。`
+            : `挑最像的，最多 ${selectLimit} 个（已选 ${picked} 个）。`));
+      }
+
+      obEl.body.appendChild(obNode("strong", "ob-custom-title", "写一点只属于 ta 的东西"));
+      obEl.body.appendChild(obNode("p", "ob-custom-hint", question.id === "boundaries"
+        ? "这一题选的是 ta 不能做的事。可以补充一个具体禁区，或写清楚什么行为会让你觉得越界。"
+        : question.intent === "avoid"
+          ? "这一题选的是你最不希望 ta 被演成的样子。可以补一句具体的话，或写清楚哪种反应一出来你就觉得「这不是 ta」。"
+          : "选项只是起点。可以写一件小事、一次对话，或者让 ta 在某种情况下表现出来的反应。"));
+
+      const suggest = obNode("button", "ob-suggest", obState.recognitionSuggesting ? "正在生成几个场景…" : "给我几个具体场景");
+      suggest.type = "button";
+      suggest.disabled = obState.recognitionSuggesting;
+      suggest.setAttribute("aria-busy", obState.recognitionSuggesting ? "true" : "false");
+      suggest.addEventListener("click", () => void obSuggestRecognition(question));
+      obEl.body.appendChild(suggest);
+      if (obState.recognitionSuggestionError) {
+        obEl.body.appendChild(obNode("p", "ob-warn", obState.recognitionSuggestionError));
+      }
+      if (obState.recognitionSuggestions.length) {
+        const suggestions = obNode("div", "ob-suggestions");
+        suggestions.appendChild(obNode("div", "ob-suggestions-label", "下面是设想的情境，不是真实经历过的事。一个场景挑一条就行，挑最像的："));
+        for (const candidate of obState.recognitionSuggestions) {
+          const card = obNode("div", "ob-suggestion");
+          card.appendChild(obNode("div", "ob-suggestion-scene", candidate.scene));
+          const reactions = candidate.reactions?.length ? candidate.reactions : [candidate.scene];
+          for (const reaction of reactions) {
+            const selected = (obState.recognitionDraft?.scenarios ?? []).some((item) =>
+              item.scene === candidate.scene && item.reaction === reaction,
+            );
+            const item = obNode("button", `ob-suggestion-reaction${selected ? " is-selected" : ""}`, reaction);
+            item.type = "button";
+            item.setAttribute("aria-pressed", selected ? "true" : "false");
+            item.addEventListener("click", () => {
+              obState.recognitionPrompt = question.intent === "avoid"
+                ? `场景：${candidate.scene}\n不要出现：${reaction}`
+                : `场景：${candidate.scene}\nta的反应：${reaction}`;
+              const scenarios = obState.recognitionDraft.scenarios ?? [];
+              const existing = scenarios.findIndex((item) => item.scene === candidate.scene && item.reaction === reaction);
+              let notice = "";
+              if (existing >= 0) {
+                // 再点一下就取消。
+                scenarios.splice(existing, 1);
+              } else {
+                // 一个场景只留一条：同场景两条不同反应，模型会不知道该听哪条。
+                // 不默默丢掉她之前点的那条，直接换成新的，并且说一声。
+                const sameScene = scenarios.findIndex((item) => item.scene === candidate.scene);
+                if (sameScene >= 0) {
+                  scenarios[sameScene] = { scene: candidate.scene, reaction };
+                  notice = "这个场景已经有一条了，帮你换成了这条。";
+                } else if (scenarios.length >= 6) {
+                  notice = "方向最多留六个，先去掉一个再加吧。";
+                } else {
+                  scenarios.push({ scene: candidate.scene, reaction });
+                }
+              }
+              obState.recognitionDraft.scenarios = scenarios;
+              obState.recognitionDraft.origin = scenarios.length ? "scenario" : "user";
+              // 超限的提示得留住；只有真加上/取消了才把上次的提示清掉。
+              obState.recognitionSuggestionError = notice;
+              obScheduleRecognitionDraft();
+              obRender();
+            });
+            card.appendChild(item);
+          }
+          suggestions.appendChild(card);
+        }
+        obEl.body.appendChild(suggestions);
+      }
+      const chosenScenarios = obState.recognitionDraft?.scenarios ?? [];
+      if (chosenScenarios.length) {
+        const avoidPicked = question.intent === "avoid";
+        obState.recognitionPrompt = chosenScenarios
+          .map((item) => (avoidPicked
+            ? `场景：${item.scene}\n不要出现：${item.reaction}`
+            : `场景：${item.scene}\nta的反应：${item.reaction}`))
+          .join("\n\n");
+        obEl.body.appendChild(obNode("p", "ob-writing-prompt", `已选 ${chosenScenarios.length} 个${avoidPicked ? "要避开的方向" : "创作方向"}：${obState.recognitionPrompt}`));
+      }
+
+      const text = document.createElement("textarea");
+      text.className = "ob-portrait-text ob-rec-input";
+      text.rows = 4;
+      text.maxLength = 1200;
+      text.placeholder = question.id === "speech"
+        ? "要是想起 ta 平时怎么发消息，原样贴一两句进来（照抄最好，别改成书面语）；也可以留空…"
+        : "可以补充一点自己的话，也可以留空…";
+      text.value = [draft.note, draft.text].filter((value) => String(value ?? "").trim()).join("\n");
+      text.addEventListener("input", () => {
+        draft.note = "";
+        draft.text = text.value;
+        draft.origin = "user";
+        obScheduleRecognitionDraft();
+      });
+      obEl.body.appendChild(text);
+    }
+
+    async function obSuggestRecognition(question) {
+      if (!obState || obState.recognitionSuggesting) return;
+      const stateRef = obState;
+      const partnerId = obState.partner?.id;
+      const index = obState.recognitionIndex;
+      const requestSeq = ++obState.recognitionSuggestSeq;
+      obState.recognitionSuggesting = true;
+      obState.recognitionSuggestionError = "";
+      obState.recognitionSuggestions = [];
+      obRender();
+      try {
+        const result = await api("POST", `recognition/${encodeURIComponent(partnerId)}/suggestions`, {
+          questionId: question.id,
+          draft: {
+            selected: [...(obState.recognitionDraft?.selected ?? [])],
+            note: obState.recognitionDraft?.note ?? "",
+            text: obState.recognitionDraft?.text ?? "",
+            scenarios: [...(obState.recognitionDraft?.scenarios ?? [])],
+          },
+        });
+        if (obState !== stateRef || obState.partner?.id !== partnerId || obState.recognitionIndex !== index || obState.recognitionSuggestSeq !== requestSeq) return;
+        obState.recognitionSuggestions = Array.isArray(result.suggestions) ? result.suggestions : [];
+        if (!obState.recognitionSuggestions.length) obState.recognitionSuggestionError = "这次没想出合适的方向，再试一次嘛";
+      } catch (error) {
+        if (obState !== stateRef || obState.partner?.id !== partnerId || obState.recognitionIndex !== index || obState.recognitionSuggestSeq !== requestSeq) return;
+        obState.recognitionSuggestionError = `没拿到建议：${error.message}`;
+      } finally {
+        if (obState === stateRef && obState.partner?.id === partnerId && obState.recognitionIndex === index && obState.recognitionSuggestSeq === requestSeq) {
+          obState.recognitionSuggesting = false;
+          obRender();
+        }
+      }
+    }
+
+    async function obRecognitionNext() {
+      if (!obState || obState.recognitionSaving) return;
+      const stateRef = obState;
+      const question = obState.questions[obState.recognitionIndex];
+      const index = obState.recognitionIndex;
+      const partnerId = obState.partner?.id;
+      const saveSeq = ++obState.recognitionSaveSeq;
+      const draft = obState.recognitionDraft ?? { selected: [], note: "", text: "" };
+      obState.recognitionSuggestSeq += 1;
+      obState.recognitionSuggesting = false;
+      obState.recognitionSuggestions = [];
+      obState.recognitionSuggestionError = "";
+      obState.recognitionPrompt = "";
+      obState.recognitionSaving = true;
+      obRender();
+      try {
+        await obFlushRecognitionDraft(stateRef, draft);
+        const answer = {
+          questionId: question.id,
+          selected: Array.isArray(draft.selected) ? draft.selected : [],
+          note: String(draft.note ?? ""),
+          text: String(draft.text ?? ""),
+          scenarios: Array.isArray(draft.scenarios) ? draft.scenarios.map((item) => ({ ...item })) : [],
+          origin: draft.origin === "scenario" ? "scenario" : "user",
+        };
+        const result = await api("POST", `recognition/${encodeURIComponent(partnerId)}/answer`, answer);
+        if (!result?.recognition) throw new Error("保存回执不完整，请再试一次");
+        if (obState !== stateRef || obState.partner?.id !== partnerId || obState.recognitionIndex !== index || obState.recognitionSaveSeq !== saveSeq) return;
+        obState.recognition = result.recognition;
+        delete obState.recognitionDrafts[question.id];
+        if (obState.recognitionIndex >= obState.questions.length - 1) {
+          obState.mode = "recognition-done";
+        } else {
+          obState.recognitionIndex += 1;
+          obState.recognitionDraft = null;
+        }
+        obRender();
+      } catch (error) {
+        if (obState !== stateRef || obState.partner?.id !== partnerId || obState.recognitionIndex !== index || obState.recognitionSaveSeq !== saveSeq) return;
+        obState.recognitionSaving = false;
+        obEl.sub.textContent = `没收住：${error.message}`;
+        obRender();
+      } finally {
+        if (obState === stateRef && obState.recognitionSaveSeq === saveSeq && obState.recognitionSaving) {
+          obState.recognitionSaving = false;
+          obRender();
+        }
+      }
+    }
+
+    function obRenderRecognitionDone() {
+      obEl.title.textContent = `和「${obState.partner.name}」认识好了`;
+      obEl.sub.textContent = "这些回答已经存进茶话会，之后还可以继续改、继续补。";
+      obEl.step.textContent = "已保存";
+      obEl.back.hidden = true;
+      obEl.next.hidden = false;
+      obEl.next.disabled = false;
+      obEl.next.textContent = "回去聊";
+      const count = Object.keys(obState.recognition?.answers ?? {}).length;
+      obEl.body.appendChild(obNode("p", "ob-wait", `这次收下了 ${count} 组回答。你的原话和修正都会保留。`));
+    }
+
+    function obNext() {
+      if (!obState) return;
+      if (obState.mode === "local-create") {
+        void obCreateLocal();
+        return;
+      }
+      if (obState.mode === "recognition-done") {
+        const preferredPartnerId = obState.partner?.id;
+        obClose();
+        void bootChat(preferredPartnerId);
+        return;
+      }
+      if (obState.mode === "recognition") {
+        void obRecognitionNext();
+        return;
+      }
+      // 还在加载、或者在跑的时候，下一律不许动
+      if (obState.running || obState.loadingDraft) return;
+      if (obStage === 5) {
+        void obBegin();
+        return;
+      }
+      if (obState.error) {
+        obState.error = null;
+        void obLoadDraft(obState.partner, { force: Boolean(obState.reshape) });
+        return;
+      }
+      if (obStage === 1) {
+        const blank = obState.colors.find((color) => !color.name);
+        if (blank) {
+          obEl.sub.textContent = "每个色都得有个名字";
+          return;
+        }
+        obStage = 2;
+        obRender();
+        return;
+      }
+      if (obStage === 2) {
+        const empty = obState.colors.find((color) => color.picked.size === 0);
+        if (empty) {
+          obEl.sub.textContent = `「${empty.name}」一条行为都没挑，至少留一条`;
+          return;
+        }
+        obStage = 3;
+        obRender();
+        return;
+      }
+      if (obStage === 3) {
+        obStage = 4;
+        obRender();
+        return;
+      }
+      void obSave();
+    }
+
+    async function obSave() {
+      obEl.next.disabled = true;
+      obEl.next.textContent = "存着…";
+      try {
+        const colors = obState.colors.map((color) => ({ id: color.id, name: color.name, role: color.role }));
+        const derivatives = [];
+        for (const color of obState.colors) {
+          for (const row of color.rows) {
+            if (color.picked.has(row.id)) {
+              derivatives.push({ colorId: color.id, text: row.text, origin: "model", on: true });
+            }
+          }
+        }
+        const portrait = (obState.portrait ?? []).filter((row) => row.title && String(row.text).trim());
+        await api("POST", "onboarding/save", { agentId: obState.partner.id, colors, derivatives, portrait });
+        obQueue.shift();
+        if (obQueue.length) {
+          obStage = 5;
+          obRender();
+          return;
+        }
+        const preferredPartnerId = obState.partner?.id;
+        obClose();
+        await bootChat(preferredPartnerId);
+      } catch (error) {
+        obEl.sub.textContent = `没存上：${error.message}`;
+        obEl.next.disabled = false;
+        obEl.next.textContent = "就这么定";
+      }
+    }
+
+    obEl.next.addEventListener("click", obNext);
+    obEl.back.addEventListener("click", () => {
+      if (!obState) return;
+      if (obState.mode === "recognition" && obState.recognitionSaving) return;
+      if (obState.mode === "recognition") {
+        obState.recognitionSuggestSeq += 1;
+        obState.recognitionSaveSeq += 1;
+        obState.recognitionSuggesting = false;
+        obState.recognitionSuggestions = [];
+        obState.recognitionPrompt = "";
+      }
+      if (obState.mode === "local-create") {
+        obState.mode = "";
+        obStage = 0;
+        obRender();
+        return;
+      }
+      if (obState.modeChoice || obState.running || obState.loadingDraft) {
+        obClose();
+        void bootChat();
+        return;
+      }
+      if (obState.mode === "recognition") {
+        if (obState.recognitionIndex > 0) {
+          const draft = obState.recognitionDraft;
+          if (draft?.questionId) obState.recognitionDrafts[draft.questionId] = { ...draft, selected: [...draft.selected] };
+          obState.recognitionIndex -= 1;
+          obState.recognitionDraft = null;
+          obRender();
+        } else {
+          obClose();
+          void bootChat();
+        }
+        return;
+      }
+      if (obStage === 5) {
+        obClose();
+        void bootChat();
+        return;
+      }
+      if (obStage <= 1) return;
+      obStage -= 1;
+      obRender();
+    });
+
+    /** 进主界面。 */
+    async function bootChat(preferredPartnerId = null) {
+      await loadPartners();
+      try {
+        const data = await api("GET", "onboarding");
+        obPending = new Set((data?.pending ?? []).map((row) => row.id));
+      } catch {
+        obPending = new Set();
+      }
+      const pick = preferredPartnerId && partners.some((p) => p.id === preferredPartnerId && !obPending.has(p.id))
+        ? preferredPartnerId
+        : lastPartnerId && partners.some((p) => p.id === lastPartnerId && !obPending.has(p.id))
+          ? lastPartnerId
+          : partners.find((p) => !obPending.has(p.id))?.id ?? partners[0]?.id;
+      const action = launchAction;
+      launchAction = null;
+      if (action?.create) {
+        obState = { ...emptyObState(), mode: "local-create" };
+        obOpen();
+        obRender();
+        startPolling();
+        bindPresence();
+        return;
+      }
+      if (action?.reshape) {
+        const target = partners.find((partner) => partner.id === action.reshape);
+        if (target) {
+          current = null;
+          renderFriends();
+          void obStartRecognition(target, { restart: true });
+          startPolling();
+          bindPresence();
+          return;
+        }
+      }
+      if (action?.recognize) {
+        const target = partners.find((partner) => partner.id === action.recognize);
+        if (target) {
+          current = null;
+          renderFriends();
+          void obPick(target);
+          startPolling();
+          bindPresence();
+          return;
+        }
+      }
+      if (pick) await openPartner(pick);
+      startPolling();
+      bindPresence();
+    }
+
+    (async () => {
+      try {
+        hana.ready?.({ ok: true });
+        const query = new URLSearchParams(window.location.search);
+        launchAction = query.get("create") === "1"
+          ? { create: true }
+          : query.get("reshape") ? { reshape: query.get("reshape") } : query.get("recognize") ? { recognize: query.get("recognize") } : null;
+        if (launchAction) {
+          const cleanUrl = new URL(window.location.href);
+          cleanUrl.searchParams.delete("create");
+          cleanUrl.searchParams.delete("reshape");
+          cleanUrl.searchParams.delete("recognize");
+          window.history.replaceState(null, "", `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+        }
+        const gate = await onboardingPending();
+        if (gate?.firstRun) {
+          obQueue = [...gate.pending];
+          await obBegin();
+          if (launchAction?.create) {
+            obState = { ...emptyObState(), mode: "local-create" };
+            obRender();
+          } else if (launchAction?.reshape) {
+            const target = obQueue.find((partner) => partner.id === launchAction.reshape);
+            if (target) await obStartRecognition(target, { restart: true });
+          } else if (launchAction?.recognize) {
+            const target = obQueue.find((partner) => partner.id === launchAction.recognize);
+            if (target) await obPick(target);
+          }
+          launchAction = null;
+          return;
+        }
+        await bootChat();
+      } catch (error) {
+        const message = String(error?.message ?? "");
+        // 权限没批是分享版新手最容易撞上的一堵墙，别只丢一句「读不出来」。
+        const permissionish = /403|401|权限|permission|forbidden|not authorized/i.test(message);
+        setStatus(permissionish
+          ? "读不到好友列表：多半是茶话会的应用权限还没开。去「设置 → 安全 → 应用能力」为它打开「读取伙伴」「读取伙伴资料」和「调用模型」，再重新打开这一页。"
+          : `好友列表读不出来：${message}`);
+      }
+    })();
+  </script>
+</body>
+</html>

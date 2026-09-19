@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    # 本地开发机在 UTC+8，作息/生活日这些断言跟时区绑着；跑 UTC 会挂 9 条，所以钉住。
+    env:
+      TZ: Asia/Shanghai
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: 语法检查
+        shell: pwsh
+        run: node --check index.js
+
+      - name: 全量测试
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem tests -Filter *.test.js | ForEach-Object { "tests/$($_.Name)" }
+          Write-Host "共 $($files.Count) 个测试文件"
+          node --test $files

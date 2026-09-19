@@ -1,0 +1,2002 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>茶话会 · 设置</title>
+  <script>
+    // 样式表得现拉，不能等缓存（同 panel.html：宿主给静态文件挂了长缓存）
+    for (const href of ["assets/settings.css", "assets/beautify-select.css"]) {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = `${href}?t=${Date.now()}`;
+      document.head.appendChild(link);
+    }
+  </script>
+</head>
+<body>
+  <main class="wrap">
+    <header class="page-head">
+      <div>
+        <p class="eyebrow">茶话会</p>
+        <h1>茶话会设置</h1>
+        <p class="sub" id="sub">把聊天过成舒服的样子。常用的放前面，伙伴自己的事单独收好。</p>
+      </div>
+      <div class="settings-head-actions">
+        <button class="soft-button back-chat" id="back-to-chat" type="button">← 返回聊天</button>
+        <div class="tea-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24">
+          <path d="M5 9.5h11l-1.3 6.9a2 2 0 0 1-1.97 1.6H8.27a2 2 0 0 1-1.97-1.6L5 9.5Z"/>
+          <path d="M16 11h1.4a2.4 2.4 0 0 1 0 4.8h-2.2"/>
+          <path d="M9.3 6.8c0-.9.7-1.4.7-2.3M12.3 6.8c0-.9.7-1.4.7-2.3"/>
+        </svg>
+        </div>
+      </div>
+    </header>
+
+    <nav class="tabs" aria-label="设置分类" role="tablist">
+      <button class="tab on" id="tab-global" data-tab="global" role="tab" aria-selected="true" aria-controls="panel-global">通用设置</button>
+      <button class="tab" id="tab-partners" data-tab="partners" role="tab" aria-selected="false" aria-controls="panel-partners">伙伴管理</button>
+    </nav>
+
+    <section id="panel-global" role="tabpanel" aria-labelledby="tab-global" tabindex="0">
+      <div class="section-head">
+        <div><h2>聊天显示</h2><p>只管聊天窗长什么样，不影响聊过的内容。</p></div>
+      </div>
+      <article class="setting-card compact">
+        <div class="setting-copy">
+          <h3>消息头像</h3>
+          <p>打开后，伙伴头像在左边，你的头像在右边。</p>
+        </div>
+        <button class="switch" id="msg-avatars-switch" type="button" role="switch" aria-checked="false">
+          <span class="track"><span></span></span><span class="switch-label">不显示</span>
+        </button>
+      </article>
+      <article class="setting-card compact">
+        <div class="setting-copy">
+          <h3>修整伙伴回复</h3>
+          <p>打开后，悬停在伙伴气泡上可以重新生成或调整这一条。默认关闭，不影响平常聊天。</p>
+        </div>
+        <button class="switch" id="msg-refine-switch" type="button" role="switch" aria-checked="false">
+          <span class="track"><span></span></span><span class="switch-label">不显示</span>
+        </button>
+      </article>
+      <article class="setting-card">
+        <div class="setting-copy">
+          <h3>我在茶话会里叫什么</h3>
+          <p>留空就跟随 Hana 的用户名；填了以后，只在茶话会里使用这个名字。</p>
+        </div>
+        <div class="detail-field user-name-field">
+          <input type="text" id="user-name-override" maxlength="40" placeholder="跟随 Hana">
+          <button class="soft-button" id="user-name-override-save" type="button">保存</button>
+          <small class="detail-field-note">清空并保存，就会恢复跟随 Hana。</small>
+        </div>
+      </article>
+
+      <div class="section-head roomy">
+        <div><h2>沉浸感</h2><p>让伙伴多知道一点你这边今天的事。装了对应的插件才有这一项。</p></div>
+      </div>
+      <article class="setting-card compact">
+        <div class="setting-copy">
+          <h3>今日情境</h3>
+          <p id="daybook-copy">打开后，伙伴会知道今天是什么日子、窗外什么天气，还有你们最近过下来的日子。</p>
+        </div>
+        <button class="switch" id="daybook-switch" type="button" role="switch" aria-checked="false">
+          <span class="track"><span></span></span><span class="switch-label">关闭</span>
+        </button>
+      </article>
+      <article class="setting-card compact">
+        <div class="setting-copy">
+          <h3>电脑端生活联动</h3>
+          <p id="workfeed-copy">打开后，伙伴会知道你在电脑那边跟 ta 一起做过的事，聊天时能自然接上。关掉就不再收集，已经收的也不再使用。</p>
+        </div>
+        <button class="switch" id="workfeed-switch" type="button" role="switch" aria-checked="true">
+          <span class="track"><span></span></span><span class="switch-label">打开</span>
+        </button>
+      </article>
+      <article class="setting-card compact">
+        <div class="setting-copy">
+          <h3>已收集的生活记录</h3>
+          <p>茶话会自己存了一份你在电脑那边跟伙伴一起做过的事。清空之后，伙伴就不知道那些事了。</p>
+        </div>
+        <button class="soft-button" id="workfeed-clear" type="button">清空</button>
+      </article>
+
+      <div class="section-head roomy">
+        <div><h2>模型</h2><p>决定聊天时用哪个模型。想单独给某位伙伴换，去 ta 的页面里挑。</p></div>
+      </div>
+      <article class="setting-card">
+        <div class="card-title"><div><h3>默认模型</h3><p>这里管所有伙伴；没单独设过的都听这一条。</p></div></div>
+        <div class="detail-field" id="global-model-host"></div>
+        <small class="detail-field-note" id="global-model-note"></small>
+      </article>
+      <article class="setting-card">
+        <div class="card-title"><div><h3>认识伙伴</h3><p>「认真认识 ta」生成那些场景候选时用哪个模型。拿不准就别动，跟着默认走。</p></div></div>
+        <div class="detail-field" id="global-recognition-model-host"></div>
+        <small class="detail-field-note" id="global-recognition-model-note"></small>
+      </article>
+      <article class="setting-card">
+        <div class="card-title"><div><h3>全局辅助识图</h3><p>聊天模型看不懂图片时，先由这位模型看一眼。只有测试通过后，茶话会才会允许发送图片。</p></div></div>
+        <div class="detail-field" id="global-vision-host"></div>
+        <div class="detail-actions"><button class="soft-button" id="global-vision-test" type="button">测试识图</button></div>
+        <small class="detail-field-note" id="global-vision-note"></small>
+      </article>
+
+      <div class="section-head roomy">
+        <div><h2>主动联系</h2><p>管大家什么时候来、别一次挤上来。</p></div>
+      </div>
+      <article class="setting-card">
+        <div class="subsetting">
+          <div class="card-title"><div><h3>安静时间</h3><p>这段时间默认都在休息，特别惦记时仍可留一句。</p></div></div>
+          <div class="time-row">
+            <label><span class="sr-only">开始时间</span><input type="time" id="quiet-start"></label>
+            <span class="time-sep">到</span>
+            <label><span class="sr-only">结束时间</span><input type="time" id="quiet-end"></label>
+          </div>
+        </div>
+        <div class="subsetting">
+          <div class="card-title"><div><h3>别一起扑上来</h3><p>每位伙伴有自己的频率，这里只管全体的间隔和总量。</p></div></div>
+          <div class="choice-block">
+            <span class="choice-label">两条主动消息至少隔多久</span>
+            <div class="seg" id="gate-gap-options"></div>
+          </div>
+          <div class="choice-block">
+            <span class="choice-label">一天最多收到几条</span>
+            <div class="seg" id="gate-max-options"></div>
+          </div>
+        </div>
+      </article>
+
+      <div class="section-head roomy">
+        <div><h2>小动作</h2><p>双击伙伴头像时，聊天里会飘出一句淡淡的话。</p></div>
+      </div>
+      <article class="setting-card">
+        <div class="choice-block">
+          <span class="choice-label">想叫这个动作什么</span>
+          <div class="style-picks" id="action-style-options"></div>
+        </div>
+        <label class="action-compose">
+          <span>好友</span>
+          <span class="action-emoji" aria-hidden="true">👉</span>
+          <span id="action-preview-verb">戳了戳</span>
+          <span>我的</span>
+          <input type="text" id="my-action-text" maxlength="34" placeholder="填这里，比如肚皮并发出海豹音" aria-label="动作后面的内容">
+        </label>
+        <small class="action-note">选中的叫法会自动换到前面，留空就用默认句。</small>
+      </article>
+    </section>
+
+    <section id="panel-partners" role="tabpanel" aria-labelledby="tab-partners" tabindex="0" hidden>
+      <div class="section-head partner-heading" id="partner-heading" tabindex="-1">
+        <div><h2>选择一位伙伴</h2><p>点头像看 ta 的联系习惯、动作和记忆。</p></div>
+        <span class="heading-gap"></span>
+        <button class="soft-button" id="new-local-entry" type="button">新增茶话会角色</button>
+        <button class="soft-button" id="removed-entry" type="button" hidden>已移出的伙伴</button>
+      </div>
+      <div class="partner-grid" id="partner-list"></div>
+      <div id="partner-body"></div>
+    </section>
+  </main>
+
+  <div class="toast" id="status" role="status" aria-live="polite"></div>
+
+  <div class="modal-layer" id="recognize-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="recognize-title">
+      <div class="modal-head"><h2 id="recognize-title">重新认识 ta</h2><button class="icon-button" data-close-modal="recognize-modal" aria-label="关闭">×</button></div>
+      <div class="modal-body">
+        <p id="recognize-copy"></p>
+        <div class="safe-note">会从第一题重新问一遍，之前答的内容会被清掉；新的回答边答边存。</div>
+      </div>
+      <div class="modal-foot"><button class="soft-button" data-close-modal="recognize-modal">先不重来</button><button class="danger-button" id="confirm-recognize">重新认识</button></div>
+    </div>
+  </div>
+
+  <div class="modal-layer" id="review-modal" hidden>
+    <div class="modal review-modal" role="dialog" aria-modal="true" aria-labelledby="review-title">
+      <div class="modal-head"><h2 id="review-title">和小花聊聊</h2><button class="icon-button" data-close-modal="review-modal" aria-label="关闭">×</button></div>
+      <div class="modal-body scroll-body" id="review-body"></div>
+      <div class="modal-foot review-foot" id="review-foot"></div>
+    </div>
+  </div>
+
+  <div class="modal-layer" id="history-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="history-title">
+      <div class="modal-head"><h2 id="history-title">以前的样子</h2><button class="icon-button" data-close-modal="history-modal" aria-label="关闭">×</button></div>
+      <div class="modal-body scroll-body" id="history-body"></div>
+      <div class="modal-foot"><button class="soft-button" data-close-modal="history-modal">先看看，不回退</button></div>
+    </div>
+  </div>
+
+  <div class="modal-layer" id="remove-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="remove-title">
+      <div class="modal-head"><h2 id="remove-title">移出伙伴</h2><button class="icon-button" data-close-modal="remove-modal" aria-label="关闭">×</button></div>
+      <div class="modal-body">
+        <p id="remove-copy"></p>
+        <div class="safe-note">聊天、记忆和设置都会保留。以后放回列表，原来的东西还在。</div>
+      </div>
+      <div class="modal-foot"><button class="soft-button" data-close-modal="remove-modal">先不移出</button><button class="danger-button" id="confirm-remove">确认移出</button></div>
+    </div>
+  </div>
+
+  <div class="modal-layer" id="removed-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="removed-title">
+      <div class="modal-head"><h2 id="removed-title">已移出的伙伴</h2><button class="icon-button" data-close-modal="removed-modal" aria-label="关闭">×</button></div>
+      <div class="modal-body scroll-body" id="removed-list"></div>
+      <div class="modal-foot"><button class="soft-button" data-close-modal="removed-modal">关闭</button></div>
+    </div>
+  </div>
+
+  <script src="./assets/beautify-select.js"></script>
+  <script type="module">
+    import { hana as localHana } from "./assets/sdk.js";
+
+    // 嵌在聊天卡里时复用外层宿主桥；单独打开时仍保留原来的 SDK 兜底。
+    const hana = window.parent !== window && window.parent.__chahuahuiHana ? window.parent.__chahuahuiHana : localHana;
+    const TIERS = [
+      ["rare", "很少找我"],
+      ["sometimes", "偶尔聊聊"],
+      ["often", "经常来找我"],
+      ["clingy", "很黏人"],
+    ];
+    const GAP_CHOICES = [[15, "一刻钟"], [30, "半小时"], [60, "一小时"]];
+    const MAX_CHOICES = [[12, "十来句"], [24, "二十多句"], [30, "三十句"]];
+    const KIND_LABEL = { interest: "兴趣", worry: "心事", plan: "打算", gossip: "八卦", want: "想要", other: "其他" };
+    const STATE_LABEL = { fermenting: "还在搁", ready: "可以找你说", used: "说过了", dropped: "放下了" };
+
+    const el = {
+      status: document.getElementById("status"),
+      backToChat: document.getElementById("back-to-chat"),
+      sub: document.getElementById("sub"),
+      partnerList: document.getElementById("partner-list"),
+      partnerBody: document.getElementById("partner-body"),
+      removedEntry: document.getElementById("removed-entry"),
+      newLocalEntry: document.getElementById("new-local-entry"),
+      removedList: document.getElementById("removed-list"),
+      panels: { global: document.getElementById("panel-global"), partners: document.getElementById("panel-partners") },
+    };
+
+    let partners = [];
+    let hiddenPartners = [];
+    let globalSettings = {};
+    let daybookInstalled = false;
+    let styleCatalog = [];
+    let modelCatalog = [];
+    let visionModelCatalog = [];
+    let currentId = null;
+    let pendingRemoveId = null;
+    let partnerRequestSeq = 0;
+    let currentDetailTab = "contact";
+    let personDraftTimer = null;
+    let lastModalTrigger = null;
+    let globalSaveChain = Promise.resolve();
+    const avatarCache = new Map();
+
+    async function api(method, sub, body) {
+      const path = String(sub).replace(/^\//, "");
+      const init = { method, signal: AbortSignal.timeout(8000) };
+      if (body !== undefined) {
+        init.headers = { "content-type": "application/json" };
+        init.body = JSON.stringify(body);
+      }
+      const res = await hana.api.fetch(path, init);
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch { data = { ok: false, error: { message: text.slice(0, 200) } }; }
+      if (!res.ok || data.ok === false) throw new Error(data?.error?.message || `HTTP ${res.status}`);
+      return data;
+    }
+
+    el.backToChat.addEventListener("click", () => {
+      if (window.parent !== window) {
+        window.parent.postMessage({ type: "chahuahui:close-settings" }, "*");
+        return;
+      }
+      void hana.cards.open("panel").catch((error) => say(`聊天页没打开：${error.message}`, "err"));
+    });
+
+    function say(text, kind = "") {
+      el.status.textContent = text || "";
+      el.status.className = `toast ${kind}${text ? " show" : ""}`;
+      if (text) setTimeout(() => { if (el.status.textContent === text) say(""); }, kind === "err" ? 4200 : 2400);
+    }
+
+    function setTab(name) {
+      for (const [key, node] of Object.entries(el.panels)) node.hidden = key !== name;
+      document.querySelectorAll(".tab").forEach((b) => {
+        const active = b.dataset.tab === name;
+        b.classList.toggle("on", active);
+        // 屏幕阅读器靠这两个属性知道当前在哪一栏
+        b.setAttribute("aria-selected", active ? "true" : "false");
+      });
+      el.sub.textContent = name === "global" ? "把聊天过成舒服的样子。常用的放前面，伙伴自己的事单独收好。" : "先选伙伴，再看 ta 自己的设置和记忆。";
+      if (name === "partners" && !currentId && partners.length) void openPartner(partners[0].id);
+    }
+
+    function openModal(id) {
+      const modal = document.getElementById(id);
+      lastModalTrigger = document.activeElement;
+      modal.hidden = false;
+      document.documentElement.classList.add("modal-open");
+      document.body.classList.add("modal-open");
+      requestAnimationFrame(() => modal.querySelector("button, input, textarea")?.focus());
+    }
+    function closeModal(id, restoreFocus = true) {
+      document.getElementById(id).hidden = true;
+      if (!document.querySelector(".modal-layer:not([hidden])")) {
+        document.documentElement.classList.remove("modal-open");
+        document.body.classList.remove("modal-open");
+      }
+      if (!restoreFocus) return;
+      const triggerVisible = lastModalTrigger?.isConnected && !lastModalTrigger.hidden && lastModalTrigger.getClientRects().length > 0;
+      const target = triggerVisible
+        ? lastModalTrigger
+        : document.querySelector(".partner-pick.on, .partner-pick") || document.querySelector('.tab[data-tab="partners"]');
+      target?.focus();
+    }
+    document.querySelectorAll("[data-close-modal]").forEach((b) => b.addEventListener("click", () => closeModal(b.dataset.closeModal)));
+    document.querySelectorAll(".modal-layer").forEach((layer) => layer.addEventListener("click", (event) => { if (event.target === layer) closeModal(layer.id); }));
+    document.addEventListener("keydown", (event) => { if (event.key === "Escape") document.querySelectorAll(".modal-layer:not([hidden])").forEach((m) => closeModal(m.id)); });
+    document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => setTab(b.dataset.tab)));
+
+    const AVATAR_TTL_MS = 5 * 60 * 1000;
+
+    async function loadAvatar(agentId) {
+      const cached = avatarCache.get(agentId);
+      if (cached && Date.now() - cached.at < AVATAR_TTL_MS) return cached.url;
+      let url = null;
+      try {
+        const res = await hana.api.fetch(`avatar/${encodeURIComponent(agentId)}`, { method: "GET", signal: AbortSignal.timeout(5000) });
+        if (res.ok) {
+          const blob = await res.blob();
+          if (blob.size) url = URL.createObjectURL(blob);
+        }
+      } catch { /* 首字兜底 */ }
+      avatarCache.set(agentId, { at: Date.now(), url });
+      return url;
+    }
+
+    function avatar(agent, size = "normal") {
+      const box = document.createElement("span");
+      box.className = `avatar ${size}`;
+      const ph = document.createElement("span");
+      ph.textContent = (agent?.name || "?").slice(0, 1);
+      const img = document.createElement("img");
+      img.alt = "";
+      img.hidden = true;
+      box.append(ph, img);
+      // 图是异步来的，节点此刻可能还挂在分离的片段上（伙伴详情就是先搭好、最后才整体挂进页面），
+      // 所以这里不判 isConnected：往没挂载的节点上填 src 无害，等它被挂上去图自己就出来了。
+      // 早期版本在这里判了，结果头像到得比挂载早，头永远停在首字。
+      void loadAvatar(agent?.id).then((url) => {
+        if (!url) return;
+        img.src = url;
+        img.hidden = false;
+        ph.hidden = true;
+      });
+      return box;
+    }
+
+    function saveGlobal(patch, successText = "已保存") {
+      const run = globalSaveChain.then(async () => {
+        const payload = { ...patch };
+        if (patch.globalGate) payload.globalGate = { ...(globalSettings.globalGate ?? {}), ...patch.globalGate };
+        try {
+          const data = await api("PUT", "settings/global", payload);
+          globalSettings = data.global;
+          say(successText, "ok");
+          return true;
+        } catch (error) {
+          say(`没存上：${error.message}`, "err");
+          return false;
+        }
+      });
+      globalSaveChain = run.then(() => undefined, () => undefined);
+      return run;
+    }
+
+    function choiceGroup(host, choices, current, onPick) {
+      host.replaceChildren();
+      const all = [...choices];
+      if (!all.some(([value]) => String(value) === String(current))) all.push([current, `当前 ${current}`]);
+      for (const [value, label] of all) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = String(value) === String(current) ? "on" : "";
+        button.textContent = label;
+        button.addEventListener("click", () => onPick(value));
+        host.appendChild(button);
+      }
+    }
+
+    function paintGlobal() {
+      const avatarSwitch = document.getElementById("msg-avatars-switch");
+      const avatarsOn = Boolean(globalSettings.messageAvatars);
+      avatarSwitch.classList.toggle("on", avatarsOn);
+      avatarSwitch.setAttribute("aria-checked", String(avatarsOn));
+      avatarSwitch.querySelector(".switch-label").textContent = avatarsOn ? "显示" : "不显示";
+      const refineSwitch = document.getElementById("msg-refine-switch");
+      const refineOn = Boolean(globalSettings.messageRefine);
+      refineSwitch.classList.toggle("on", refineOn);
+      refineSwitch.setAttribute("aria-checked", String(refineOn));
+      refineSwitch.querySelector(".switch-label").textContent = refineOn ? "显示" : "不显示";
+      const daybookSwitch = document.getElementById("daybook-switch");
+      const daybookOn = daybookInstalled && Boolean(globalSettings.daybookEnabled);
+      daybookSwitch.disabled = !daybookInstalled;
+      daybookSwitch.classList.toggle("on", daybookOn);
+      daybookSwitch.setAttribute("aria-checked", String(daybookOn));
+      daybookSwitch.querySelector(".switch-label").textContent = daybookInstalled ? (daybookOn ? "打开" : "关闭") : "未安装";
+      document.getElementById("daybook-copy").textContent = daybookInstalled
+        ? "打开后，伙伴会知道今天是什么日子、窗外什么天气，还有你们最近过下来的日子。"
+        : "需要先装上「拾光记」插件，这一项才有得开。";
+      const workfeedSwitch = document.getElementById("workfeed-switch");
+      const workfeedOn = globalSettings.workfeedEnabled !== false;
+      workfeedSwitch.classList.toggle("on", workfeedOn);
+      workfeedSwitch.setAttribute("aria-checked", String(workfeedOn));
+      workfeedSwitch.querySelector(".switch-label").textContent = workfeedOn ? "打开" : "关闭";
+      document.getElementById("quiet-start").value = globalSettings.quiet?.start ?? "23:00";
+      document.getElementById("quiet-end").value = globalSettings.quiet?.end ?? "08:00";
+      document.getElementById("my-action-text").value = globalSettings.myActionTail ?? "";
+      document.getElementById("user-name-override").value = globalSettings.userNameOverride ?? globalSettings.effectiveUserName ?? "";
+      paintGlobalChoices();
+      paintGlobalModel();
+      paintGlobalRecognitionModel();
+      paintGlobalVision();
+    }
+
+    // ── 模型：全局一份默认，每位伙伴还能各自再压一个（2026-09-13）──
+    const FOLLOW_LABEL = "跟随主模型";
+
+    function modelKeyOf(ref, catalog = modelCatalog) {
+      if (!ref?.provider || !ref?.model) return "follow";
+      const key = `${ref.provider}/${ref.model}`;
+      return catalog.some((item) => item.key === key) ? key : "follow";
+    }
+
+    function modelRefFromKey(key) {
+      if (!key || key === "follow") return null;
+      const hit = modelCatalog.find((item) => item.key === key);
+      return hit ? { provider: hit.provider, model: hit.model } : null;
+    }
+
+    /** 造一个模型下拉。调用方负责插进文档，插完再 dressSelects。 */
+    function buildModelSelect(currentKey) {
+      const sel = document.createElement("select");
+      const follow = document.createElement("option");
+      follow.value = "follow";
+      follow.textContent = FOLLOW_LABEL;
+      sel.appendChild(follow);
+      for (const item of modelCatalog) {
+        const opt = document.createElement("option");
+        opt.value = item.key;
+        opt.textContent = `${item.name || item.model}${item.isCurrent ? "（当前）" : ""}`;
+        sel.appendChild(opt);
+      }
+      sel.value = modelCatalog.some((item) => item.key === currentKey) ? currentKey : "follow";
+      return sel;
+    }
+
+    /** 节点真进了文档再套壳；重画时旧壳跟着旧节点一起丢，不用手动拆。 */
+    function dressSelects(host) {
+      if (typeof window.beautifySelect !== "function") return;
+      host.querySelectorAll("select:not(.dd-native)").forEach((sel) => window.beautifySelect(sel));
+    }
+
+    function paintGlobalModel() {
+      const host = document.getElementById("global-model-host");
+      const note = document.getElementById("global-model-note");
+      if (!host) return;
+      host.replaceChildren();
+      const sel = buildModelSelect(modelKeyOf(globalSettings.model));
+      sel.setAttribute("aria-label", "默认模型");
+      sel.addEventListener("change", async () => {
+        const key = sel.value;
+        const ok = await saveGlobal(
+          { model: modelRefFromKey(key) },
+          key === "follow" ? "以后跟着主模型走" : "默认模型已保存",
+        );
+        if (!ok) paintGlobalModel();
+      });
+      host.appendChild(sel);
+      dressSelects(host);
+      note.textContent = !modelCatalog.length
+        ? "没读到 Hana 的模型列表，先跟着主模型走。"
+        : (globalSettings.model ? "" : "现在跟着 Hana 的主模型走；主模型换了，这里也跟着换。");
+    }
+
+    /** 认识伙伴用哪条模型。默认跟着上面那条；觉得候选写得不够好，可以单独指一个强一点的。 */
+    function paintGlobalRecognitionModel() {
+      const host = document.getElementById("global-recognition-model-host");
+      const note = document.getElementById("global-recognition-model-note");
+      if (!host) return;
+      host.replaceChildren();
+      const sel = buildModelSelect(modelKeyOf(globalSettings.recognitionModel));
+      sel.setAttribute("aria-label", "认识伙伴用的模型");
+      sel.addEventListener("change", async () => {
+        const key = sel.value;
+        const ok = await saveGlobal(
+          { recognitionModel: modelRefFromKey(key) },
+          key === "follow" ? "认识伙伴跟着默认模型走" : "认识伙伴的模型已保存",
+        );
+        if (!ok) paintGlobalRecognitionModel();
+      });
+      host.appendChild(sel);
+      dressSelects(host);
+      note.textContent = !modelCatalog.length
+        ? "没读到 Hana 的模型列表，先跟默认走。"
+        : (globalSettings.recognitionModel ? "" : "现在跟着默认模型走。要是给伙伴配了便宜的小模型，这里最好单独指一个强一点的。");
+    }
+
+    function visionKeyOf(config) {
+      return modelKeyOf(config?.model, visionModelCatalog);
+    }
+
+    function visionRefFromKey(key) {
+      if (!key || key === "follow") return null;
+      const hit = visionModelCatalog.find((item) => item.key === key);
+      return hit ? { provider: hit.provider, model: hit.model } : null;
+    }
+
+    function buildVisionSelect(currentKey) {
+      const sel = document.createElement("select");
+      const none = document.createElement("option");
+      none.value = "none";
+      none.textContent = "暂不配置";
+      sel.appendChild(none);
+      for (const item of visionModelCatalog) {
+        const opt = document.createElement("option");
+        opt.value = item.key;
+        opt.textContent = `${item.name || item.model}${item.isCurrent ? "（当前）" : ""}`;
+        sel.appendChild(opt);
+      }
+      sel.value = visionModelCatalog.some((item) => item.key === currentKey) ? currentKey : "none";
+      return sel;
+    }
+
+    function paintGlobalVision() {
+      const host = document.getElementById("global-vision-host");
+      const note = document.getElementById("global-vision-note");
+      const test = document.getElementById("global-vision-test");
+      if (!host || !note || !test) return;
+      const vision = globalSettings.vision ?? {};
+      host.replaceChildren();
+      const sel = buildVisionSelect(visionKeyOf(vision));
+      sel.setAttribute("aria-label", "全局辅助识图模型");
+      sel.addEventListener("change", async () => {
+        const model = visionRefFromKey(sel.value);
+        const ok = await saveGlobal({ vision: { model, status: "unverified", testedAt: null, error: null } }, model ? "已选识图模型，请先测试" : "已关闭全局辅助识图");
+        if (ok) paintGlobalVision();
+      });
+      host.appendChild(sel);
+      dressSelects(host);
+      test.disabled = !vision.model || vision.status === "testing";
+      test.textContent = vision.status === "testing" ? "正在测试…" : "测试识图";
+      test.onclick = async () => {
+        if (!vision.model) return;
+        test.disabled = true;
+        test.textContent = "正在测试…";
+        try {
+          const data = await api("POST", "vision/test", { model: vision.model });
+          globalSettings.vision = data.vision;
+          say(data.ok ? "识图测试通过，发送图片时会允许放行" : `识图测试没通过：${data.error?.message || "模型暂时不可用"}`, data.ok ? "ok" : "err");
+        } catch (error) {
+          say(`识图测试没跑完：${error.message}`, "err");
+        } finally {
+          paintGlobalVision();
+        }
+      };
+      if (!visionModelCatalog.length) note.textContent = "Hana 没有把可识图模型列出来，暂时不能配置。";
+      else if (!vision.model) note.textContent = "没配置全局识图模型，发送图片会被拦住。";
+      else if (vision.status === "verified") note.textContent = "已通过测试，未单独配置识图模型的伙伴可以使用。";
+      else if (vision.status === "failed") note.textContent = `上次测试没通过：${vision.error || "模型暂时不可用"}`;
+      else note.textContent = "模型已选，但还没通过测试。";
+    }
+
+    function paintGlobalChoices() {
+      choiceGroup(document.getElementById("gate-gap-options"), GAP_CHOICES, globalSettings.globalGate?.minGapMinutes ?? 30, async (value) => {
+        if (await saveGlobal({ globalGate: { minGapMinutes: Number(value) } }, "主动消息间隔已调整")) paintGlobalChoices();
+      });
+      choiceGroup(document.getElementById("gate-max-options"), MAX_CHOICES, globalSettings.globalGate?.maxPerDay ?? 24, async (value) => {
+        if (await saveGlobal({ globalGate: { maxPerDay: Number(value) } }, "每日总量已调整")) paintGlobalChoices();
+      });
+      const selectedStyleId = globalSettings.actionStyle || "poke";
+      const selectedStyle = styleCatalog.find((style) => style.id === selectedStyleId);
+      document.getElementById("action-preview-verb").textContent = selectedStyle?.verb ?? "戳了戳";
+      const emojiHost = document.querySelector(".action-compose .action-emoji");
+      if (emojiHost) emojiHost.textContent = selectedStyle?.emoji ?? "👉";
+      const styleHost = document.getElementById("action-style-options");
+      styleHost.replaceChildren();
+      for (const style of styleCatalog) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = style.id === selectedStyleId ? "on" : "";
+        button.textContent = style.emoji ? `${style.emoji} ${style.label}` : style.label;
+        button.addEventListener("click", async () => {
+          if (await saveGlobal({ actionStyle: style.id }, `以后就叫「${style.label}」`)) paintGlobalChoices();
+        });
+        styleHost.appendChild(button);
+      }
+    }
+
+    document.getElementById("msg-avatars-switch").addEventListener("click", async () => {
+      const next = !Boolean(globalSettings.messageAvatars);
+      if (await saveGlobal({ messageAvatars: next }, next ? "消息头像已打开" : "消息头像已关闭")) paintGlobal();
+    });
+    document.getElementById("msg-refine-switch").addEventListener("click", async () => {
+      const next = !Boolean(globalSettings.messageRefine);
+      if (await saveGlobal({ messageRefine: next }, next ? "回复修整入口已打开" : "回复修整入口已关闭")) paintGlobal();
+    });
+    document.getElementById("daybook-switch").addEventListener("click", async () => {
+      if (!daybookInstalled) return say("先装上拾光记，这一项才能开", "err");
+      const next = !Boolean(globalSettings.daybookEnabled);
+      if (await saveGlobal({ daybookEnabled: next }, next ? "伙伴以后会知道今天的事了" : "今日情境已关闭")) paintGlobal();
+    });
+    document.getElementById("workfeed-switch").addEventListener("click", async () => {
+      const next = globalSettings.workfeedEnabled === false;
+      if (await saveGlobal({ workfeedEnabled: next }, next ? "伙伴又能知道电脑那边的事了" : "已关闭，伙伴不再知道电脑那边的事")) paintGlobal();
+    });
+    // 清空是不可逆的，用二次点击当刹车（跟背景图库那边的做法一致）
+    let workfeedClearArmed = false;
+    document.getElementById("workfeed-clear").addEventListener("click", async (event) => {
+      const btn = event.currentTarget;
+      if (!workfeedClearArmed) {
+        workfeedClearArmed = true;
+        btn.textContent = "再点一次确认";
+        setTimeout(() => {
+          workfeedClearArmed = false;
+          btn.textContent = "清空";
+        }, 4000);
+        return;
+      }
+      workfeedClearArmed = false;
+      btn.textContent = "清空";
+      try {
+        await api("POST", "workfeed/clear");
+        say("已清空", "ok");
+      } catch (error) {
+        say(`清不掉：${error.message}`, "err");
+      }
+    });
+    document.getElementById("user-name-override-save").addEventListener("click", async () => {
+      const input = document.getElementById("user-name-override");
+      const value = String(input.value ?? "").trim();
+      if (await saveGlobal({ userNameOverride: value }, value ? "茶话会里的名字已保存" : "已恢复跟随 Hana 的用户名")) paintGlobal();
+    });
+
+    async function saveQuiet() {
+      const start = document.getElementById("quiet-start").value;
+      const end = document.getElementById("quiet-end").value;
+      if (!start || !end) return say("安静时间要把开始和结束都选上", "err");
+      await saveGlobal({ quiet: { start, end } }, "安静时间已保存");
+    }
+    document.getElementById("quiet-start").addEventListener("change", saveQuiet);
+    document.getElementById("quiet-end").addEventListener("change", saveQuiet);
+    document.getElementById("my-action-text").addEventListener("change", async (event) => {
+      const text = event.target.value.trim();
+      await saveGlobal({ myActionTail: text }, "动作句子已保存");
+    });
+
+    function paintPartnerList() {
+      el.partnerList.replaceChildren();
+      for (const partner of partners) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `partner-pick${partner.id === currentId ? " on" : ""}`;
+        button.appendChild(avatar(partner));
+        const copy = document.createElement("span");
+        copy.className = "partner-pick-copy";
+        const name = document.createElement("b");
+        name.textContent = partner.name;
+        const state = document.createElement("small");
+        state.textContent = partner.settings?.proactiveEnabled === false ? "不会主动来" : (TIERS.find(([id]) => id === (partner.settings?.tier ?? "sometimes"))?.[1] ?? "偶尔聊聊");
+        copy.append(name, state);
+        button.appendChild(copy);
+        button.addEventListener("click", () => openPartner(partner.id));
+        el.partnerList.appendChild(button);
+      }
+      if (!partners.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty-state";
+        empty.innerHTML = "<b>列表空啦</b><span>如果之前移出过伙伴，可以从右上角放回来。</span>";
+        el.partnerList.appendChild(empty);
+      }
+      el.removedEntry.hidden = hiddenPartners.length === 0;
+      el.removedEntry.textContent = `已移出的伙伴（${hiddenPartners.length}）`;
+    }
+
+    function segment(choices, current, onPick) {
+      const box = document.createElement("div");
+      box.className = "seg";
+      for (const [value, label] of choices) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = label;
+        button.className = current === value ? "on" : "";
+        button.addEventListener("click", () => onPick(value));
+        box.appendChild(button);
+      }
+      return box;
+    }
+
+    function field(label, node, hint = "") {
+      const box = document.createElement("div");
+      box.className = "detail-field";
+      const title = document.createElement("span");
+      title.className = "choice-label";
+      title.textContent = label;
+      box.append(title, node);
+      if (hint) {
+        const note = document.createElement("small");
+        note.textContent = hint;
+        box.appendChild(note);
+      }
+      return box;
+    }
+
+    async function savePartner(agentId, patch, successText = "已保存") {
+      try {
+        const data = await api("PUT", `settings/partner/${encodeURIComponent(agentId)}`, patch);
+        const row = partners.find((p) => p.id === agentId);
+        if (row) row.settings = data.settings;
+        say(successText, "ok");
+        return data.settings;
+      } catch (error) {
+        say(`没存上：${error.message}`, "err");
+        return null;
+      }
+    }
+
+    function detailCard(title, copy = "") {
+      const card = document.createElement("article");
+      card.className = "setting-card detail-card";
+      const head = document.createElement("div");
+      head.className = "detail-card-head";
+      const h = document.createElement("h3");
+      h.textContent = title;
+      head.appendChild(h);
+      if (copy) { const p = document.createElement("p"); p.textContent = copy; head.appendChild(p); }
+      card.appendChild(head);
+      return card;
+    }
+
+    async function openPartner(agentId, detailTab = "contact") {
+      const requestSeq = ++partnerRequestSeq;
+      if (personDraftTimer && currentId !== agentId) { clearInterval(personDraftTimer); personDraftTimer = null; }
+      currentId = agentId;
+      currentDetailTab = detailTab;
+      paintPartnerList();
+      const partner = partners.find((p) => p.id === agentId);
+      if (!partner) { el.partnerBody.replaceChildren(); return; }
+      el.partnerBody.innerHTML = '<div class="loading-note">正在翻 ta 的小本子…</div>';
+      let memory = { profile: { text: "" }, ledger: [], archive: [], pendingMessages: 0 };
+      let topicBook = { topics: [] };
+      let topicBookFailed = false;
+      try { memory = await api("GET", `memory/${encodeURIComponent(agentId)}`); } catch (error) { say(`记忆没读出来：${error.message}`, "err"); }
+      try { topicBook = await api("GET", `topics/${encodeURIComponent(agentId)}`); }
+      catch (error) { topicBookFailed = true; say(`话题本没读出来：${error.message}`, "err"); }
+      let knowing = { personality: { surface: { tag: "", signals: [] }, inner: { tag: "", signals: [] } }, presets: [], drafting: false };
+      try { knowing = await api("GET", `knowing/${encodeURIComponent(agentId)}`); } catch { /* 不挡其他设置 */ }
+      if (requestSeq !== partnerRequestSeq || currentId !== agentId) return;
+
+      const root = document.createElement("div");
+      root.className = "partner-detail";
+      const hero = document.createElement("div");
+      hero.className = "partner-hero";
+      hero.appendChild(avatar(partner, "large"));
+      const heroCopy = document.createElement("div");
+      heroCopy.className = "partner-hero-copy";
+      const title = document.createElement("h2"); title.textContent = partner.name;
+      const note = document.createElement("p"); note.textContent = "这里只改变茶话会里的相处方式。";
+      heroCopy.append(title, note);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "remove-link";
+      remove.textContent = "移出茶话会";
+      remove.addEventListener("click", () => {
+        pendingRemoveId = agentId;
+        document.getElementById("remove-copy").textContent = `要把「${partner.name}」从茶话会的伙伴列表和主动联系中移出吗？这不会影响 Hana 里的伙伴。`;
+        openModal("remove-modal");
+      });
+      hero.append(heroCopy, remove);
+      root.appendChild(hero);
+
+      const detailNav = document.createElement("nav");
+      detailNav.className = "detail-tabs";
+      const detailPanels = {};
+      // 标签收到两个字：六格了，中文再长就会被压成两行
+      const labels = [["contact", "联系"], ["action", "动作"], ["personality", "性格"], ["memory", "记忆"], ["model", "模型"], ["room", "场景"]];
+      const switchDetail = (name) => {
+        for (const [key, panel] of Object.entries(detailPanels)) panel.hidden = key !== name;
+        detailNav.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.detail === name));
+      };
+      for (const [id, label] of labels) {
+        const button = document.createElement("button"); button.type = "button"; button.dataset.detail = id; button.textContent = label;
+        button.addEventListener("click", () => switchDetail(id));
+        detailNav.appendChild(button);
+        const panel = document.createElement("section"); panel.className = "detail-panel"; panel.hidden = id !== detailTab;
+        detailPanels[id] = panel;
+      }
+      root.appendChild(detailNav);
+      labels.forEach(([id]) => root.appendChild(detailPanels[id]));
+
+      const s = partner.settings ?? {};
+
+      // ── 起跑线：她跟这位伙伴在别处早就是熟人，不该因为换了个应用又装初次见面 ──
+      //
+      // 只量痕迹的份量（钉选、事实、经历），内容一个字都不带走；
+      // 也只看相处史，親近度不受影响；不摆数字、不摆进度。
+      const seedCard = detailCard("你们的起跑线", "ta 开口时会以为你们俩已经处了多久。默认按 Hana 那边留下的痕迹自动算，也可以自己定。");
+      const seed = knowing.seed ?? null;
+      const seedNow = seed?.pick ?? "auto";
+      const autoLabel = seed?.pick === "auto" ? seed.label : "";
+      const seedNote = document.createElement("div");
+      seedNote.className = "seed-note";
+      seedNote.textContent = seed?.pick === "zero"
+        ? "你们刚认识，从这儿开始。"
+        : seedNow === "auto"
+          ? (autoLabel
+            ? `按那边的痕迹算：${autoLabel}`
+            : (knowing.seedMeasuring ? "正在看那边留了多少痕迹…" : "那边还没留下什么痕迹，就从这儿开始吧"))
+          : `你定的：${seed?.label ?? ""}`;
+      seedCard.appendChild(seedNote);
+
+      // 自动在前，从零在次，然后是按痕迹量出来的三档（名字从后端来，页面里不写死一份）
+      const seedChoices = [
+        { id: "auto", label: "自动", note: autoLabel ? `跟着那边的痕迹算（现在：${autoLabel}）` : "跟着 Hana 那边留下的痕迹算" },
+        { id: "zero", label: "从这儿开始" },
+        ...(knowing.seedTiers ?? []).map((tier) => ({ id: tier.id, label: tier.label, note: "" })),
+      ];
+      const seedList = document.createElement("div");
+      seedList.className = "seed-list";
+      for (const choice of seedChoices) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `seed-pick${choice.id === seedNow ? " on" : ""}`;
+        button.setAttribute("role", "radio");
+        button.setAttribute("aria-checked", String(choice.id === seedNow));
+        const name = document.createElement("b");
+        name.textContent = choice.label;
+        button.appendChild(name);
+        if (choice.note) {
+          const note = document.createElement("small");
+          note.textContent = choice.note;
+          button.appendChild(note);
+        }
+        button.addEventListener("click", async () => {
+          if (choice.id === seedNow) return;
+          button.disabled = true;
+          try {
+            await api("PUT", `knowing/${encodeURIComponent(agentId)}/seed`, { mode: choice.id });
+            const done = choice.id === "auto" ? "回到按痕迹算的那份" : choice.id === "zero" ? "记下了：就从这儿开始" : `记下了：${choice.label}`;
+            say(done, "ok");
+            if (currentId === agentId) await openPartner(agentId, "contact");
+          } catch (error) {
+            say(`没换过来：${error.message}`, "err");
+            button.disabled = false;
+          }
+        });
+        seedList.appendChild(button);
+      }
+      seedCard.appendChild(seedList);
+      detailPanels.contact.appendChild(seedCard);
+      if (!seed && knowing.seedMeasuring) {
+        // 刚量上，等它一秒半再拉一次；量不出来就算了，不强求
+        setTimeout(async () => {
+          try {
+            const again = await api("GET", `knowing/${encodeURIComponent(agentId)}`);
+            if (again.seed && currentId === agentId) await openPartner(agentId, currentDetailTab);
+          } catch { /* 下次再说 */ }
+        }, 1800);
+      }
+
+      const contactCard = detailCard("主动来找你", "关掉后 ta 不会主动出现，频率档位会替你留着。");
+      const sw = document.createElement("button");
+      sw.type = "button"; sw.className = `switch${s.proactiveEnabled === false ? "" : " on"}`; sw.setAttribute("role", "switch");
+      sw.setAttribute("aria-checked", String(s.proactiveEnabled !== false));
+      sw.innerHTML = `<span class="track"><span></span></span><span class="switch-label">${s.proactiveEnabled === false ? "不主动" : "可以主动"}</span>`;
+      sw.addEventListener("click", async () => {
+        const next = s.proactiveEnabled === false;
+        if (await savePartner(agentId, { proactiveEnabled: next }, next ? "ta 会来找你了" : "ta 不再主动了")) {
+          if (currentId === agentId) openPartner(agentId, "contact");
+        }
+      });
+      contactCard.appendChild(field("主动开关", sw));
+      contactCard.appendChild(field("大概多勤", segment(TIERS, s.tier ?? "sometimes", async (value) => {
+        if (await savePartner(agentId, { tier: value }, "频率已调整")) {
+          if (currentId === agentId) openPartner(agentId, "contact");
+        }
+      })));
+      // 作息不摆在这儿了（2026-09-13）：ta是伙伴的内在状态，跟隐性爱好一个待遇——
+      // 影响行为，不上页面。看一眼就想改，那就别让她看见；睡着时也不再是"等ta醒"，回是回的，只是慢。
+
+      detailPanels.contact.appendChild(contactCard);
+
+      const actionCard = detailCard("这一句归 ta 自己", "你双击 ta 的头像时，显示的是 ta 写的句子。你可以让 ta 重写，但不能替 ta 填。");
+      let actionRow = null;
+      try { actionRow = await api("GET", `action/${encodeURIComponent(agentId)}`); } catch { /* 下面显示空态 */ }
+      const actionPreview = document.createElement("div"); actionPreview.className = "action-preview";
+      if (actionRow) {
+        actionPreview.innerHTML = `<span>ta 对你</span><p></p><span>你对 ta</span><p></p>`;
+        actionPreview.querySelectorAll("p")[0].textContent = actionRow.partnerDoesIt + (actionRow.myTemplate ? "" : "（现在用默认句）");
+        actionPreview.querySelectorAll("p")[1].textContent = actionRow.iDoIt + (actionRow.partnerTemplate ? "" : "（用到时再写）");
+      } else actionPreview.textContent = "动作句子暂时没读出来，过会儿再看。";
+      actionCard.appendChild(actionPreview);
+      const rewrite = document.createElement("button"); rewrite.type = "button"; rewrite.className = "primary-button"; rewrite.textContent = "请 ta 重写一句";
+      rewrite.addEventListener("click", async () => {
+        rewrite.disabled = true; rewrite.textContent = "正在写…";
+        try {
+          await api("POST", `action/${encodeURIComponent(agentId)}/rewrite`);
+          say("换了一句", "ok");
+          if (currentId === agentId) await openPartner(agentId, "action");
+        }
+        catch (error) { say(`重写失败：${error.message}`, "err"); rewrite.disabled = false; rewrite.textContent = "请 ta 重写一句"; }
+      });
+      actionCard.appendChild(rewrite);
+      detailPanels.action.appendChild(actionCard);
+
+      // ── 性格档案：只展示 ta 当前长成的样子，不再把人格做成调参面板 ──
+      const personCard = detailCard(
+        "ta 在茶话会里的样子",
+        "这是 ta 目前在这里呈现出来的样子，新的相处经历会让 ta 继续变得具体。",
+      );
+      const stored = knowing.personality ?? { surface: { tags: [], signals: [] }, inner: { tags: [], signals: [] } };
+      if (knowing.drafting) {
+        const waitNote = document.createElement("div");
+        waitNote.className = "loading-note";
+        waitNote.textContent = "正在看 ta 的样子…";
+        personCard.appendChild(waitNote);
+        if (!personDraftTimer) {
+          let tries = 0;
+          personDraftTimer = setInterval(async () => {
+            tries += 1;
+            if (tries > 6) { clearInterval(personDraftTimer); personDraftTimer = null; return; }
+            try {
+              const again = await api("GET", `knowing/${encodeURIComponent(agentId)}`);
+              if (again.drafting) return;
+              clearInterval(personDraftTimer); personDraftTimer = null;
+              if (currentId === agentId) await openPartner(agentId, currentDetailTab);
+            } catch { /* 下一轮再试 */ }
+          }, 2500);
+        }
+      }
+
+      const layerText = (layer) => {
+        const tags = (layer?.tags ?? []).filter(Boolean);
+        const signals = (layer?.signals ?? []).filter(Boolean);
+        return {
+          title: tags.length ? tags.join("、") : "还没看出明显倾向",
+          signals,
+        };
+      };
+      const profile = document.createElement("div");
+      profile.className = "personality-overview";
+      const currentHead = document.createElement("div");
+      currentHead.className = "personality-overview-head";
+      const currentTitle = document.createElement("b");
+      currentTitle.textContent = "现在的 ta";
+      const currentSource = document.createElement("span");
+      currentSource.textContent = knowing.from === "user" ? "你调整过的相处方式" : knowing.from === "auto" ? "目前根据已有材料整理" : "还没有形成完整画像";
+      currentHead.append(currentTitle, currentSource);
+      profile.appendChild(currentHead);
+
+      const surface = layerText(stored.surface);
+      const inner = layerText(stored.inner);
+      const traitList = document.createElement("div");
+      traitList.className = "personality-traits";
+      const traits = [stored.surface?.tags ?? [], stored.inner?.tags ?? []].flat().filter(Boolean);
+      for (const item of [...new Set(traits)]) {
+        const chip = document.createElement("span");
+        chip.textContent = item;
+        traitList.appendChild(chip);
+      }
+      if (traits.length) profile.appendChild(traitList);
+
+      const portrait = document.createElement("p");
+      portrait.className = traits.length ? "personality-portrait" : "personality-empty";
+      if (traits.length) {
+        const portraitParts = [
+          surface.signals.length ? `刚接触时，ta ${surface.signals.join("，")}` : "刚接触时，ta 的明显倾向还在慢慢显出来",
+          inner.signals.length ? `熟悉以后，ta 还会露出${inner.signals.join("，")}的一面` : "熟悉以后会露出更多层次",
+        ];
+        portrait.textContent = `${portraitParts[0]}；${portraitParts[1]}。`;
+      } else {
+        portrait.textContent = knowing.drafting ? "正在整理 ta 的样子…" : "还没看出 ta 的样子。聊过一些之后，这里会出现更具体的倾向。";
+      }
+      profile.appendChild(portrait);
+      personCard.appendChild(profile);
+
+      const growth = document.createElement("div");
+      growth.className = "personality-growth";
+      const growthHead = document.createElement("div");
+      growthHead.className = "personality-overview-head";
+      const growthTitle = document.createElement("b");
+      growthTitle.textContent = "画像里的具体线索";
+      const growthNote = document.createElement("span");
+      growthNote.textContent = "目前看出的具体表现";
+      growthHead.append(growthTitle, growthNote);
+      growth.appendChild(growthHead);
+      const signals = [...new Set([...surface.signals, ...inner.signals].filter(Boolean))];
+      if (signals.length) {
+        const list = document.createElement("ul");
+        for (const signal of signals) {
+          const item = document.createElement("li");
+          item.textContent = signal;
+          list.appendChild(item);
+        }
+        growth.appendChild(list);
+      } else {
+        const empty = document.createElement("p");
+        empty.className = "empty-note";
+        empty.textContent = knowing.drafting ? "等 ta 的画像整理好，这里会慢慢出现具体线索。" : "现在还没有足够的具体线索。";
+        growth.appendChild(empty);
+      }
+      personCard.appendChild(growth);
+
+      const footerNote = document.createElement("p");
+      footerNote.className = "personality-footnote";
+      footerNote.textContent = "性格画像代表当前倾向，不是固定标签；新的相处经历会让 ta 继续变化。";
+      personCard.appendChild(footerNote);
+
+      // ── 「和小花聊聊」：先体检，聊着改，点「确认修改」才落盘；旧版存着，能退回来 ──
+      let reviewState = null;
+
+      /** 体检和聊天都要等模型，比普通请求慢得多，单独一个长超时。 */
+      async function apiLong(method, sub, body) {
+        const path = String(sub).replace(/^\//, "");
+        const init = { method, signal: AbortSignal.timeout(120000) };
+        if (body !== undefined) {
+          init.headers = { "content-type": "application/json" };
+          init.body = JSON.stringify(body);
+        }
+        const res = await hana.api.fetch(path, init);
+        const text = await res.text();
+        let data;
+        try { data = JSON.parse(text); } catch { data = { ok: false, error: { message: text.slice(0, 200) } }; }
+        if (!res.ok || data.ok === false) {
+          const error = new Error(data?.error?.message || `HTTP ${res.status}`);
+          error.code = data?.code ?? null;
+          // 落不上的那几条要带回来给人看，不然只知道「失败」不知道为什么。
+          error.skipped = Array.isArray(data?.skipped) ? data.skipped : null;
+          throw error;
+        }
+        return data;
+      }
+
+      function rNode(tag, className, text) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
+      }
+
+      function reviewTime(iso) {
+        const date = new Date(iso);
+        if (Number.isNaN(date.getTime())) return "以前";
+        const pad = (n) => String(n).padStart(2, "0");
+        const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+        const today = new Date();
+        const isToday = day === `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+        return isToday ? `今天 ${pad(date.getHours())}:${pad(date.getMinutes())}` : `${date.getMonth() + 1} 月 ${date.getDate()} 日`;
+      }
+
+      function reviewBubble(text, mine = false) {
+        const row = rNode("div", `review-bubble${mine ? " mine" : ""}`);
+        row.appendChild(rNode("div", "review-bubble-who", mine ? "你" : "小花"));
+        row.appendChild(rNode("p", "", text));
+        return row;
+      }
+
+      function reviewGroup(title, rows, kind) {
+        const card = rNode("div", `review-group ${kind}`);
+        card.appendChild(rNode("b", "", title));
+        if (!rows?.length) {
+          card.appendChild(rNode("p", "review-empty", "这次没找到什么可说的。"));
+          return card;
+        }
+        const list = rNode("ul");
+        for (const row of rows) {
+          const item = rNode("li");
+          item.appendChild(rNode("span", "review-item-title", row.title));
+          if (row.quote) item.appendChild(rNode("em", "review-quote", `档案里写着：${row.quote}`));
+          if (row.why) item.appendChild(rNode("p", "", row.why));
+          if (row.direction) item.appendChild(rNode("p", "review-direction", `往哪改：${row.direction}`));
+          list.appendChild(item);
+        }
+        card.appendChild(list);
+        return card;
+      }
+
+      /** 开场那几句。新形状是数组，老会话里存的是单句 `opening`，两种都认。 */
+      function reviewOpenings(diagnosis) {
+        const list = Array.isArray(diagnosis?.openings) && diagnosis.openings.length
+          ? diagnosis.openings
+          : (diagnosis?.opening ? [diagnosis.opening] : []);
+        return list.map((line) => String(line ?? "").trim()).filter(Boolean).slice(0, 3);
+      }
+
+      const REVIEW_ROLE_LABELS = { base: "底色", main: "主色调", accent: "点缀" };
+
+      /** 这条建议改完是什么样，用一句人能看懂的话说清楚。 */
+      function suggestionAfter(row) {
+        const body = row.after || row.text || row.reaction || "";
+        if (row.op === "color_add") {
+          const role = REVIEW_ROLE_LABELS[row.role] ?? "色";
+          return `${role}「${row.name}」${body ? `，第一条行为：${body}` : "（先给个名，行为之后再补）"}`;
+        }
+        return body || "（内容为空）";
+      }
+
+      function suggestionBefore(row) {
+        if (row.before) return row.before;
+        if (row.op === "color_add") return "调色盘里还没有这个色";
+        return "还没有这一条";
+      }
+
+      /** 建议卡：长在对话流里，点「确认修改」才写档案。 */
+      function reviewSuggestionCard(state) {
+        const list = state.session?.suggestions ?? [];
+        const card = rNode("div", "review-suggestion-card");
+        card.appendChild(rNode("b", "review-suggestion-head", `要改的地方（${list.length}）`));
+        card.appendChild(rNode("p", "review-suggestion-note", "点「确认修改」才会写到 ta 身上，没点之前都只是建议。"));
+        for (const row of list) {
+          const item = rNode("div", "review-suggestion");
+          item.appendChild(rNode("b", "", row.label));
+          const pair = rNode("div", "review-pair");
+          pair.appendChild(rNode("p", "before", `现在：${suggestionBefore(row)}`));
+          pair.appendChild(rNode("p", "after", `改完以后：${suggestionAfter(row)}`));
+          item.appendChild(pair);
+          const dropOne = rNode("button", "remove-link", "这条不要");
+          dropOne.type = "button";
+          dropOne.addEventListener("click", () => {
+            state.session.suggestions = (state.session.suggestions ?? []).filter((entry) => entry !== row);
+            state.skipped = [];
+            renderReview();
+          });
+          item.appendChild(dropOne);
+          card.appendChild(item);
+        }
+        if (state.skipped?.length) {
+          const missed = rNode("div", "review-missed");
+          missed.appendChild(rNode("b", "", "这几条没落上："));
+          const missedList = rNode("ul");
+          for (const row of state.skipped) missedList.appendChild(rNode("li", "", `${row.label}（${row.reason ?? "落不上"}）`));
+          missed.appendChild(missedList);
+          card.appendChild(missed);
+        }
+        const actions = rNode("div", "review-suggestion-actions");
+        const apply = rNode("button", "primary-button", "确认修改");
+        apply.type = "button";
+        apply.disabled = state.busy;
+        apply.addEventListener("click", () => void reviewApply());
+        actions.appendChild(apply);
+        card.appendChild(actions);
+        return card;
+      }
+
+      async function openReview(agentId) {
+        reviewState = { agentId, busy: false, error: "", view: "loading", session: null, mechanical: null, change: "", pending: "", skipped: [], skippedAfter: [] };
+        openModal("review-modal");
+        renderReview();
+        try {
+          const data = await api("GET", `persona-review/${encodeURIComponent(agentId)}`);
+          reviewState.session = data.session;
+          reviewState.expired = Boolean(data.expired);
+          reviewState.mechanical = data.mechanical;
+          reviewState.view = data.session?.diagnosis ? "talk" : "intro";
+        } catch (error) {
+          reviewState.error = error.message;
+          reviewState.view = "intro";
+        }
+        renderReview();
+      }
+
+      function renderReview() {
+        const state = reviewState;
+        const body = document.getElementById("review-body");
+        const foot = document.getElementById("review-foot");
+        if (!state || !body || !foot) return;
+        body.replaceChildren();
+        foot.replaceChildren();
+        foot.classList.remove("stacked");
+
+        if (state.view === "loading") {
+          body.appendChild(rNode("div", "loading-note", "正在看 ta 现在长成什么样…"));
+          return;
+        }
+        if (state.error) body.appendChild(rNode("div", "review-error", state.error));
+
+        if (state.view === "intro") {
+          body.appendChild(reviewBubble(state.expired
+            ? "上次那次聊聊已经过期了。当时没改动 ta，现在还是原来那个样子，要重新看一遍吗？"
+            : "先看看 ta 现在长成什么样，再一起商量要不要改。"));
+          const note = rNode("div", "review-note");
+          note.appendChild(rNode("p", "", "我会先把 ta 现在比较明显的地方捋一遍，再和你一条一条聊。"));
+          note.appendChild(rNode("p", "", "你说“这样就很好”也行，不想改的地方不会动。"));
+          body.appendChild(note);
+          if (!state.error) {
+            const start = rNode("button", "primary-button", "先看看 ta 现在的样子");
+            start.addEventListener("click", () => void reviewStart());
+            foot.appendChild(start);
+          } else {
+            const again = rNode("button", "primary-button", "再看一次");
+            again.addEventListener("click", () => void reviewStart());
+            foot.appendChild(again);
+          }
+          const cancel = rNode("button", "remove-link", "先不聊了");
+          cancel.addEventListener("click", () => closeModal("review-modal"));
+          foot.appendChild(cancel);
+          return;
+        }
+
+        if (state.view === "talk") {
+          const session = state.session;
+          const diagnosis = session?.diagnosis;
+          if (!diagnosis) {
+            body.appendChild(reviewBubble("上次那次聊聊已经过期了。当时没改动 ta，现在还是原来那个样子。"));
+            const again = rNode("button", "primary-button", "重新看看");
+            again.addEventListener("click", () => void reviewStart());
+            foot.appendChild(again);
+            const back = rNode("button", "remove-link", "先回设置");
+            back.addEventListener("click", () => closeModal("review-modal"));
+            foot.appendChild(back);
+            return;
+          }
+          foot.classList.add("stacked");
+
+          // 开场让小花自己说：一条条气泡，像刚坐下来跟你讲话。
+          for (const line of reviewOpenings(diagnosis)) body.appendChild(reviewBubble(line));
+
+          const stream = rNode("div", "review-stream");
+          for (const message of session.messages ?? []) stream.appendChild(reviewBubble(message.text, message.role === "user"));
+          // 建议直接长在对话里，不另开一屏。
+          if ((session.suggestions ?? []).length) stream.appendChild(reviewSuggestionCard(state));
+          if (state.busy) stream.appendChild(rNode("div", "review-status", "正在想怎么说…"));
+          body.appendChild(stream);
+
+          // 体检明细收进折叠里：聊天的位子留给聊天，报告退到后头当附录。
+          const detail = document.createElement("details");
+          detail.className = "review-detail";
+          const detailHead = document.createElement("summary");
+          const total = (diagnosis.keep?.length ?? 0) + (diagnosis.grow?.length ?? 0);
+          detailHead.textContent = total ? `展开看看我指的是哪几处（${total} 处）` : "展开看看我过了一遍什么";
+          detail.appendChild(detailHead);
+          detail.appendChild(reviewGroup("已经很像 ta 的地方", diagnosis.keep, "keep"));
+          detail.appendChild(reviewGroup("还可以长稳一点的地方", diagnosis.grow, "grow"));
+          body.appendChild(detail);
+
+          // 输入框跟发送键贴在一起，不再隔着整个正文。
+          const composer = rNode("div", "review-composer");
+          const input = document.createElement("textarea");
+          input.id = "review-input";
+          input.rows = 1;
+          input.placeholder = "想聊哪一点就说";
+          input.value = state.pending ?? "";
+          input.disabled = state.busy;
+          input.addEventListener("keydown", (event) => {
+            // 中文输入法敲回车是在选字，不能当成发送。
+            if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+            event.preventDefault();
+            void reviewSend();
+          });
+          composer.appendChild(input);
+          const send = rNode("button", "primary-button", "发送");
+          send.disabled = state.busy;
+          send.addEventListener("click", () => void reviewSend());
+          composer.appendChild(send);
+          foot.appendChild(composer);
+
+          const links = rNode("div", "review-foot-row");
+          const drop = rNode("button", "remove-link", "结束这次聊聊");
+          drop.addEventListener("click", () => void reviewDrop());
+          links.appendChild(drop);
+          foot.appendChild(links);
+          body.scrollTop = body.scrollHeight;
+          return;
+        }
+
+        if (state.view === "done") {
+          body.appendChild(reviewBubble("好了，这版已经换上了。刚才那一版我也替你留好了，相处下来要是觉得原来的更好，随时可以退回去。"));
+          if (state.change) body.appendChild(rNode("div", "review-note", `这次改了：${state.change}`));
+          if (state.skippedAfter?.length) {
+            body.appendChild(rNode("div", "review-note", `另外有 ${state.skippedAfter.length} 条没落上：${state.skippedAfter.map((row) => `${row.label}（${row.reason ?? "落不上"}）`).join("；")}`));
+          }
+          const back = rNode("button", "primary-button", "回去看看 ta");
+          back.addEventListener("click", async () => {
+            closeModal("review-modal");
+            if (currentId === state.agentId) await openPartner(state.agentId, "personality");
+          });
+          foot.appendChild(back);
+          const past = rNode("button", "soft-button", "看看以前的样子");
+          past.addEventListener("click", () => void openHistory(state.agentId));
+          foot.appendChild(past);
+          return;
+        }
+      }
+
+      async function reviewStart() {
+        const state = reviewState;
+        if (!state || state.busy) return;
+        state.busy = true;
+        state.error = "";
+        state.view = "loading";
+        renderReview();
+        try {
+          const data = await apiLong("POST", `persona-review/${encodeURIComponent(state.agentId)}/start`);
+          state.session = data.session;
+          state.mechanical = data.mechanical;
+          state.view = "talk";
+        } catch (error) {
+          state.error = error.message;
+          state.view = "intro";
+        } finally {
+          state.busy = false;
+          renderReview();
+          document.getElementById("review-input")?.focus();
+        }
+      }
+
+      async function reviewSend() {
+        const state = reviewState;
+        if (!state || state.busy) return;
+        const input = document.getElementById("review-input");
+        const text = String(input?.value ?? "").trim();
+        if (!text) return;
+        state.busy = true;
+        state.error = "";
+        state.pending = "";
+        renderReview();
+        try {
+          const data = await apiLong("POST", `persona-review/${encodeURIComponent(state.agentId)}/chat`, { text });
+          state.session = data.session;
+          state.skipped = [];
+        } catch (error) {
+          state.error = error.message;
+          state.pending = text;
+          if (error.code === "session-gone" || error.code === "revision-changed") state.session = null;
+        } finally {
+          state.busy = false;
+          renderReview();
+          document.getElementById("review-input")?.focus();
+        }
+      }
+
+      async function reviewApply() {
+        const state = reviewState;
+        if (!state || state.busy) return;
+        const list = state.session?.suggestions ?? [];
+        if (!list.length) return;
+        state.busy = true;
+        state.error = "";
+        state.skipped = [];
+        renderReview();
+        try {
+          const data = await apiLong("POST", `persona-review/${encodeURIComponent(state.agentId)}/apply`, { suggestions: list });
+          state.change = data.change ?? "";
+          state.skippedAfter = Array.isArray(data.skipped) ? data.skipped : [];
+          state.session = null;
+          state.view = "done";
+          say("已经换上这版了，原来那版留着了", "ok");
+        } catch (error) {
+          state.error = error.message;
+          state.skipped = Array.isArray(error.skipped) ? error.skipped : [];
+          // 会话作废（版本对不上 / 已经过期）时不再留着旧建议，留着只会误导。
+          if (error.code === "revision-changed" || error.code === "session-gone") state.session = null;
+        } finally {
+          state.busy = false;
+          renderReview();
+        }
+      }
+
+      async function reviewDrop() {
+        const state = reviewState;
+        if (!state) return;
+        try { await api("POST", `persona-review/${encodeURIComponent(state.agentId)}/drop`); } catch { /* 关窗优先 */ }
+        closeModal("review-modal");
+        say("这次聊聊结束了，ta 没有变动");
+        if (currentId === state.agentId) await openPartner(state.agentId, "personality");
+      }
+
+      async function openHistory(agentId) {
+        const body = document.getElementById("history-body");
+        body.replaceChildren(rNode("div", "loading-note", "正在翻以前的样子…"));
+        openModal("history-modal");
+        try {
+          const data = await api("GET", `persona-review/${encodeURIComponent(agentId)}`);
+          const rows = data.history ?? [];
+          body.replaceChildren();
+          if (!rows.length) {
+            body.appendChild(rNode("div", "empty-note", "还没有留过以前的版本。第一次换版本时会自动留一份。"));
+            return;
+          }
+          for (const row of rows) {
+            const card = rNode("div", "history-row");
+            card.appendChild(rNode("b", "", reviewTime(row.at)));
+            card.appendChild(rNode("p", "", row.summary || "内容有改动"));
+            if (row.reason) card.appendChild(rNode("small", "", row.reason));
+            const back = rNode("button", "soft-button", "换回这一版");
+            back.addEventListener("click", () => void reviewRevert(agentId, row.at, back));
+            card.appendChild(back);
+            body.appendChild(card);
+          }
+        } catch (error) {
+          body.replaceChildren(rNode("div", "empty-note", `没读出来：${error.message}`));
+        }
+      }
+
+      async function reviewRevert(agentId, at, button) {
+        // 轻确认：点一下先吓一下，再点才真换。不用系统弹窗。
+        if (button.dataset.armed !== "1") {
+          button.dataset.armed = "1";
+          button.textContent = "确定换回？现在这版会先留着";
+          setTimeout(() => {
+            if (button.isConnected) { button.dataset.armed = "0"; button.textContent = "换回这一版"; }
+          }, 4000);
+          return;
+        }
+        button.disabled = true;
+        button.textContent = "正在换…";
+        try {
+          await apiLong("POST", `persona-review/${encodeURIComponent(agentId)}/revert`, { at });
+          closeModal("history-modal");
+          say("已经换回去了，刚才那版还在历史里", "ok");
+          if (currentId === agentId) await openPartner(agentId, "personality");
+        } catch (error) {
+          button.disabled = false;
+          button.dataset.armed = "0";
+          button.textContent = "换回这一版";
+          say(`没换回去：${error.message}`, "err");
+        }
+      }
+
+      function openPanelAction(action, value = "") {
+        if (window.parent !== window) {
+          window.parent.postMessage({ type: "chahuahui:open-panel-action", action, value }, "*");
+          return;
+        }
+        const url = new URL("./panel.html", window.location.href);
+        url.searchParams.set("t", Date.now().toString());
+        url.searchParams.set(action, value);
+        const session = new URL(window.location.href).searchParams.get("appSurfaceSession");
+        if (session) url.searchParams.set("appSurfaceSession", session);
+        window.location.assign(url.toString());
+      }
+
+      // ── 和小花聊聊：在现在这一版上改，不像「重新认识」那样推倒重来 ──
+      const personaReady = !knowing.drafting && (traits.length > 0 || signals.length > 0);
+      const reviewActions = document.createElement("div");
+      reviewActions.className = "detail-actions personality-actions";
+      const reviewButton = document.createElement("button");
+      reviewButton.type = "button";
+      reviewButton.className = "primary-button review-open";
+      reviewButton.textContent = "和小花聊聊";
+      if (!personaReady) {
+        reviewButton.disabled = true;
+        reviewButton.title = "等 ta 的样子长出来，就能一起看看了";
+      }
+      reviewButton.addEventListener("click", () => { void openReview(agentId); });
+      reviewActions.appendChild(reviewButton);
+      const reviewNote = document.createElement("small");
+      reviewNote.className = "personality-action-note";
+      reviewNote.textContent = personaReady
+        ? "先看一遍现在这版，再一处一处商量要不要改；不点头就不会动 ta。"
+        : "等 ta 的样子长出来，这里就能一起看了。";
+      reviewActions.appendChild(reviewNote);
+      const historyButton = document.createElement("button");
+      historyButton.type = "button";
+      historyButton.className = "soft-button";
+      historyButton.textContent = "看看以前的样子";
+      historyButton.hidden = !(knowing.historyCount > 0);
+      historyButton.addEventListener("click", () => { void openHistory(agentId); });
+      reviewActions.appendChild(historyButton);
+      personCard.appendChild(reviewActions);
+
+      const reshapeActions = document.createElement("div");
+      reshapeActions.className = "detail-actions personality-actions";
+      const reshapeButton = document.createElement("button");
+      reshapeButton.type = "button";
+      reshapeButton.className = "soft-button";
+      reshapeButton.textContent = "重新认识 ta";
+      reshapeButton.addEventListener("click", () => {
+        // 重新认识 = 重做一遍，之前答的会被清掉，所以先说清楚再走。
+        const copy = document.getElementById("recognize-copy");
+        if (copy) copy.textContent = "要把 ta 重新认识一遍吗？";
+        const confirm = document.getElementById("confirm-recognize");
+        if (confirm) confirm.onclick = () => { closeModal("recognize-modal"); openPanelAction("reshape", agentId); };
+        openModal("recognize-modal");
+      });
+      reshapeActions.appendChild(reshapeButton);
+      const reshapeHint = document.createElement("small");
+      reshapeHint.className = "personality-action-note";
+      reshapeHint.textContent = "会从第一题重新问一遍，之前答的内容会被清掉；想只改一两个地方，就和小花聊聊。";
+      reshapeActions.appendChild(reshapeHint);
+      personCard.appendChild(reshapeActions);
+      if (knowing.drafting) {
+        profile.hidden = true;
+        growth.hidden = true;
+        footerNote.hidden = true;
+      }
+      detailPanels.personality.appendChild(personCard);
+
+      const profileCard = detailCard("ta 眼里的你", "料有两份：主对话框那边记着的关于你的事，和这儿聊出来的印象。压缩以后可能记偏，你可以直接校对。");
+      const area = document.createElement("textarea"); area.value = memory.profile?.text ?? ""; area.placeholder = "聊久了，这里会慢慢长出一份关系档案。";
+      const saveProfile = document.createElement("button"); saveProfile.type = "button"; saveProfile.className = "primary-button"; saveProfile.textContent = "保存档案";
+      saveProfile.addEventListener("click", async () => {
+        try { await api("PUT", `memory/${encodeURIComponent(agentId)}/profile`, { text: area.value }); say("档案已保存", "ok"); }
+        catch (error) { say(`没存上：${error.message}`, "err"); }
+      });
+      profileCard.append(area, saveProfile);
+      detailPanels.memory.appendChild(profileCard);
+
+      const ledgerCard = detailCard("聊过的日子", "按天留一笔，写偏了可以改，也可以删掉单独一天。");
+      const rows = [...(memory.ledger ?? [])].sort((a, b) => String(b.day).localeCompare(String(a.day)));
+      if (!rows.length) ledgerCard.appendChild(Object.assign(document.createElement("div"), { className: "empty-note", textContent: "还没有日账。聊过几次后会自己补。" }));
+      for (const row of rows) {
+        const item = document.createElement("div"); item.className = "ledger-item";
+        const day = document.createElement("b"); day.textContent = row.day;
+        const text = document.createElement("textarea"); text.value = row.text ?? "";
+        const actions = document.createElement("div"); actions.className = "item-actions";
+        const save = document.createElement("button"); save.type = "button"; save.className = "soft-button"; save.textContent = "保存";
+        save.addEventListener("click", async () => { try { await api("PUT", `memory/${encodeURIComponent(agentId)}/ledger`, { day: row.day, text: text.value }); say(`${row.day} 已保存`, "ok"); } catch (error) { say(`没存上：${error.message}`, "err"); } });
+        const del = document.createElement("button"); del.type = "button"; del.className = "remove-link"; del.textContent = "删掉这天";
+        del.addEventListener("click", async () => { if (!confirm(`把 ${row.day} 这一笔删掉？`)) return; try { await api("DELETE", `memory/${encodeURIComponent(agentId)}/ledger/${row.day}`); if (currentId === agentId) await openPartner(agentId, "memory"); } catch (error) { say(`没删掉：${error.message}`, "err"); } });
+        actions.append(save, del); item.append(day, text, actions); ledgerCard.appendChild(item);
+      }
+      detailPanels.memory.appendChild(ledgerCard);
+
+      const topicsCard = detailCard("还搁着的话题", "提过但没聊透的事，要等 ta 带着新东西回来才会再提。发现写偏了可以纠正，不想再聊就放下。");
+      const topics = (topicBook.topics ?? []).filter((topic) => topic.state !== "dropped");
+      if (topicBookFailed) topicsCard.appendChild(Object.assign(document.createElement("div"), { className: "empty-note", textContent: "话题本暂时没读出来，重新打开这位伙伴再试哈。" }));
+      else if (!topics.length) topicsCard.appendChild(Object.assign(document.createElement("div"), { className: "empty-note", textContent: "话题本还是空的。" }));
+      for (const topic of [...topics].sort((a, b) => String(b.openedAt).localeCompare(String(a.openedAt)))) {
+        const item = document.createElement("div"); item.className = "topic-item";
+        const tag = document.createElement("span"); tag.textContent = `${KIND_LABEL[topic.kind] ?? "其他"} · ${STATE_LABEL[topic.state] ?? topic.state}`;
+        const text = document.createElement("p"); text.textContent = `${topic.title}${topic.note ? ` · ${topic.note}` : ""}`;
+        if (topic.correction) { const corrected = document.createElement("small"); corrected.className = "topic-correction"; corrected.textContent = `已校对：${topic.correction}`; item.append(tag, text, corrected); }
+        else item.append(tag, text);
+        const actions = document.createElement("div"); actions.className = "item-actions topic-actions";
+        const correct = document.createElement("button"); correct.type = "button"; correct.className = "soft-button"; correct.textContent = "纠正";
+        const drop = document.createElement("button"); drop.type = "button"; drop.className = "remove-link"; drop.textContent = "放下";
+        correct.addEventListener("click", () => {
+          if (item.querySelector(".topic-editor")) return;
+          const editor = document.createElement("div"); editor.className = "topic-editor";
+          const input = document.createElement("textarea"); input.rows = 2; input.maxLength = 240; input.value = topic.correction ?? ""; input.placeholder = "比如：剑鞘细节属于《黑神话：钟馗》"; input.setAttribute("aria-label", "纠正这条话题");
+          const save = document.createElement("button"); save.type = "button"; save.className = "primary-button"; save.textContent = "保存纠正";
+          const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "remove-link"; cancel.textContent = "先不改";
+          const editorActions = document.createElement("div"); editorActions.className = "item-actions"; editorActions.append(save, cancel); editor.append(input, editorActions); item.appendChild(editor); input.focus();
+          cancel.addEventListener("click", () => editor.remove());
+          save.addEventListener("click", async () => {
+            const correction = input.value.trim();
+            if (!correction) { say("先写一句要纠正的内容", "err"); input.focus(); return; }
+            save.disabled = true; save.textContent = "正在保存…";
+            try { await api("PUT", `topics/${encodeURIComponent(agentId)}/${encodeURIComponent(topic.id)}`, { correction }); say("话题已纠正", "ok"); await openPartner(agentId, "memory"); }
+            catch (error) { say(`没改好：${error.message}`, "err"); save.disabled = false; save.textContent = "保存纠正"; }
+          });
+        });
+        drop.addEventListener("click", async () => {
+          if (!confirm(`放下「${topic.title}」？以后不会再主动捞这条话题。`)) return;
+          drop.disabled = true;
+          try { await api("DELETE", `topics/${encodeURIComponent(agentId)}/${encodeURIComponent(topic.id)}`); say("这条话题放下了", "ok"); await openPartner(agentId, "memory"); }
+          catch (error) { say(`没放下：${error.message}`, "err"); drop.disabled = false; }
+        });
+        actions.append(correct, drop); item.appendChild(actions); topicsCard.appendChild(item);
+      }
+      if ((memory.archive ?? []).length) {
+        const summary = document.createElement("details"); summary.className = "archive-details";
+        const sum = document.createElement("summary"); sum.textContent = `更早聊过的（${memory.archive.length} 段）`;
+        summary.appendChild(sum);
+        for (const row of memory.archive) { const p = document.createElement("p"); p.textContent = row.text; summary.appendChild(p); }
+        topicsCard.appendChild(summary);
+      }
+      detailPanels.memory.appendChild(topicsCard);
+
+      // ── 模型：这位伙伴单独用哪个（不选就跟全局那条）──
+      const modelCard = detailCard("ta 说话用哪个模型", "不选就跟全局一致。这里只管 ta 在聊天窗里说的话；翻记忆、写性格那些后台活儿照旧走宿主的辅助模型。");
+      const modelHost = document.createElement("div");
+      modelHost.className = "detail-field";
+      const partnerSel = buildModelSelect(modelKeyOf(s.model));
+      partnerSel.setAttribute("aria-label", `${partner.name}用哪个模型`);
+      partnerSel.addEventListener("change", async () => {
+        const key = partnerSel.value;
+        const saved = await savePartner(
+          agentId,
+          { model: modelRefFromKey(key) },
+          key === "follow" ? "改回跟全局一致" : "这位伙伴的模型已保存",
+        );
+        if (!saved && currentId === agentId) await openPartner(agentId, "model");
+      });
+      modelHost.appendChild(partnerSel);
+      modelCard.appendChild(modelHost);
+      if (!modelCatalog.length) {
+        const modelHint = document.createElement("small");
+        modelHint.textContent = "没读到 Hana 的模型列表，先跟着主模型走。";
+        modelCard.appendChild(modelHint);
+      }
+      detailPanels.model.appendChild(modelCard);
+
+      const visionCard = detailCard("ta 的识图模型", "不选就跟全局辅助识图。只有测试通过后，这位伙伴才允许接收图片。");
+      const visionHost = document.createElement("div");
+      visionHost.className = "detail-field";
+      const visionSel = buildVisionSelect(visionKeyOf(s.vision));
+      visionSel.setAttribute("aria-label", `${partner.name}的识图模型`);
+      visionHost.appendChild(visionSel);
+      visionCard.appendChild(visionHost);
+      const visionActions = document.createElement("div");
+      visionActions.className = "detail-actions";
+      const visionTest = document.createElement("button");
+      visionTest.type = "button";
+      visionTest.className = "soft-button";
+      visionTest.textContent = "测试识图";
+      visionActions.appendChild(visionTest);
+      visionCard.appendChild(visionActions);
+      const visionNote = document.createElement("small");
+      visionNote.className = "detail-field-note";
+      visionCard.appendChild(visionNote);
+      const paintPartnerVision = () => {
+        const currentVision = s.vision ?? {};
+        visionTest.disabled = !currentVision.model;
+        if (!currentVision.model) visionNote.textContent = globalSettings.vision?.status === "verified" ? "当前跟随全局辅助识图。" : "没配置可用识图模型，发送图片会被拦住。";
+        else if (currentVision.status === "verified") visionNote.textContent = "这位伙伴的识图测试已通过。";
+        else if (currentVision.status === "failed") visionNote.textContent = `上次测试没通过：${currentVision.error || "模型暂时不可用"}`;
+        else visionNote.textContent = "模型已选，但还没通过测试。";
+      };
+      visionSel.addEventListener("change", async () => {
+        const model = visionRefFromKey(visionSel.value);
+        const saved = await savePartner(agentId, { vision: { model, status: "unverified", testedAt: null, error: null } }, model ? "已选识图模型，请先测试" : "已改回跟随全局识图");
+        if (saved && currentId === agentId) {
+          s.vision = saved.vision;
+          paintPartnerVision();
+        }
+      });
+      visionTest.addEventListener("click", async () => {
+        if (!s.vision?.model) return;
+        visionTest.disabled = true;
+        visionTest.textContent = "正在测试…";
+        try {
+          const result = await api("POST", "vision/test", { agentId, model: s.vision.model });
+          s.vision = result.vision;
+          say(result.ok ? "这位伙伴的识图测试通过" : `识图测试没通过：${result.error?.message || "模型暂时不可用"}`, result.ok ? "ok" : "err");
+        } catch (error) {
+          say(`识图测试没跑完：${error.message}`, "err");
+        } finally {
+          visionTest.textContent = "测试识图";
+          paintPartnerVision();
+        }
+      });
+      paintPartnerVision();
+      detailPanels.model.appendChild(visionCard);
+
+      // ── 场景：每位伙伴独立选择聊天背景，共享同一个背景图库 ──
+      //
+      // 图不指回她挑的那个原文件：后端抄一份进茶话会自己的目录，
+      // 她之后把原图删了、挠了，房间不会跟着空掉。
+      const roomCard = detailCard("聊天场景", "给这位伙伴选择聊天背景。背景图库全茶话会共享，上传一次就能给多人使用。");
+      let roomBackground = s.background ?? null;
+      /** 预览图地址按「换图时刻」缓存；换一次丢一次，不然预览还端着老图 */
+      let roomPreviewUrl = null;
+
+      const roomPreview = document.createElement("div");
+      roomPreview.className = "room-preview";
+      const roomImage = document.createElement("img");
+      roomImage.alt = "";
+      // 预览必须整张显示；用内联样式兜住 webview 的旧样式缓存或覆盖规则
+      roomImage.style.cssText = "display:block;position:absolute;inset:0;width:100%;height:100%;max-width:none;max-height:none;object-fit:cover;";
+      roomImage.hidden = true;
+      const roomEmpty = document.createElement("span");
+      roomEmpty.className = "room-preview-empty";
+      roomEmpty.textContent = "还没设背景";
+      roomPreview.append(roomImage, roomEmpty);
+
+      /** 透明度是连续的视觉调整，数值越高，背景越淡。 */
+      const ROOM_DEFAULT_OPACITY = 52;
+      const roomOpacityRow = document.createElement("label");
+      roomOpacityRow.className = "room-opacity";
+      roomOpacityRow.innerHTML = '<span>背景明暗</span><input type="range" min="0" max="100" step="1"><b class="room-opacity-value">52%</b>';
+      const roomOpacityInput = roomOpacityRow.querySelector("input");
+      const roomOpacityValue = roomOpacityRow.querySelector(".room-opacity-value");
+      /** 跟后端 `lib/background.js` 的上限对齐；先在这儿拦一道，省得白读一遍 */
+      const ROOM_MAX_BYTES = 12 * 1024 * 1024;
+      const roomGallery = document.createElement("div");
+      roomGallery.className = "room-gallery";
+      roomGallery.hidden = true;
+      const roomGalleryUrls = [];
+
+      const roomActions = document.createElement("div");
+      roomActions.className = "room-actions";
+      const roomPickButton = document.createElement("button");
+      roomPickButton.type = "button";
+      roomPickButton.className = "soft-button";
+      const roomClearButton = document.createElement("button");
+      roomClearButton.type = "button";
+      roomClearButton.className = "remove-link";
+      roomClearButton.textContent = "清掉背景";
+      roomActions.append(roomPickButton, roomClearButton);
+
+      const roomNote = document.createElement("small");
+      roomNote.className = "room-note";
+      roomNote.textContent = "浓度越高，图越淡、越像氛围；气泡和字始终清楚。";
+
+      roomCard.append(roomPreview, roomGallery, roomActions, roomOpacityRow, roomNote);
+      detailPanels.room.appendChild(roomCard);
+
+      function paintRoom(background) {
+        roomBackground = background ?? null;
+        const opacity = Number.isFinite(Number(roomBackground?.opacity)) ? Number(roomBackground.opacity) : ROOM_DEFAULT_OPACITY;
+        roomOpacityInput.value = String(opacity);
+        roomOpacityValue.textContent = `${opacity}%`;
+        roomPreview.style.setProperty("--room-veil", String(opacity / 100));
+        roomPreview.classList.toggle("has-bg", Boolean(roomBackground));
+        roomOpacityRow.hidden = !roomBackground;
+        roomClearButton.hidden = !roomBackground;
+        roomPickButton.textContent = roomBackground ? "换一张图" : "选一张图";
+        if (roomPreviewUrl) { URL.revokeObjectURL(roomPreviewUrl); roomPreviewUrl = null; }
+        if (!roomBackground) {
+          roomImage.hidden = true;
+          roomImage.removeAttribute("src");
+          roomEmpty.hidden = false;
+          return;
+        }
+        roomEmpty.hidden = true;
+        roomImage.hidden = false;
+        void loadRoomPreview();
+      }
+
+      async function loadRoomPreview() {
+        if (!roomBackground) return;
+        const stamp = encodeURIComponent(roomBackground.at ?? "");
+        try {
+          const res = await hana.api.fetch(`background/${encodeURIComponent(agentId)}?v=${stamp}`);
+          if (!res.ok) return;
+          const blob = await res.blob();
+          if (!blob.size) return;
+          // 回来时可能已经换人、换图了，别把旧图贴上去
+          if (currentId !== agentId || !roomBackground) return;
+          roomPreviewUrl = URL.createObjectURL(blob);
+          roomImage.src = roomPreviewUrl;
+        } catch {
+          /* 预览拉不到就先空着；图本身还在那儿，下次进来再试 */
+        }
+      }
+
+      let opacityTimer = null;
+      roomOpacityInput.addEventListener("input", () => {
+        if (!roomBackground) return;
+        const opacity = Number(roomOpacityInput.value);
+        roomOpacityValue.textContent = `${opacity}%`;
+        roomPreview.style.setProperty("--room-veil", String(opacity / 100));
+        clearTimeout(opacityTimer);
+        opacityTimer = setTimeout(async () => {
+          try {
+            const data = await api("POST", `background/${encodeURIComponent(agentId)}`, { opacity });
+            roomBackground = data.background;
+          } catch (error) { say(`透明度没存上：${error.message}`, "err"); }
+        }, 180);
+      });
+
+      async function applyRoomFile(file) {
+        try {
+          const data = await api("POST", `background/${encodeURIComponent(agentId)}`, {
+            file,
+            opacity: Number(roomOpacityInput.value),
+          });
+          paintRoom(data.background);
+          await loadRoomGallery();
+          say("换好了", "ok");
+        } catch (error) { say(`没换成：${error.message}`, "err"); }
+      }
+
+      async function loadRoomGallery() {
+        try {
+          const data = await api("GET", `backgrounds/${encodeURIComponent(agentId)}`);
+          while (roomGalleryUrls.length) URL.revokeObjectURL(roomGalleryUrls.pop());
+          roomGallery.replaceChildren();
+          for (const item of data.backgrounds ?? []) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.classList.toggle("on", item.file === roomBackground?.file);
+            const image = document.createElement("img");
+            image.alt = "";
+            button.appendChild(image);
+            void hana.api.fetch(`background/${encodeURIComponent(agentId)}?file=${encodeURIComponent(item.file)}&v=${encodeURIComponent(item.at ?? "")}`)
+              .then((res) => res.ok ? res.blob() : null)
+              .then((blob) => {
+                if (!blob?.size || !button.isConnected) return;
+                const url = URL.createObjectURL(blob);
+                roomGalleryUrls.push(url);
+                image.src = url;
+              })
+              .catch(() => {});
+            button.title = item.file === roomBackground?.file ? "当前背景" : "切换到这张背景";
+            button.addEventListener("click", () => void applyRoomFile(item.file));
+            roomGallery.appendChild(button);
+          }
+          roomGallery.hidden = !(data.backgrounds?.length);
+        } catch { roomGallery.hidden = true; }
+      }
+
+      // 选图走浏览器自带的文件选择框，不绕宿主的资源通道。
+      //
+      // 这里要的只是「图的字节」，不是它落在哪个路径；file input 直接给 File，
+      // 少一层转手。图会拄一份进茶话会自己的目录，之后原图挠了删了都不影响这间房。
+      const roomFileInput = document.createElement("input");
+      roomFileInput.type = "file";
+      roomFileInput.accept = "image/png,image/jpeg,image/gif,image/webp";
+      roomFileInput.hidden = true;
+      roomCard.appendChild(roomFileInput);
+
+      /** 把选中的文件读成不带前缀的 base64（后端只认字节） */
+      function readRoomFile(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const text = String(reader.result ?? "");
+            const comma = text.indexOf(",");
+            if (comma < 0) { reject(new Error("这张图读不出来")); return; }
+            resolve(text.slice(comma + 1));
+          };
+          reader.onerror = () => reject(new Error("这张图读不出来"));
+          reader.readAsDataURL(file);
+        });
+      }
+
+      roomPickButton.addEventListener("click", () => roomFileInput.click());
+
+      roomFileInput.addEventListener("change", async () => {
+        const file = roomFileInput.files?.[0];
+        // 选完就清空：同一张图连着挑两次也得能再触发一次 change
+        roomFileInput.value = "";
+        if (!file) return; // 她取消了，什么都不说
+        if (file.size > ROOM_MAX_BYTES) {
+          say("这张图太大了，挑一张 12MB 以内的", "err");
+          return;
+        }
+        roomPickButton.disabled = true;
+        say("正在拄一份进来…");
+        try {
+          const base64 = await readRoomFile(file);
+          const data = await api("POST", `background/${encodeURIComponent(agentId)}`, {
+            base64,
+            opacity: Number(roomOpacityInput.value),
+          });
+          paintRoom(data.background);
+          await loadRoomGallery();
+          say("这间房换好了", "ok");
+        } catch (error) {
+          say(`没换上：${error.message}`, "err");
+        } finally {
+          roomPickButton.disabled = false;
+        }
+      });
+
+      roomClearButton.addEventListener("click", async () => {
+        roomClearButton.disabled = true;
+        try {
+          await api("DELETE", `background/${encodeURIComponent(agentId)}`);
+          paintRoom(null);
+          await loadRoomGallery();
+          say("清掉了，图库里的图还在", "ok");
+        } catch (error) {
+          say(`没清掉：${error.message}`, "err");
+        } finally {
+          roomClearButton.disabled = false;
+        }
+      });
+
+      paintRoom(roomBackground);
+      void loadRoomGallery();
+
+      if (requestSeq !== partnerRequestSeq || currentId !== agentId) return;
+      el.partnerBody.replaceChildren(root);
+      dressSelects(root);
+      switchDetail(detailTab);
+    }
+
+    document.getElementById("confirm-remove").addEventListener("click", async () => {
+      const agentId = pendingRemoveId;
+      const partner = partners.find((p) => p.id === agentId);
+      if (!agentId || !partner) return;
+      const button = document.getElementById("confirm-remove");
+      button.disabled = true; button.textContent = "正在移出…";
+      try {
+        await api("POST", `settings/partner/${encodeURIComponent(agentId)}/hide`);
+        hiddenPartners.push({ id: partner.id, name: partner.name });
+        partners = partners.filter((p) => p.id !== agentId);
+        pendingRemoveId = null;
+        partnerRequestSeq += 1;
+        currentId = partners[0]?.id ?? null;
+        closeModal("remove-modal", false);
+        paintPartnerList();
+        if (currentId) {
+          await openPartner(currentId);
+          document.querySelector(".partner-pick.on")?.focus();
+        } else {
+          el.partnerBody.replaceChildren();
+          document.getElementById("partner-heading")?.focus();
+        }
+        say(`已移出「${partner.name}」`, "ok");
+      } catch (error) { say(`移出失败：${error.message}`, "err"); }
+      finally { button.disabled = false; button.textContent = "确认移出"; }
+    });
+
+    function paintRemovedPartners() {
+      el.removedList.replaceChildren();
+      if (!hiddenPartners.length) {
+        el.removedList.appendChild(Object.assign(document.createElement("div"), { className: "empty-note", textContent: "没有已移出的伙伴。" }));
+        return;
+      }
+      for (const partner of hiddenPartners) {
+        const row = document.createElement("div"); row.className = "removed-row";
+        const who = document.createElement("div"); who.className = "removed-who"; who.appendChild(avatar(partner));
+        const copy = document.createElement("span"); copy.className = "removed-copy";
+        const name = document.createElement("b"); name.textContent = partner.name; copy.appendChild(name);
+        if (partner.unavailable) {
+          const note = document.createElement("small"); note.textContent = "目前不在 Hana 活跃列表"; copy.appendChild(note);
+        }
+        who.appendChild(copy);
+        const back = document.createElement("button"); back.type = "button"; back.className = "soft-button"; back.textContent = "放回列表";
+        back.addEventListener("click", async () => {
+          back.disabled = true;
+          back.textContent = "正在放回…";
+          try {
+            await api("POST", `settings/partner/${encodeURIComponent(partner.id)}/unhide`);
+          } catch (error) {
+            say(`放回失败：${error.message}`, "err");
+            back.disabled = false;
+            back.textContent = "放回列表";
+            return;
+          }
+          hiddenPartners = hiddenPartners.filter((item) => item.id !== partner.id);
+          paintRemovedPartners();
+          say(partner.unavailable ? "已解除隐藏，等伙伴恢复活动后会出现" : `「${partner.name}」已回到列表`, "ok");
+          try { await reloadSettings(); }
+          catch (error) { say(`已经放回，但列表没刷新：${error.message}`, "err"); }
+        });
+        row.append(who, back); el.removedList.appendChild(row);
+      }
+    }
+
+    el.removedEntry.addEventListener("click", () => { paintRemovedPartners(); openModal("removed-modal"); });
+    el.newLocalEntry.addEventListener("click", () => {
+      if (window.parent !== window) {
+        window.parent.postMessage({ type: "chahuahui:open-panel-action", action: "create", value: "1" }, "*");
+        return;
+      }
+      const url = new URL("./panel.html", window.location.href);
+      url.searchParams.set("create", "1");
+      const session = new URL(window.location.href).searchParams.get("appSurfaceSession");
+      if (session) url.searchParams.set("appSurfaceSession", session);
+      window.location.assign(url.toString());
+    });
+
+    async function reloadSettings() {
+      const data = await api("GET", "settings");
+      partners = data.partners ?? [];
+      hiddenPartners = data.hiddenPartners ?? [];
+      globalSettings = data.global ?? {};
+      styleCatalog = data.styles ?? [];
+      modelCatalog = data.models ?? [];
+      visionModelCatalog = data.visionModels ?? [];
+      daybookInstalled = Boolean(data.daybookInstalled);
+      if (currentId && !partners.some((p) => p.id === currentId)) currentId = partners[0]?.id ?? null;
+      paintGlobal();
+      paintPartnerList();
+      if (currentId) await openPartner(currentId);
+      else el.partnerBody.replaceChildren();
+    }
+
+    async function boot() {
+      try {
+        hana.ready?.({ ok: true });
+        await reloadSettings();
+      } catch (error) {
+        const message = String(error?.message ?? "");
+        // 权限没批是分享版新手最容易撞上的一堵墙，别只丢一句「读不出来」。
+        const permissionish = /403|401|权限|permission|forbidden|not authorized/i.test(message);
+        say(permissionish
+          ? "设置读不出来：多半是茶话会的应用权限还没开。去「设置 → 安全 → 应用能力」为它打开「读取伙伴」「读取伙伴资料」和「调用模型」，再重新打开这一页。"
+          : `设置没读出来：${message}`, "err");
+      }
+    }
+
+    boot();
+  </script>
+</body>
+</html>
