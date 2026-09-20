@@ -78,8 +78,8 @@
       </div>
       <article class="setting-card compact">
         <div class="setting-copy">
-          <h3>今日情境</h3>
-          <p id="daybook-copy">打开后，伙伴会知道今天是什么日子、窗外什么天气，还有你们最近过下来的日子。</p>
+          <h3>拾光记今日情境</h3>
+          <p id="daybook-copy">打开后，伙伴会知道拾光记里的今天是什么日子、窗外什么天气，还有你们最近过下来的日子。</p>
         </div>
         <button class="switch" id="daybook-switch" type="button" role="switch" aria-checked="false">
           <span class="track"><span></span></span><span class="switch-label">关闭</span>
@@ -87,8 +87,8 @@
       </article>
       <article class="setting-card compact">
         <div class="setting-copy">
-          <h3>电脑端生活联动</h3>
-          <p id="workfeed-copy">打开后，伙伴会知道你在电脑那边跟 ta 一起做过的事，聊天时能自然接上。关掉就不再收集，已经收的也不再使用。</p>
+          <h3>Hana 主对话近况</h3>
+          <p id="workfeed-copy">打开后，伙伴可以在合适时参考你和伙伴在 Hana 主对话框里最近聊过的事。关掉就不再收集，已经收的也不再使用。</p>
         </div>
         <button class="switch" id="workfeed-switch" type="button" role="switch" aria-checked="true">
           <span class="track"><span></span></span><span class="switch-label">打开</span>
@@ -97,9 +97,12 @@
       <article class="setting-card compact">
         <div class="setting-copy">
           <h3>已收集的生活记录</h3>
-          <p>茶话会自己存了一份你在电脑那边跟伙伴一起做过的事。清空之后，伙伴就不知道那些事了。</p>
+          <p>茶话会自己存了一份 Hana 主对话框里的近期聊天。可以翻看或单条删掉，清空之后伙伴就不知道那些事了。</p>
         </div>
-        <button class="soft-button" id="workfeed-clear" type="button">清空</button>
+        <div class="detail-actions workfeed-actions">
+          <button class="soft-button" id="workfeed-view" type="button">查看</button>
+          <button class="soft-button" id="workfeed-clear" type="button">清空</button>
+        </div>
       </article>
 
       <div class="section-head roomy">
@@ -187,7 +190,7 @@
         <p id="recognize-copy"></p>
         <div class="safe-note">会从第一题重新问一遍，之前答的内容会被清掉；新的回答边答边存。</div>
       </div>
-      <div class="modal-foot"><button class="soft-button" data-close-modal="recognize-modal">先不重来</button><button class="danger-button" id="confirm-recognize">重新认识</button></div>
+      <div class="modal-foot"><button class="danger-button" id="confirm-recognize">重新认识</button></div>
     </div>
   </div>
 
@@ -203,7 +206,6 @@
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="history-title">
       <div class="modal-head"><h2 id="history-title">以前的样子</h2><button class="icon-button" data-close-modal="history-modal" aria-label="关闭">×</button></div>
       <div class="modal-body scroll-body" id="history-body"></div>
-      <div class="modal-foot"><button class="soft-button" data-close-modal="history-modal">先看看，不回退</button></div>
     </div>
   </div>
 
@@ -214,7 +216,7 @@
         <p id="remove-copy"></p>
         <div class="safe-note">聊天、记忆和设置都会保留。以后放回列表，原来的东西还在。</div>
       </div>
-      <div class="modal-foot"><button class="soft-button" data-close-modal="remove-modal">先不移出</button><button class="danger-button" id="confirm-remove">确认移出</button></div>
+      <div class="modal-foot"><button class="danger-button" id="confirm-remove">确认移出</button></div>
     </div>
   </div>
 
@@ -222,7 +224,13 @@
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="removed-title">
       <div class="modal-head"><h2 id="removed-title">已移出的伙伴</h2><button class="icon-button" data-close-modal="removed-modal" aria-label="关闭">×</button></div>
       <div class="modal-body scroll-body" id="removed-list"></div>
-      <div class="modal-foot"><button class="soft-button" data-close-modal="removed-modal">关闭</button></div>
+    </div>
+  </div>
+
+  <div class="modal-layer" id="workfeed-modal" hidden>
+    <div class="modal workfeed-modal" role="dialog" aria-modal="true" aria-labelledby="workfeed-title">
+      <div class="modal-head"><div><h2 id="workfeed-title">已收集的生活记录</h2><p class="modal-sub" id="workfeed-count"></p></div><button class="icon-button" data-close-modal="workfeed-modal" aria-label="关闭">×</button></div>
+      <div class="modal-body scroll-body" id="workfeed-list"></div>
     </div>
   </div>
 
@@ -269,6 +277,7 @@
     let personDraftTimer = null;
     let lastModalTrigger = null;
     let globalSaveChain = Promise.resolve();
+    let workfeedDeleteTimers = new WeakMap();
     const avatarCache = new Map();
 
     async function api(method, sub, body) {
@@ -628,12 +637,108 @@
     document.getElementById("daybook-switch").addEventListener("click", async () => {
       if (!daybookInstalled) return say("先装上拾光记，这一项才能开", "err");
       const next = !Boolean(globalSettings.daybookEnabled);
-      if (await saveGlobal({ daybookEnabled: next }, next ? "伙伴以后会知道今天的事了" : "今日情境已关闭")) paintGlobal();
+      if (await saveGlobal({ daybookEnabled: next }, next ? "伙伴以后会知道拾光记里的今天了" : "拾光记今日情境已关闭")) paintGlobal();
     });
     document.getElementById("workfeed-switch").addEventListener("click", async () => {
       const next = globalSettings.workfeedEnabled === false;
-      if (await saveGlobal({ workfeedEnabled: next }, next ? "伙伴又能知道电脑那边的事了" : "已关闭，伙伴不再知道电脑那边的事")) paintGlobal();
+      if (await saveGlobal({ workfeedEnabled: next }, next ? "伙伴又能参考 Hana 主对话近况了" : "已关闭，伙伴不再参考 Hana 主对话近况")) paintGlobal();
     });
+    function rNode(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+
+    function workfeedPartnerName(agentId) {
+      return partners.find((row) => row.id === agentId)?.name
+        || hiddenPartners.find((row) => row.id === agentId)?.name
+        || agentId
+        || "未标明伙伴";
+    }
+
+    function workfeedDayLabel(lifeDay) {
+      const date = new Date(`${lifeDay}T12:00:00`);
+      return Number.isNaN(date.getTime()) ? lifeDay : new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric", weekday: "short" }).format(date);
+    }
+
+    function renderWorkfeed(workfeed) {
+      const host = document.getElementById("workfeed-list");
+      const count = document.getElementById("workfeed-count");
+      const events = Array.isArray(workfeed?.events) ? [...workfeed.events].sort((a, b) => String(b.at).localeCompare(String(a.at))) : [];
+      count.textContent = `${events.length} 条，按生活日和伙伴收好`;
+      host.replaceChildren();
+      if (!events.length) {
+        host.appendChild(rNode("div", "workfeed-empty", "这里还没有收集到生活记录。"));
+        return;
+      }
+      const byDay = new Map();
+      for (const event of events) {
+        if (!byDay.has(event.lifeDay)) byDay.set(event.lifeDay, new Map());
+        const byPartner = byDay.get(event.lifeDay);
+        if (!byPartner.has(event.agentId)) byPartner.set(event.agentId, []);
+        byPartner.get(event.agentId).push(event);
+      }
+      for (const [lifeDay, byPartner] of byDay) {
+        const day = rNode("section", "workfeed-day");
+        const dayTitle = rNode("h3", "workfeed-day-title");
+        dayTitle.append(rNode("span", "", workfeedDayLabel(lifeDay)), rNode("span", "workfeed-day-count", `${[...byPartner.values()].reduce((sum, rows) => sum + rows.length, 0)} 条`));
+        day.appendChild(dayTitle);
+        for (const [agentId, rows] of byPartner) {
+          const partner = rNode("div", "workfeed-partner");
+          partner.appendChild(rNode("h4", "workfeed-partner-title", workfeedPartnerName(agentId)));
+          for (const event of rows) {
+            const entry = rNode("div", "workfeed-entry");
+            const at = new Date(event.at);
+            const time = Number.isNaN(at.getTime()) ? "" : new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(at);
+            const role = event.role === "user" ? "你" : "ta";
+            entry.dataset.eventId = event.id;
+            entry.append(rNode("span", "workfeed-entry-meta", time), rNode("div", "workfeed-entry-text", `${role}：${event.text}`));
+            const remove = rNode("button", "remove-link", "删掉");
+            remove.type = "button";
+            remove.setAttribute("aria-label", `删掉 ${time} 的记录`);
+            remove.addEventListener("click", async () => {
+              if (remove.dataset.armed !== "true") {
+                remove.dataset.armed = "true";
+                remove.textContent = "再删一次";
+                const timer = setTimeout(() => { remove.dataset.armed = "false"; remove.textContent = "删掉"; }, 3000);
+                workfeedDeleteTimers.set(remove, timer);
+                return;
+              }
+              clearTimeout(workfeedDeleteTimers.get(remove));
+              remove.disabled = true;
+              try {
+                const data = await api("DELETE", `workfeed/${encodeURIComponent(event.id)}`);
+                renderWorkfeed(data.workfeed);
+                say("已删掉这一条记录", "ok");
+              } catch (error) {
+                remove.disabled = false;
+                remove.dataset.armed = "false";
+                remove.textContent = "删掉";
+                say(`删不掉：${error.message}`, "err");
+              }
+            });
+            entry.appendChild(remove);
+            partner.appendChild(entry);
+          }
+          day.appendChild(partner);
+        }
+        host.appendChild(day);
+      }
+    }
+
+    document.getElementById("workfeed-view").addEventListener("click", async () => {
+      const host = document.getElementById("workfeed-list");
+      host.replaceChildren(rNode("div", "workfeed-empty", "正在翻记录…"));
+      openModal("workfeed-modal");
+      try {
+        const data = await api("GET", "workfeed");
+        renderWorkfeed(data.workfeed);
+      } catch (error) {
+        host.replaceChildren(rNode("div", "workfeed-empty", `读不到记录：${error.message}`));
+      }
+    });
+
     // 清空是不可逆的，用二次点击当刹车（跟背景图库那边的做法一致）
     let workfeedClearArmed = false;
     document.getElementById("workfeed-clear").addEventListener("click", async (event) => {
@@ -1221,9 +1326,6 @@
             again.addEventListener("click", () => void reviewStart());
             foot.appendChild(again);
           }
-          const cancel = rNode("button", "remove-link", "先不聊了");
-          cancel.addEventListener("click", () => closeModal("review-modal"));
-          foot.appendChild(cancel);
           return;
         }
 
@@ -1235,9 +1337,6 @@
             const again = rNode("button", "primary-button", "重新看看");
             again.addEventListener("click", () => void reviewStart());
             foot.appendChild(again);
-            const back = rNode("button", "remove-link", "先回设置");
-            back.addEventListener("click", () => closeModal("review-modal"));
-            foot.appendChild(back);
             return;
           }
           foot.classList.add("stacked");

@@ -41,12 +41,12 @@ test("只接收 message_end 的用户或伙伴正文", () => {
   assert.deepEqual(row, {
     id: "entry-1",
     agentId: "hanako",
-    sessionPath: "C:/hana/agents/hanako/sessions/a.jsonl",
     lifeDay: "2026-09-16",
     at,
     role: "user",
     text: "今天继续修茶话会",
   });
+  assert.equal(row.sessionPath, undefined, "新事件不应持久化主对话路径");
   assert.equal(normalizeWorkEvent({ type: "turn_end", message: base.message }, "C:/hana/agents/hanako/sessions/a.jsonl"), null);
   assert.equal(normalizeWorkEvent({ ...base, message: { role: "system", content: "内部" } }, "C:/hana/agents/hanako/sessions/a.jsonl"), null);
 });

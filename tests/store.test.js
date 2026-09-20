@@ -32,6 +32,14 @@ test("追加消息能读回来，且带 id 和时间", () => {
   assert.equal(thread.messages[0].text, "在吗");
 });
 
+test("生活记录可以单条删除，不影响其他记录", () => {
+  const { store } = freshStore();
+  store.appendWorkEvent({ id: "keep", agentId: "nova", lifeDay: "2026-09-20", at: "2026-09-20T10:00:00.000Z", role: "user", text: "保留" });
+  store.appendWorkEvent({ id: "drop", agentId: "nova", lifeDay: "2026-09-20", at: "2026-09-20T10:01:00.000Z", role: "assistant", text: "删除" });
+  assert.equal(store.removeWorkEvent("drop").events.map((row) => row.id).join(","), "keep");
+  assert.equal(store.removeWorkEvent("missing").events.map((row) => row.id).join(","), "keep");
+});
+
 test("撤回未读消息会从聊天流移除，且不会误删其他消息", () => {
   const { store } = freshStore();
   const first = store.appendMessage("nova", { role: "user", text: "打错了" });
@@ -370,15 +378,10 @@ test("主动那层的运行状态跟设置一起过关：重启不重掷、也�
   assert.equal(third.getGlobalRuntime().sentToday.count, 5, "全局那本也跟着过关");
 });
 
-test("伙伴 id 里有奇怪字符也不会写到别处去", () => {
-  const { store, dir } = freshStore();
-  store.appendMessage("../../evil", { role: "user", text: "x" });
-  const files = fs.readdirSync(path.join(store.dir, "threads"));
-  assert.equal(files.length, 1);
-  // 关键是名字里不能有路径分隔符（".." 本身当文件名前缀是安全的）
-  assert.equal(/[/\\]/.test(files[0]), false);
-  // 而且确实还在数据目录里面
-  assert.ok(path.join(store.dir, "threads", files[0]).startsWith(dir));
+test("伙伴 id 里有奇怪字符直接拒绝，不会生成替代账本", () => {
+  const { store } = freshStore();
+  assert.throws(() => store.appendMessage("../../evil", { role: "user", text: "x" }), { code: "INVALID_PARTNER_ID" });
+
 });
 
 test("关系账、性格和爱好各存一本，重启还在", () => {

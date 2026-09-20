@@ -18,6 +18,16 @@ test("表情包先放进待发送区，与文字共用一条发送链", () => {
   assert.match(panel, /if \(!manageMode\) selectSticker\(row\)/);
 });
 
+test("聊天流打开到底部、上翻后可一键回到底部", () => {
+  assert.match(panel, /id="jump-bottom"[^>]*title="回到底部"/, "要有明确的回到底部入口");
+  assert.match(panel, /function isAtBottom\(\)/, "要能判断当前是否已经在底部");
+  assert.match(panel, /const shouldShow = el\.stream\.scrollHeight > el\.stream\.clientHeight && !isAtBottom\(\)/, "只在确实离开底部时显示按钮");
+  assert.match(panel, /el\.jumpBottom\.addEventListener\("click"[\s\S]*?scrollDown\(true\)/, "点击后直接回到底部");
+  assert.match(panel, /const stickToBottom = isAtBottom\(\)/, "增量消息先记住用户是否在底部");
+  assert.match(panel, /autoScrollAllowed = stickToBottom/, "用户上翻时不被新消息拽回去");
+  assert.match(panelCss, /\.jump-bottom \{[\s\S]*?position: absolute;[\s\S]*?border-radius: 50%;/, "按钮是聊天区里的轻量悬浮圆按钮");
+});
+
 test("回复只有一条路能画：正在演的那轮归演出，剩下的归轮询", () => {
   assert.match(app, /replyMessageId: turn\.replyMessageId \?\? null/);
   assert.match(panel, /async function appendNewOnce\(agentId, viewSeq\)/);
@@ -108,6 +118,7 @@ test("认识 ta：场景建议沿用页面按钮语言，保存回执不完整�
 
 test("输入框：空着就一行，写多了自己长，长到头就在框里滚", () => {
   assert.match(panel, /<textarea id="input" rows="1" placeholder="说点什么…"/, "提示语别长到自己换行");
+  assert.match(panel, /<textarea id="input"[^>]*maxlength="12000"/, "前端输入框也要有长度提示");
   assert.match(panel, /title="Enter 发送，Shift\+Enter 换行"/, "Enter 的说明挪到悬停提示上");
   assert.match(panelCss, /textarea \{[^}]*min-height: 42px;/s, "空着也要有稳定的单行底高");
   assert.match(panelCss, /textarea \{[^}]*padding: 8px 12px;[^}]*line-height: 24px;/s, "单行提示和光标要在输入框视觉中线附近");
@@ -120,6 +131,23 @@ test("输入框：空着就一行，写多了自己长，长到头就在框里�
   assert.match(panel, /function autosizeInput\(\)/, "长高这套只写一处");
   assert.match(panel, /el\.input\.addEventListener\("input", \(\) => \{[\s\S]{0,220}?autosizeInput\(\);/, "输入时要继续自动调整高度并记录代次");
   assert.doesNotMatch(panel, /Math\.min\(120,/, "上限交给 CSS，别在 JS 里再写一份数字");
+});
+
+test("聊天入口拒绝超长消息和非法伙伴 ID", () => {
+  assert.match(app, /code: "INVALID_PARTNER_ID", message: "伙伴 ID 不合法"/);
+  assert.match(app, /text\.length > 12000/);
+  assert.match(app, /code: "MESSAGE_TOO_LONG"/);
+  assert.match(app, /\}, 413\)/);
+});
+
+test("设置接口只接受用户设置字段", () => {
+  assert.match(app, /app\.use\("\*", async \(c, next\) =>/);
+  assert.match(app, /INVALID_PARTNER_ID/);
+  assert.match(app, /const GLOBAL_SETTING_KEYS = new Set\(\[/);
+  assert.match(app, /const PARTNER_SETTING_KEYS = new Set\(\["tier", "proactiveEnabled", "model", "vision"\]\)/);
+  assert.match(app, /code = "UNKNOWN_SETTING"/);
+  assert.match(app, /pickSettingsPatch\(body, PARTNER_SETTING_KEYS, "伙伴设置"\)/);
+  assert.doesNotMatch(app, /function normalizePartnerSettingsPatch\(body\) \{\n\s*const patch = \{ \.\.\.\(body/);
 });
 
 test("输入提示：浮在输入框上方并自动收起，颜色跟背景适配但和发送按钮错开", () => {
@@ -328,6 +356,9 @@ test("设置页内联脚本语法可解析，关键元素 id 都存在", () => {
   for (const id of ["status", "partner-list", "partner-body", "removed-list", "remove-modal", "removed-modal"]) {
     assert.match(settings, new RegExp(`id="${id}"`));
   }
+  assert.doesNotMatch(settings, /data-close-modal="(?:recognize-modal|history-modal|remove-modal|removed-modal|workfeed-modal)"[^>]*>[^<]*(?:先不重来|先看看，不回退|先不移出|关闭)/, "弹窗不再同时摆底部关闭按钮");
+  assert.doesNotMatch(settings, /const (?:cancel|back) = rNode\("button", "remove-link", "(?:先不聊了|先回设置)"\)/, "聊聊弹窗只保留右上角叉关闭");
+  assert.doesNotMatch(panel, /class="message-editor-cancel"/, "调整回复弹窗只保留右上角叉关闭");
 });
 
 /** 从设置页的某个选项常量里抠出数字档位。 */
@@ -423,7 +454,7 @@ test("起跑线：自动量那边的痕迹，也能自己定从哪儿算，只�
   assert.match(app, /seedStale\(knowing\.relationSeed, seedLastTry\)/, "该重量的就重量一份（量不出东西也有节流）");
   assert.doesNotMatch(app, /session:list/, "量会话那条路 v2 应用走不通，别写");
   assert.match(app, /note: relationshipNote\(effectiveRelationship\(knowing\), knowing\.relationSeed\)/, "回复那一句也要带上起跑线");
-  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, topic, hobby, memoryText, relationNote, searchContext, currentTimeText, followup, wakeEcho, contextText, stickerText \}\)/, "ta 主动冒出来的消息也要带上兴趣、临时搜索素材、当前时间、未回应语境、醒来回声、共享情境和表情包能力");
+  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, topic, hobby, memoryText, relationNote, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, stickerText \}\)/, "ta 主动冒出来的消息也要带上兴趣、临时搜索素材、当前时间、未回应语境、醒来回声、最近场景、共享情境和表情包能力");
   assert.match(app, /const now = new Date\(\);[\s\S]{0,180}?currentTimeText/, "主动消息在搜索完成后再取当前时间");
   assert.match(app, /主动联系不能等用户先说话才有兴趣/);
   assert.match(app, /const personaText = renderPersona\(persona/);
@@ -446,11 +477,17 @@ test("分享版地基：撤回占位不许写死某个人的名字", () => {
   assert.doesNotMatch(app, /text:\s*"(?!你)[^"]{1,10}撤回了一条消息"/, "不能把固定名字拼进撤回文案");
 });
 
-test("设置页有电脑端生活联动的开关和清空入口", () => {
+test("设置页有 Hana 主对话近况的开关和记录查看入口", () => {
   const settingsHtml = fs.readFileSync(new URL("../ui/settings.html", import.meta.url), "utf8");
+  assert.match(settingsHtml, /<h3>Hana 主对话近况<\/h3>/, "标题要说明来源是 Hana 主对话");
   assert.match(settingsHtml, /id="workfeed-switch"/, "要有个开关");
-  assert.match(settingsHtml, /id="workfeed-clear"/, "要能清掉已经收的");
+  assert.match(settingsHtml, /id="workfeed-view"/, "要能查看已经收的");
+  assert.match(settingsHtml, /id="workfeed-list"/, "查看窗要有记录列表");
+  assert.match(settingsHtml, /workfeedPartnerName/, "记录要能显示伙伴名");
+  assert.match(settingsHtml, /workfeed\/\$\{encodeURIComponent\(event\.id\)\}/, "要能单条删除");
   assert.match(app, /function workfeedOn\(\)/, "收集之前先看开关");
+  assert.match(app, /app\.get\("\/workfeed"/, "查看要有读取路由");
+  assert.match(app, /app\.delete\("\/workfeed\/:eventId"/, "单条删除要有路由");
   assert.match(app, /app\.post\("\/workfeed\/clear"/, "清空要有路由");
 });
 
@@ -585,9 +622,9 @@ test("异步回复在当前窗口逐条显形，不因戳一戳整段刷出来",
   const block = panel.slice(start, end > start ? end : start + 1800);
   assert.match(block, /assistantPieces: \[m\.bubbles\[index\]\]/, "每次只画一段，不要整条回复一口气画完");
   assert.match(block, /await sleep\(ASYNC_BUBBLE_GAP_MS\)/, "多段之间要有轻微间隔");
-  assert.match(block, /if \(current !== agentId \|\| viewSeq !== threadViewSeq \|\| generation !== renderGeneration\) return added;/, "切换伙伴后停止旧窗口的显形");
+  assert.match(block, /if \(current !== agentId \|\| viewSeq !== threadViewSeq \|\| generation !== renderGeneration\) return (?:restoreScroll\(added\)|added);/, "切换伙伴后停止旧窗口的显形");
   assert.match(block, /const run = appendNewQueue\.then\(\(\) => appendNewOnce\(agentId, viewSeq\)\)/, "轮询和动作刷新不能并发抢同一条消息");
-  assert.match(block, /if \(current !== agentId \|\| viewSeq !== threadViewSeq \|\| generation !== renderGeneration\) return 0;/, "请求回包先核对窗口代次");
+  assert.match(block, /if \(current !== agentId \|\| viewSeq !== threadViewSeq \|\| generation !== renderGeneration\) return (?:restoreScroll\(0\)|0);/, "请求回包先核对窗口代次");
   assert.match(panel, /async function openPartner\(agentId\) \{[\s\S]{0,520}?\+\+threadViewSeq;[\s\S]{0,100}?closeMessageActions\(\);/, "切窗时收掉旧消息操作条");
   assert.match(panel, /function reloadCurrentThread\(agentId = current, viewSeq = threadViewSeq\)/, "历史重画使用固定伙伴和窗口代次");
 });
@@ -1271,7 +1308,8 @@ test("和小花聊聊：档案长出来才能点，改前留一版，旧版能�
   assert.match(settings, /state\.skipped = Array\.isArray\(error\.skipped\)/, "落不上的哪几条要带回界面");
 });
 
-test("今日情境：装了拾光记才有得开，默认关，没装按钮打不开", () => {
+test("拾光记今日情境：装了拾光记才有得开，默认关，没装按钮打不开", () => {
+  assert.match(settings, /<h3>拾光记今日情境<\/h3>/, "标题要说明来源是拾光记");
   assert.match(settings, /id="daybook-switch"/);
   assert.match(settings, /id="daybook-copy"/);
   assert.match(settings, /daybookSwitch\.disabled = !daybookInstalled/, "没装时开关要禁用");
@@ -1285,7 +1323,7 @@ test("今日情境：装了拾光记才有得开，默认关，没装按钮打�
   assert.match(settingsCss, /\.switch:disabled/);
 });
 
-test("今日情境从关到开要当场生效：清掉当天露过的记账", () => {
+test("拾光记今日情境从关到开要当场生效：清掉当天露过的记账", () => {
   assert.match(app, /store\.clearDaybookMarks\(\)/);
   assert.match(app, /const wasDaybookOn = daybookOn\(\)/);
   assert.match(app, /if \(!wasDaybookOn && daybookOn\(\)\)/);

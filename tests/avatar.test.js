@@ -12,6 +12,7 @@ test("认得 PNG / JPEG / GIF / WebP，别的都不认", () => {
   assert.equal(looksLikeImage(Buffer.from([0xff, 0xd8, 0xff, ...Buffer.alloc(9)])), true);
   assert.equal(looksLikeImage(Buffer.from("GIF89a" + "\0".repeat(6))), true);
   assert.equal(looksLikeImage(Buffer.from("RIFF....WEBP" + "\0".repeat(4))), true);
+  assert.equal(looksLikeImage(Buffer.from("RIFF....WAVE" + "\0".repeat(4))), false);
   assert.equal(looksLikeImage(Buffer.from("这不是图片，是一段文字而已")), false);
   assert.equal(looksLikeImage(Buffer.alloc(4)), false); // 太短
   assert.equal(looksLikeImage(null), false);

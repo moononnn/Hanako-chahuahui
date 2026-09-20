@@ -234,6 +234,14 @@ test("话题抽取提示词要求具体落点而不是抽象主题", () => {
   assert.match(spec.userText, /蓝灰色纸胶带/);
 });
 
+test("话题抽取只算她说的事，伙伴自己抛的不算", () => {
+  const spec = topicSpec([], [], () => "玥儿：今天好冷\n小花：我偏心杯底那圈浅浅的磨痕");
+  assert.match(spec.systemPrompt, /标着伙伴名字的那些行是伙伴自己在说/);
+  assert.match(spec.systemPrompt, /伙伴自己抛出的兴趣、想法、小物件不算对方提过的话题/);
+  assert.match(spec.systemPrompt, /一件事只有伙伴提过、对方没接话，就不要抽/);
+  assert.match(spec.userText, /只抽用户名字那几行里的事/);
+});
+
 test("模型抽取能保留时效标记、搜索词和具体落点", () => {
   const out = parseTopics(JSON.stringify([
     { title: "某人的新瓜", kind: "gossip", freshness: "timely", searchQuery: "某人 最新进展", anchor: "发布会现场的一句话" },

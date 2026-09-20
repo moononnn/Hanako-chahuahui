@@ -34,6 +34,7 @@ import { spokenClock, timeBlock } from "./lib/clock.js";
 import { askUtility, generateReply, normalizeModelRef, chatModelOptions, visionModelOptions, resolveModelChoice } from "./lib/model.js";
 import { createStore, createDiagnostics } from "./lib/store.js";
 import { listBackgrounds, readBackgroundBytes, writeBackground, removeBackgroundFile, normalizeOpacity, normalizeTone, isBackgroundFile, fileTypeOf } from "./lib/background.js";
+import { recordStickerUsage } from "./lib/sticker-usage.js";
 import {
   DEFAULT_CONTEXT,
   buildMemoryBlock,
@@ -48,7 +49,7 @@ import { dailySpec, isProfileIdentitySafe, profileSpec, runSummary, segmentSpec 
 import { buildWorkfeedText, normalizeWorkEvent } from "./lib/workfeed.js";
 import { buildFactSpec, parseFactsResult } from "./lib/facts.js";
 import { dayKey } from "./lib/days.js";
-import { advanceRelationship, disclosureRatio, mergeRelationship, relationshipNote, SEED_PICK_TIERS, SEED_TIER_IDS, seedByPick, seedFromTrace, traceSizeFromFiles, zeroSeed } from "./lib/relationship.js";
+import { advanceRelationship, disclosureRatio, mergeRelationship, relationshipNote, retractRelationshipSource, SEED_PICK_TIERS, SEED_TIER_IDS, seedByPick, seedFromTrace, traceSizeFromFiles, zeroSeed } from "./lib/relationship.js";
 import {
   PERSONALITY_PRESETS,
   TEMPERAMENT_TAGS,
@@ -168,6 +169,7 @@ import {
   proactiveDelayFactor,
   proactiveSilenceContext,
   wakeEchoFor,
+  recentSceneFor,
   quietNow,
   scheduleNext,
   stageIntent,
@@ -245,13 +247,22 @@ function describeError(error) {
  * **发布副本构建时把它改成 false**，把这一整面关掉——这些入口能触发模型调用和后台写盘，
  * 不该暴露给只是装着玩的人（数据与流程上看，它们对普通使用者也毫无意义）。
  */
-// 发布副本里整面关掉：这些口子能触发模型调用和后台写盘，不该暴露给只是装着玩的人。
-// 本地验收要摆档位、吹提醒时，改回 true 再用。
-const DEV_TOOLS = false;
+const DEV_TOOLS = true;
 
 export function apply(ctx) {
   const diagnostics = createDiagnostics(ctx.dataDir);
   const store = createStore(ctx.dataDir);
+
+  function recordPartnerStickerUsage(agentId, bubbles, sentAt = new Date().toISOString()) {
+    const list = Array.isArray(bubbles) ? bubbles : [];
+    const ids = [...new Set(list
+      .filter((piece) => isStickerBubble(piece))
+      .map((piece) => piece.slice("\u0001stk:".length))
+      .filter(Boolean))];
+    for (const stickerId of ids) {
+      recordStickerUsage(ctx.dataDir, { stickerId, partnerId: agentId, sentAt });
+    }
+  }
 
   function globalSettingsView() {
     const global = store.getGlobalSettings();
@@ -262,12 +273,12 @@ export function apply(ctx) {
     };
   }
 
-  /** 今日情境这一项她自己开了没（没开就不读拾光记，一个字都不带）。 */
+  /** 拾光记今日情境这一项她自己开了没（没开就不读拾光记，一个字都不带）。 */
   function daybookOn() {
     return store.getGlobalSettings().daybookEnabled === true;
   }
 
-  /** 电脑端生活联动开着没（关了就一条都不收）。 */
+  /** Hana 主对话近况开着没（关了就一条都不收）。 */
   function workfeedOn() {
     return store.getGlobalSettings().workfeedEnabled !== false;
   }
@@ -301,8 +312,25 @@ export function apply(ctx) {
     return false;
   }
 
+  const GLOBAL_SETTING_KEYS = new Set([
+    "model", "recognitionModel", "vision", "userNameOverride", "daybookEnabled", "workfeedEnabled",
+    "globalGate", "quiet", "actionStyle", "messageAvatars", "messageRefine", "myActionTail",
+  ]);
+  const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "vision"]);
+
+  function pickSettingsPatch(input, allowed, label) {
+    const body = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+    const unknown = Object.keys(body).filter((key) => !allowed.has(key));
+    if (unknown.length) {
+      const error = new Error(`${label}中包含不允许修改的字段：${unknown.join(", ")}`);
+      error.code = "UNKNOWN_SETTING";
+      throw error;
+    }
+    return Object.fromEntries(Object.entries(body));
+  }
+
   function normalizeGlobalSettingsPatch(input) {
-    const patch = { ...(input ?? {}) };
+    const patch = pickSettingsPatch(input, GLOBAL_SETTING_KEYS, "全局设置");
     if (Object.prototype.hasOwnProperty.call(patch, "myActionTail")) {
       patch.myAction = { text: actionTemplateFromTail(patch.myActionTail) };
       delete patch.myActionTail;
@@ -319,11 +347,11 @@ export function apply(ctx) {
       const name = String(patch.userNameOverride ?? "").trim().slice(0, 40);
       patch.userNameOverride = name || null;
     }
-    // 今日情境：只收真布尔，别让 "false" 这种字符串混成真值
+    // 拾光记今日情境：只收真布尔，别让 "false" 这种字符串混成真值
     if (Object.prototype.hasOwnProperty.call(patch, "daybookEnabled")) {
       patch.daybookEnabled = patch.daybookEnabled === true;
     }
-    // 电脑端生活联动：同样只收真布尔
+    // Hana 主对话近况：同样只收真布尔
     if (Object.prototype.hasOwnProperty.call(patch, "workfeedEnabled")) {
       patch.workfeedEnabled = patch.workfeedEnabled === true;
     }
@@ -332,7 +360,7 @@ export function apply(ctx) {
 
   /** 伙伴设置里只挑形状对的模型透进去，别把脏东西写进账本。 */
   function normalizePartnerSettingsPatch(body) {
-    const patch = { ...(body ?? {}) };
+    const patch = pickSettingsPatch(body, PARTNER_SETTING_KEYS, "伙伴设置");
     if (Object.prototype.hasOwnProperty.call(patch, "model")) {
       patch.model = normalizeModelRef(patch.model);
     }
@@ -684,9 +712,9 @@ export function apply(ctx) {
   // 不挂全局钩子、不碰任何人格文件、一步都不外溢到主对话。
 
   /** 她说完一句，账就往前挪一格。纯写盘，不挡后面的生成。 */
-  function advancePartnerRelationship(agentId, text, stickerText = "") {
+  function advancePartnerRelationship(agentId, text, stickerText = "", sourceMessageId = "") {
     const knowing = store.getKnowing(agentId);
-    const step = advanceRelationship(knowing.relationship, { text, stickerText });
+    const step = advanceRelationship(knowing.relationship, { text, stickerText, sourceMessageId });
     store.saveKnowing(agentId, { ...knowing, relationship: step.relationship });
     if (step.stageChanged) {
       diagnostics({
@@ -892,14 +920,16 @@ export function apply(ctx) {
     return refreshProfile(agentId);
   }
 
-  /** 跨天了：给上一个日子补一条日账，顺手更新档案。 */
+  /** 跨天了：给最近一个尚未收口的旧日子补一条日账，顺手更新档案。 */
   async function maybeCloseDay(agentId) {
-    const rows = store.getThread(agentId).messages;
+    const rows = conversationMessages(store.getThread(agentId).messages);
     if (rows.length === 0) return { closed: false, reason: "empty" };
     const today = dayKey();
-    const lastDay = dayKey(rows[rows.length - 1].at);
-    if (!lastDay || lastDay === today) return { closed: false, day: today };
-    const sameDay = rows.filter((row) => dayKey(row.at) === lastDay && isConversationMessage(row));
+    const ledgerDays = new Set(store.readMemory(agentId).ledger.map((row) => String(row?.day ?? "")));
+    const days = [...new Set(rows.map((row) => dayKey(row.at)).filter((day) => day && day !== today && !ledgerDays.has(day)))].sort();
+    const lastDay = days.at(-1);
+    if (!lastDay) return { closed: false, day: today };
+    const sameDay = rows.filter((row) => dayKey(row.at) === lastDay);
     if (sameDay.length === 0) return { closed: false, day: lastDay };
     const result = await runSummary(askCheap, dailySpec(sameDay, lastDay, USER_NAME));
     if (!result.ok) {
@@ -919,7 +949,7 @@ export function apply(ctx) {
   }
 
   /** 把一条主动消息送进她那个窗（她不在也照发，显示未读）。 */
-  async function deliverProactive(agentId, { partnerName, topic, hobby, exception, followup, wakeEcho }) {
+  async function deliverProactive(agentId, { partnerName, topic, hobby, exception, followup, wakeEcho, sceneEcho }) {
     await loadUserName();
     const memoryText = buildMemoryBlock(store.readMemory(agentId));
     let searchContext = "";
@@ -969,7 +999,7 @@ export function apply(ctx) {
           correction: topic?.correction ?? "",
           currentTimeText,
         })
-      : proactiveSpec({ partnerName, userName: USER_NAME, topic, hobby, memoryText, relationNote, searchContext, currentTimeText, followup, wakeEcho, contextText, stickerText });
+      : proactiveSpec({ partnerName, userName: USER_NAME, topic, hobby, memoryText, relationNote, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, stickerText });
 
     let raw = "";
     try {
@@ -1038,6 +1068,7 @@ export function apply(ctx) {
       interestName: hobby?.name ?? null,
       interestObject: hobby?.object ?? null,
     });
+    if (stored) recordPartnerStickerUsage(agentId, bubbles, stored.at);
     if (topic) {
       // 记下这次聊的是哪一面：下次回来时拿它提醒模型换个延伸，而不是把话题封掉
       store.saveTopicBook(
@@ -1095,6 +1126,7 @@ export function apply(ctx) {
       const agentId = partner.id;
       // 没入住的伙伴谈不上"她晾着我"——这条也只在已入住的人身上跑
       if (!isSettled(agentId)) continue;
+      if (hasReplyInFlight(agentId) || autonomousLanes.has(agentId)) continue;
       const settings = store.getPartnerSettings(agentId);
       const state = settings.awaiting ?? {};
       if (state.done) continue;
@@ -1123,7 +1155,13 @@ export function apply(ctx) {
         continue;
       }
 
-      const result = await deliverNudge(agentId, { partner, plan, settings, ratio, knowing });
+      const stamp = threadStamp(agentId);
+      const result = await withAutonomousLane(agentId, async () => {
+        if (hasReplyInFlight(agentId) || threadStamp(agentId) !== stamp) {
+          return { action: "blocked", nudges: Number(state.nudges ?? 0) };
+        }
+        return deliverNudge(agentId, { partner, plan, settings, ratio, knowing });
+      });
       report.push({ agentId, action: result.action, nudges: result.nudges });
     }
     return { ok: true, report };
@@ -1200,12 +1238,13 @@ export function apply(ctx) {
       diagnostics({ event: "awaiting.empty", agentId, raw: String(raw ?? "").slice(0, 80) });
       return { action: "empty", nudges };
     }
-    store.appendMessage(agentId, {
+    const stored = store.appendMessage(agentId, {
       role: "assistant",
       text: bubbles.join("\n"),
       bubbles,
       nudge: true,
     });
+    if (stored) recordPartnerStickerUsage(agentId, bubbles, stored.at);
     settle(nudges);
     diagnostics({ event: "awaiting.nudge", agentId, stage: plan.stage, temperament: plan.temperament, bubbles: bubbles.length, waitedMs: plan.waitedMs ?? 0 });
     void announceArrival(agentId, partner.name);
@@ -1333,6 +1372,7 @@ export function apply(ctx) {
       const agentId = partner.id;
       // 没捏过性格的伙伴算还没入住：这间屋子 ta 还没进门，谈不上"来找她"
       if (!isSettled(agentId)) continue;
+      if (hasReplyInFlight(agentId) || autonomousLanes.has(agentId)) continue;
       const settings = store.getPartnerSettings(agentId);
       if (settings.proactiveEnabled === false) continue;
 
@@ -1384,6 +1424,9 @@ export function apply(ctx) {
       const wakeEcho = gate.ok && !gate.exception && !followup?.read
         ? wakeEchoFor(thread.messages, { now: now.getTime(), consumedId: settings.wakeEcho?.sourceId ?? null })
         : null;
+      const sceneEcho = gate.ok && !gate.exception && !followup?.read && !wakeEcho
+        ? recentSceneFor(thread.messages, { now: now.getTime() })
+        : null;
 
       if (!gate.ok) {
         recordWatch(agentId, { action: "blocked", reason: gate.reason, topic: readyTopic?.title ?? null });
@@ -1422,8 +1465,8 @@ export function apply(ctx) {
                 return usable[Number(state.sentToday?.count ?? 0) % usable.length] ?? knowing.hobbies[0];
               })()
             : null;
-      const selfSource = Boolean(memoryText.trim() || hobby || wakeEcho);
-      const form = wakeEcho || followup?.read
+      const selfSource = Boolean(memoryText.trim() || hobby || wakeEcho || sceneEcho);
+      const form = wakeEcho || sceneEcho || followup?.read
         ? "word"
         : topic || hobby
           ? "word"
@@ -1431,7 +1474,16 @@ export function apply(ctx) {
 
       if (form === "poke") {
         // 这个动作不需要由头——ta天然就是"我就是闲着"
-        deliverAction(agentId, { partnerName: partner.name, from: "partner" });
+        const stamp = threadStamp(agentId);
+        const sent = await withAutonomousLane(agentId, async () => {
+          if (hasReplyInFlight(agentId) || threadStamp(agentId) !== stamp) return false;
+          await deliverAction(agentId, { partnerName: partner.name, from: "partner" });
+          return true;
+        });
+        if (!sent) {
+          report.push({ agentId, action: "blocked", reason: "reply-in-flight" });
+          continue;
+        }
         const noted = noteSent(
           { state: { ...state, staged: pending.rest }, globalState: store.getGlobalRuntime(), now },
           { exception: Boolean(gate.exception), quiet: globalSettings.quiet },
@@ -1454,13 +1506,18 @@ export function apply(ctx) {
         continue;
       }
 
-      const sent = await deliverProactive(agentId, {
-        partnerName: partner.name,
-        topic,
-        hobby,
-        exception: Boolean(gate.exception),
-        followup,
-        wakeEcho,
+      const stamp = threadStamp(agentId);
+      const sent = await withAutonomousLane(agentId, async () => {
+        if (hasReplyInFlight(agentId) || threadStamp(agentId) !== stamp) return { ok: false, reason: "reply-in-flight" };
+        return deliverProactive(agentId, {
+          partnerName: partner.name,
+          topic,
+          hobby,
+          exception: Boolean(gate.exception),
+          followup,
+          wakeEcho,
+          sceneEcho,
+        });
       });
       if (!sent.ok) {
         recordWatch(agentId, { action: "failed", reason: sent.reason, topic: topic?.title ?? null });
@@ -1737,7 +1794,7 @@ export function apply(ctx) {
       diagnostics({ event: "action.no-answer", agentId, reason: "streak" });
       return { answered: false, reason: "streak" };
     }
-    deliverAction(agentId, { partnerName, from: "partner" });
+    await deliverAction(agentId, { partnerName, from: "partner" });
     return { answered: true, form: "poke" };
   }
 
@@ -1850,6 +1907,29 @@ export function apply(ctx) {
     return { drafted: true };
   }
 
+  /**
+   * 同一批伙伴里已经有人占了的兴趣落点。
+   * 所有伙伴共用一份尺度示例池，不挡一下，不同伙伴会长出一模一样的爱好。
+   */
+  async function collectTakenSpots(selfId) {
+    const spots = [];
+    for (const partner of await listPartners()) {
+      if (partner.id === selfId) continue;
+      let hobbies = [];
+      try {
+        hobbies = store.getKnowing(partner.id).hobbies ?? [];
+      } catch {
+        hobbies = [];
+      }
+      for (const hobby of hobbies) {
+        if (hobby?.origin !== "born") continue;
+        const label = hobby.object ? `${hobby.name}（${hobby.object}）` : hobby.name;
+        if (label) spots.push(label);
+      }
+    }
+    return spots.slice(0, 20);
+  }
+
   /** 兴趣那条：先补/重塑独立的原生兴趣；够格了再从真实相处里长共同兴趣。 */
   async function maybeTendHobbies(agentId) {
     const partner = (await listPartners()).find((row) => row.id === agentId);
@@ -1865,12 +1945,14 @@ export function apply(ctx) {
         diagnostics({ event: "knowing.hobbies.born.no-material", mode: "native-v2", agentId });
         return { born: 0, reason: "no-material" };
       }
+      const takenObjects = await collectTakenSpots(agentId);
       const spec = bornHobbySpec({
         partnerName,
         personalityText,
+        takenObjects,
       });
       const raw = await askCheap(spec.systemPrompt, spec.userText, 420);
-      const rows = validateNativeHobbies(parseNativeHobbyReply(raw), { userName: USER_NAME });
+      const rows = validateNativeHobbies(parseNativeHobbyReply(raw), { userName: USER_NAME, takenObjects });
       if (!rows.length) {
         diagnostics({ event: "knowing.hobbies.native.empty", agentId, rawHead: String(raw ?? "").slice(0, 160) });
         return { born: 0, reason: "empty" };
@@ -1888,7 +1970,10 @@ export function apply(ctx) {
     if (!canGrow({ relationship: effectiveRelationship(knowing), hobbies: knowing.hobbies })) {
       return { grown: 0, reason: "not-yet" };
     }
-    const material = buildMemoryBlock(store.readMemory(agentId));
+    const evidence = conversationMessages(store.getThread(agentId).messages)
+      .filter((row) => row.role === "user")
+      .slice(-40);
+    const material = renderForSummary(evidence, USER_NAME, partnerName);
     if (!material) return { grown: 0, reason: "no-material" };
     const settings = store.getPartnerSettings(agentId);
     const lastTry = Date.parse(settings.hobbyGrowTryAt ?? "") || 0;
@@ -1901,7 +1986,8 @@ export function apply(ctx) {
       material,
     });
     const raw = await askCheap(spec.systemPrompt, spec.userText, 240);
-    const rows = parseHobbyReply(raw);
+    const validEvidence = new Set(evidence.map((row) => String(row.id ?? "").trim()).filter(Boolean));
+    const rows = parseHobbyReply(raw).filter((row) => validEvidence.has(row.sourceId));
     if (!rows.length) {
       diagnostics({ event: "knowing.hobbies.none", agentId });
       return { grown: 0, reason: "no-seed" };
@@ -1913,6 +1999,7 @@ export function apply(ctx) {
       schemaVersion: 2,
       generationVersion: "shared-v1",
       source: "interaction",
+      sourceIds: [rows[0].sourceId],
     });
     if (grown.length === knowing.hobbies.length) return { grown: 0, reason: "no-room" };
     store.saveKnowing(agentId, { ...knowing, hobbies: grown });
@@ -1957,7 +2044,7 @@ export function apply(ctx) {
   /** 从最近的对话里抽新话题。攒够了新的才抽，不是每句话都抽。 */
   async function maybeExtractTopics(agentId, { force = false } = {}) {
     const book = upkeepTopics(agentId);
-    const messages = store.getThread(agentId).messages;
+    const messages = conversationMessages(store.getThread(agentId).messages);
     if (messages.length === 0) return { extracted: false, reason: "no-messages" };
 
     let fresh = messages.length;
@@ -1971,7 +2058,11 @@ export function apply(ctx) {
     }
 
     const sample = messages.slice(-30);
-    const spec = topicSpec(sample, existingTitles(book), (rows) => renderForSummary(rows, USER_NAME));
+    // 说话人得标真名：以前伙伴那几行标成「我」，抽取时把它当成了用户提过的事，
+    // 伙伴自己抛的兴趣被收回本子，隔天又“回来说”一遍。
+    const partnerName = (await listPartners().catch(() => []))
+      .find((row) => row.id === agentId)?.name ?? agentId;
+    const spec = topicSpec(sample, existingTitles(book), (rows) => renderForSummary(rows, USER_NAME, partnerName));
     let raw = "";
     try {
       raw = await askCheap(spec.systemPrompt, spec.userText, 400);
@@ -2096,7 +2187,7 @@ export function apply(ctx) {
       currentMessageId: currentMessageId || repliedTo,
     });
     // 拾光记的日子账本：只借不给。没装、快照坏了都当今天没什么可说的。
-    // 这是她选的沉浸感（设置页「今日情境」），没打开就读都不读。
+    // 这是她选的沉浸感（设置页「拾光记今日情境」），没打开就读都不读。
     // 日子按天说一遍就够（跨天或内容变了才重新露），不每轮把节日念叨一次。
     let daybookText = "";
     try {
@@ -2113,7 +2204,9 @@ export function apply(ctx) {
     } catch (error) {
       diagnostics({ event: "daybook.failed", agentId, error: describeError(error) });
     }
-    const workfeedText = buildWorkfeedText(store.readWorkfeed(), agentId, { lifeDay: dayKey(new Date()), userName: USER_NAME });
+    const workfeedText = workfeedOn()
+      ? buildWorkfeedText(store.readWorkfeed(), agentId, { lifeDay: dayKey(new Date()), userName: USER_NAME })
+      : "";
     const systemPrompt = buildSystemPrompt({
       partnerId: agentId,
       partnerName: partner?.name ?? agentId,
@@ -2251,6 +2344,7 @@ export function apply(ctx) {
       ? store.patchMessage(agentId, replaceMessageId, { ...reply, editedAt: new Date().toISOString() })
       : store.appendMessage(agentId, reply);
     if (!stored) return { ok: false, reason: "message-missing", generationMs };
+    recordPartnerStickerUsage(agentId, bubbles, stored.at);
     return {
       ok: true,
       bubbles,
@@ -2357,6 +2451,30 @@ export function apply(ctx) {
 
   const pendingReplies = new Map(); // agentId → { timer, dueAt }
   const deliveringReplies = new Set(); // 已到点、正在排队或生成中的伙伴
+  // 同一个伙伴的自主行为共用一条出站通道；lane 内仍要复查线程，避免排队后把旧意图发出去。
+  const autonomousLanes = new Map();
+
+  function withAutonomousLane(agentId, fn) {
+    const previous = autonomousLanes.get(agentId) ?? Promise.resolve();
+    const next = previous.catch(() => {}).then(fn);
+    autonomousLanes.set(agentId, next);
+    return next.finally(() => {
+      if (autonomousLanes.get(agentId) === next) autonomousLanes.delete(agentId);
+    });
+  }
+
+  function hasReplyInFlight(agentId) {
+    const activeStatuses = new Set(["pending", "generating", "ready"]);
+    return pendingReplies.has(agentId)
+      || deliveringReplies.has(agentId)
+      || [...turns.values()].some((turn) => turn.agentId === agentId && activeStatuses.has(turn.status));
+  }
+
+  function threadStamp(agentId) {
+    const messages = store.getThread(agentId).messages;
+    const tail = messages.at(-1);
+    return `${messages.length}:${tail?.id ?? ""}:${tail?.at ?? ""}`;
+  }
 
   function cancelScheduledReply(agentId) {
     const existing = pendingReplies.get(agentId);
@@ -3447,6 +3565,19 @@ export function apply(ctx) {
 
   try {
     ctx.routes.register((app) => {
+      // 伙伴级路由共用一扇门，避免某个新入口忘记单独校验 agentId。
+      app.use("*", async (c, next) => {
+        const match = c.req.path.match(/^\/(?:thread|attachment|settings\/partner|memory|topics|action|knowing|background|backgrounds|sticker|avatar|recognition|persona-review)\/([^/]+)/);
+        if (match) {
+          let agentId = match[1];
+          try { agentId = decodeURIComponent(agentId); } catch { agentId = ""; }
+          if (!isValidPartnerId(agentId)) {
+            return c.json({ ok: false, error: { code: "INVALID_PARTNER_ID", message: "伙伴 ID 不合法" } }, 400);
+          }
+        }
+        return next();
+      });
+
       app.get("/partners", async (c) => {
         try {
           const partners = (await listPartners()).map((row) => {
@@ -3641,6 +3772,13 @@ export function apply(ctx) {
             recallMode: "hard",
             recalledAt: new Date().toISOString(),
           });
+          const knowing = store.getKnowing(agentId);
+          const relationship = retractRelationshipSource(knowing.relationship, messageId);
+          const hobbies = knowing.hobbies.filter((hobby) => !hobby.sourceIds?.includes(messageId));
+          if (relationship || hobbies.length !== knowing.hobbies.length) {
+            store.saveKnowing(agentId, { ...knowing, ...(relationship ? { relationship } : {}), hobbies });
+          }
+          store.removeFactsBySource(agentId, messageId);
           if (store.getPendingReply(agentId) && shouldCancelScheduledReply(store.getThread(agentId).messages)) {
             cancelScheduledReply(agentId);
           }
@@ -3651,7 +3789,7 @@ export function apply(ctx) {
 
       app.get("/attachment/:agentId/:id", (c) => {
         const agentId = String(c.req.param("agentId") ?? "").trim();
-        if (!/^[A-Za-z0-9_-]{1,120}$/.test(agentId)) return c.json({ ok: false, error: { message: "图片归属不合法" } }, 403);
+        if (!isValidPartnerId(agentId)) return c.json({ ok: false, error: { code: "INVALID_PARTNER_ID", message: "伙伴 ID 不合法" } }, 400);
         const attachment = readAttachment(c.req.param("id"), agentId);
         if (!attachment) return c.json({ ok: false, error: { message: "图片不存在" } }, 404);
         return c.body(attachment.data, 200, {
@@ -3674,8 +3812,14 @@ export function apply(ctx) {
         // 回复是伙伴自己的慢节奏，不能占住她的发送门；正在处理时的新消息会并入下一轮。
         const isSticker = Boolean(stickerId);
         const isImage = Boolean(imageInput);
-        if (!agentId || (!text && !isSticker && !isImage)) {
-          return c.json({ ok: false, error: { message: "agentId 和消息内容都要有" } }, 400);
+        if (!isValidPartnerId(agentId)) {
+          return c.json({ ok: false, error: { code: "INVALID_PARTNER_ID", message: "伙伴 ID 不合法" } }, 400);
+        }
+        if (text.length > 12000) {
+          return c.json({ ok: false, error: { code: "MESSAGE_TOO_LONG", message: "一条消息最多 12000 字" } }, 413);
+        }
+        if (!text && !isSticker && !isImage) {
+          return c.json({ ok: false, error: { message: "消息内容不能为空" } }, 400);
         }
         let attachment = null;
         let visionNote = "";
@@ -3725,8 +3869,9 @@ export function apply(ctx) {
         });
         const responseInFlight = [...turns.values()].some((turn) => turn.agentId === agentId && ["pending", "generating"].includes(turn.status))
           || pendingReplies.has(agentId)
-          || deliveringReplies.has(agentId);
-        advancePartnerRelationship(agentId, messageText, stickerSignalText);
+          || deliveringReplies.has(agentId)
+          || autonomousLanes.has(agentId);
+        advancePartnerRelationship(agentId, messageText, stickerSignalText, stored.id);
         // 她一开口，「等回音」这件事就翻篇了：催到第几次、下次什么时候看，都不作数了。
         // 她回来了就当她一直没走，不翻旧账（真想数落她，那也是ta自己愿不愿意）。
         store.setPartnerSettings(agentId, { awaiting: null });
@@ -3899,6 +4044,7 @@ export function apply(ctx) {
         });
         if (String(body?.agentId ?? "").trim()) {
           const agentId = String(body.agentId).trim();
+          if (!isValidPartnerId(agentId)) return c.json({ ok: false, error: { code: "INVALID_PARTNER_ID", message: "伙伴 ID 不合法" } }, 400);
           store.setPartnerSettings(agentId, { vision });
         } else {
           store.setGlobalSettings({ vision });
@@ -3930,6 +4076,7 @@ export function apply(ctx) {
 
       app.put("/settings/partner/:agentId", async (c) => {
         const agentId = c.req.param("agentId");
+        if (!isValidPartnerId(agentId)) return c.json({ ok: false, error: { code: "INVALID_PARTNER_ID", message: "伙伴 ID 不合法" } }, 400);
         try {
           const body = await c.req.json();
           return c.json({ ok: true, settings: store.setPartnerSettings(agentId, normalizePartnerSettingsPatch(body)) });
@@ -4288,7 +4435,7 @@ export function apply(ctx) {
 
       const bgAgentId = (c) => {
         const id = String(c.req.param("agentId") ?? "").trim();
-        return /^[A-Za-z0-9_-]{1,120}$/.test(id) ? id : "";
+        return isValidPartnerId(id) ? id : "";
       };
 
       /** 取背景图本体。没设过就 404，前端当「这位伙伴还没设背景」处理。 */
@@ -4530,7 +4677,7 @@ export function apply(ctx) {
       app.get("/sticker/:agentId/:id", async (c) => {
         const agentId = String(c.req.param("agentId") ?? "").trim();
         const id = String(c.req.param("id") ?? "").trim();
-        if (!/^[A-Za-z0-9_-]{1,120}$/.test(agentId) || !/^[A-Za-z0-9_-]{1,120}$/.test(id)) {
+        if (!isValidPartnerId(agentId) || !/^[A-Za-z0-9_-]{1,120}$/.test(id)) {
           return c.json({ ok: false, error: { message: "表情包编号不合法" } }, 400);
         }
         try {
@@ -4570,6 +4717,24 @@ export function apply(ctx) {
           });
         } catch (error) {
           return c.json({ ok: false, error: describeError(error) }, 500);
+        }
+      });
+
+      app.get("/workfeed", (c) => {
+        try {
+          return c.json({ ok: true, workfeed: store.readWorkfeed() });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 400);
+        }
+      });
+
+      app.delete("/workfeed/:eventId", (c) => {
+        try {
+          const eventId = String(c.req.param("eventId") ?? "").trim();
+          if (!eventId || eventId.length > 180) return c.json({ ok: false, error: { message: "记录编号不合法" } }, 400);
+          return c.json({ ok: true, workfeed: store.removeWorkEvent(eventId) });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 400);
         }
       });
 

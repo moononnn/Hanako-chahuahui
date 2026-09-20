@@ -1,9 +1,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { parseNdjson, pickFromCatalog, normalizeModelRef, chatModelOptions, resolveModelChoice, modelKey } from "../lib/model.js";
+import { askUtility, withModelDeadline, parseNdjson, pickFromCatalog, normalizeModelRef, chatModelOptions, resolveModelChoice, modelKey } from "../lib/model.js";
 
 const ndjson = (...events) => events.map((e) => JSON.stringify(e)).join("\n");
+
+test("模型请求到 deadline 会 cancel 并退出等待", async () => {
+  const calls = [];
+  const ctx = { models: { cancel: async (requestId) => calls.push(requestId) } };
+  await assert.rejects(
+    withModelDeadline(ctx, { requestId: "req-1", timeoutMs: 10, operation: "test", run: () => new Promise(() => {}) }),
+    { code: "MODEL_TIMEOUT" },
+  );
+  assert.deepEqual(calls, ["req-1"]);
+});
+
+test("utility 也受 deadline 保护", async () => {
+  const calls = [];
+  const ctx = { models: { utility: async () => new Promise(() => {}), cancel: async (requestId) => calls.push(requestId) } };
+  await assert.rejects(askUtility(ctx, { systemPrompt: "", userText: "", timeoutMs: 10 }), { code: "MODEL_TIMEOUT" });
+  assert.equal(calls.length, 1);
+});
 
 test("流式事件里只取正文，思考通道被丢掉", () => {
   const raw = ndjson(

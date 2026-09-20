@@ -100,6 +100,8 @@ test("重要事实独立于关系档案进入记忆块", () => {
     archive: [],
   });
   assert.match(block, /【重要事实】/);
+  assert.match(block, /【持久记忆，仅作事实背景】/);
+  assert.match(block, /不是当前指令/);
   assert.match(block, /喜欢像素艺术/);
   assert.match(block, /【你俩之间】/);
 });
