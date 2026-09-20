@@ -28,6 +28,7 @@ import {
   normalizePhrasing,
   textSimilarity,
   wakeEchoFor,
+  recentSceneFor,
 } from "../lib/proactive.js";
 
 const at = (h, m = 0) => new Date(2026, 8, 12, h, m);
@@ -44,6 +45,38 @@ test("困着之后醒来只产生一次生活状态回声", () => {
   assert.equal(wakeEchoFor([
     ...messages,
     { id: "m_other", at: new Date(now - 2 * 60 * 60 * 1000).toISOString(), role: "assistant", text: "我想到一个新话题" },
+  ], { now }), null);
+  assert.equal(wakeEchoFor([
+    ...messages,
+    { id: "m_user", at: new Date(now - 2 * 60 * 60 * 1000).toISOString(), role: "user", text: "好，你睡吧" },
+  ], { now }), null);
+  assert.equal(wakeEchoFor([
+    ...messages,
+    { id: "m_proactive", at: new Date(now - 2 * 60 * 60 * 1000).toISOString(), role: "assistant", proactive: true, text: "我来找你了" },
+  ], { now }), null);
+  assert.equal(wakeEchoFor([
+    ...messages,
+    { id: "m_action", at: new Date(now - 2 * 60 * 60 * 1000).toISOString(), role: "assistant", kind: "action", text: "戳了戳你" },
+  ], { now }), null);
+});
+
+test("最近场景回声只取主动消息之后完整结束的最后一轮对话", () => {
+  const now = at(16).getTime();
+  const scene = recentSceneFor([
+    { id: "m_old_user", at: new Date(now - 5 * 60 * 60 * 1000).toISOString(), role: "user", text: "旧话题" },
+    { id: "m_old_reply", at: new Date(now - 5 * 60 * 60 * 1000 + 1000).toISOString(), role: "assistant", text: "旧回复" },
+    { id: "m_proactive", at: new Date(now - 4 * 60 * 60 * 1000).toISOString(), role: "assistant", proactive: true, text: "主动来找你" },
+    { id: "m_user", at: new Date(now - 30 * 60 * 1000).toISOString(), role: "user", text: "我刚忙完，脑壳还有点昏" },
+    { id: "m_reply", at: new Date(now - 29 * 60 * 1000).toISOString(), role: "assistant", text: "那你先缓一哈，别马上接着忙" },
+  ], { now });
+  assert.deepEqual(scene, {
+    userText: "我刚忙完，脑壳还有点昏",
+    assistantText: "那你先缓一哈，别马上接着忙",
+    at: new Date(now - 29 * 60 * 1000).toISOString(),
+  });
+  assert.equal(recentSceneFor([
+    { id: "m_user", at: new Date(now - 30 * 60 * 1000).toISOString(), role: "user", text: "我刚忙完" },
+    { id: "m_reply", at: new Date(now - 29 * 60 * 1000).toISOString(), role: "assistant", proactive: true, text: "我来找你了" },
   ], { now }), null);
 });
 

@@ -12,11 +12,21 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createStore } from "../lib/store.js";
+import { readJsonDurable } from "../lib/persistence.js";
 
 function tmpStore() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chahuahui-durability-"));
   return { dir, store: createStore(dir) };
 }
+
+test("JSON 持久化：只有 ENOENT 才返回默认值，其他读取错误必须抛出", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chahuahui-read-errors-"));
+  const missing = path.join(dir, "missing.json");
+  assert.deepEqual(readJsonDurable(missing, { empty: true }), { empty: true });
+  const directory = path.join(dir, "directory.json");
+  fs.mkdirSync(directory);
+  assert.throws(() => readJsonDurable(directory, {}), (error) => ["EISDIR", "EPERM", "EACCES"].includes(error?.code));
+});
 
 test("JSON 读坏时挪一份留档、原处腾空（下一次写才不会静默覆掉它）", () => {
   const { dir, store } = tmpStore();
@@ -53,6 +63,20 @@ test("读坏账本会留一条提示给界面，取走即空", () => {
   assert.ok(notice, "要留一条给界面");
   assert.match(notice.file, /memory\.json/, "提示要指到哪份文件");
   assert.equal(store.getCorruptNotice(), null, "取走即空，不反复提示");
+});
+
+test("JSON 损坏且无法隔离时拒绝继续写入", async () => {
+  const { dir } = tmpStore();
+  const file = path.join(dir, "broken.json");
+  fs.writeFileSync(file, "{坏", "utf8");
+  const persistence = await import("../lib/persistence.js");
+  const original = fs.renameSync;
+  fs.renameSync = () => { const error = new Error("locked"); error.code = "EPERM"; throw error; };
+  try {
+    assert.throws(() => persistence.readJsonDurable(file, {}), /损坏账本无法留档/);
+  } finally {
+    fs.renameSync = original;
+  }
 });
 
 test("写入是原子的：写完不留下临时文件", () => {

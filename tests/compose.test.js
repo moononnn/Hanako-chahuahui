@@ -34,6 +34,34 @@ test("睡醒回声优先于普通话题，并允许共享窗外情境作为背�
   assert.ok(!spec.userText.includes("普通话题"), "睡醒回访时不应把普通话题抢到前面");
 });
 
+test("普通主动消息先接住最近场景，再转到新话题", () => {
+  const spec = proactiveSpec({
+    partnerName: "小花",
+    userName: "阿舟",
+    topic: { title: "像素小物" },
+    sceneEcho: {
+      userText: "我刚忙完，脑壳还有点昏",
+      assistantText: "那你先缓一哈，别马上接着忙",
+    },
+  });
+  assert.ok(spec.userText.includes("上一轮聊天刚停在一个具体情境里"));
+  assert.ok(spec.userText.includes("我刚忙完，脑壳还有点昏"));
+  assert.ok(spec.userText.includes("先用一小句接住上一轮情境"));
+  assert.ok(spec.userText.includes("像素小物"));
+});
+
+test("睡醒回声存在时不再额外注入普通场景", () => {
+  const spec = proactiveSpec({
+    partnerName: "小花",
+    userName: "阿舟",
+    topic: null,
+    wakeEcho: { sourceText: "我好困，再睡会" },
+    sceneEcho: { userText: "我刚忙完", assistantText: "先歇会儿" },
+  });
+  assert.ok(spec.userText.includes("睡醒后回来找她"));
+  assert.ok(!spec.userText.includes("上一轮聊天刚停在一个具体情境里"));
+});
+
 test("[不回] 只有整条出现时才代表安静收尾", () => {
   assert.equal(isNoReply("[不回]"), true);
   assert.equal(isNoReply(" ［不回］ "), true);
@@ -214,7 +242,7 @@ test("主动消息没有共同话题时会带入伙伴自己的具体兴趣包",
     currentTimeText: "2026年9月16日，早上 7 点 16 分",
   });
   assert.match(spec.userText, /纸袋封口/);
-  assert.match(spec.userText, /具体对象：纸袋的封口方式/);
+  assert.match(spec.userText, /落点：纸袋的封口方式/);
   assert.match(spec.userText, /个人偏好：喜欢歪一点/);
   assert.match(spec.userText, /平时会做：看到就比较两下/);
   assert.match(spec.userText, /小别扭：贴得太正/);

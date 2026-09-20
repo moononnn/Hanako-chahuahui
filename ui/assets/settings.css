@@ -189,6 +189,7 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 @media (hover: hover) and (pointer: fine) { .seed-pick:not(:disabled):hover { border-color: var(--mint); } }
 .detail-field + .detail-field { margin-top: 16px; }
 .detail-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.workfeed-actions { flex: none; margin-top: 0; }
 .user-name-field .soft-button { display: block; margin-top: 12px; }
 .compact-time input { min-width: 0; }
 .action-preview { display: grid; grid-template-columns: 72px 1fr; gap: 8px 10px; margin-bottom: 13px; padding: 12px; border-radius: var(--r-md); background: var(--paper); }
@@ -267,10 +268,23 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 .modal-head, .modal-foot { display: flex; align-items: center; gap: 10px; padding: 14px 18px; background: var(--surface); }
 .modal-head { justify-content: space-between; border-bottom: 1px solid var(--line); }
 .modal-head h2 { margin: 0; color: var(--mint-deep); font-size: 16px; }
+.modal-sub { margin: 2px 0 0; color: var(--ink-soft); font-size: 11.5px; }
 .modal-foot { justify-content: flex-end; border-top: 1px solid var(--line); }
 .modal-body { padding: 18px; overflow: auto; overscroll-behavior: contain; }
 .modal-body p { margin: 0; }
 .safe-note { margin-top: 12px; padding: 11px 12px; border-radius: 12px; background: var(--mint-soft); color: var(--mint-deep); font-size: 12.5px; }
+.workfeed-modal { width: min(620px, 100%); }
+.workfeed-day + .workfeed-day { margin-top: 20px; }
+.workfeed-day-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 8px; color: var(--mint-deep); font-size: 13px; }
+.workfeed-day-count { color: var(--ink-soft); font-size: 11px; font-weight: 400; }
+.workfeed-partner + .workfeed-partner { margin-top: 12px; }
+.workfeed-partner-title { margin: 0 0 5px; color: var(--ink); font-size: 12px; font-weight: 600; }
+.workfeed-entry { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 8px 0; border-top: 1px solid var(--line-soft); }
+.workfeed-entry-meta { color: var(--ink-soft); font-size: 11px; }
+.workfeed-entry-text { min-width: 0; color: var(--ink); font-size: 12.5px; overflow-wrap: anywhere; }
+.workfeed-entry-role { color: var(--mint-deep); }
+.workfeed-entry .remove-link { align-self: start; padding: 2px 4px; font-size: 11px; }
+.workfeed-empty { padding: 28px 8px; color: var(--ink-soft); text-align: center; font-size: 13px; }
 .removed-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 0; border-top: 1px solid var(--line-soft); }
 .removed-row:first-child { border-top: 0; }
 .removed-who { display: flex; align-items: center; gap: 10px; min-width: 0; }

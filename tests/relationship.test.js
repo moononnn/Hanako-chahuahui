@@ -18,6 +18,7 @@ import {
   normalizeRelationship,
   normalizeSeed,
   relationshipNote,
+  retractRelationshipSource,
   seedByPick,
   seedFromTrace,
   SEED_PICK_TIERS,
@@ -58,10 +59,27 @@ test("认得出有分量的那几类话，也不乱认", () => {
   assert.deepEqual(classifySignals(""), []);
 });
 
+test("否定句和「想我还是算了」不算亲近信号", () => {
+  assert.deepEqual(classifySignals("我不喜欢你这样讲话"), []);
+  assert.deepEqual(classifySignals("我才不爱你这一套"), []);
+  assert.deepEqual(classifySignals("我想我还是算了"), []);
+});
+
 test("自然亲近和日常陪伴也能被认出来，但分量不同", () => {
   assert.deepEqual(classifySignals("想你了，晚安，抱抱").map((s) => s.type), ["affection"]);
   assert.deepEqual(classifySignals("今天吃了涮鱼").map((s) => s.type), ["self-disclosure", "daily-sharing"]);
   assert.deepEqual(classifySignals("这个想法很乖，夸夸小花").map((s) => s.type), ["appreciation", "affection"]);
+});
+
+test("硬撤回能撤掉带来源 id 的亲近信号", () => {
+  const first = advanceRelationship(createRelationship(), {
+    text: "喜欢你",
+    sourceMessageId: "m-love",
+    now: localTime(2026, 9, 12, 10),
+  }).relationship;
+  const next = retractRelationshipSource(first, "m-love");
+  assert.equal(next.intimacy.score, 0);
+  assert.equal(next.events.length, 0);
 });
 
 test("表情包标签能参与亲密度判断", () => {

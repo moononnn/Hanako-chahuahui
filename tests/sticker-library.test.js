@@ -15,6 +15,18 @@ import {
 
 function tempDir() { return fs.mkdtempSync(path.join(os.tmpdir(), "chahuahui-library-")); }
 
+test("茶话会图库：坏 JSON 会隔离，后续新建分组不能覆盖原件", () => {
+  const dir = tempDir();
+  const file = path.join(dir, "sticker-library.json");
+  fs.writeFileSync(file, "{坏图库", "utf8");
+  assert.deepEqual(readStickerLibrary(dir), { version: 1, groups: [], stickers: [] });
+  const siblings = fs.readdirSync(dir);
+  assert.equal(siblings.filter((name) => name.startsWith("sticker-library.json.corrupt-")).length, 1);
+  assert.ok(!fs.existsSync(file));
+  createStickerGroup(dir, "新分组");
+  assert.equal(fs.readdirSync(dir).filter((name) => name.startsWith("sticker-library.json.corrupt-")).length, 1);
+});
+
 test("茶话会图库：导入图片、分组和读取都落在自己的目录", () => {
   const dir = tempDir();
   const group = createStickerGroup(dir, "猫猫");

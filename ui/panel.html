@@ -74,6 +74,9 @@
       <div class="stream" id="stream">
         <div class="empty" id="empty-tip">左边点一位伙伴，就能开始聊了<span class="empty-hint">还没有伙伴？点右上角齿轮，去『伙伴管理』建一个茶话会角色</span></div>
       </div>
+      <button class="jump-bottom" id="jump-bottom" type="button" title="回到底部" aria-label="回到底部" hidden>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"/></svg>
+      </button>
       <div class="composer">
         <div class="emoji-drawer" id="emoji-drawer" hidden>
           <div class="emoji-tabs" id="emoji-tabs" role="tablist" aria-label="表情选择"></div>
@@ -149,7 +152,7 @@
           <button class="emoji-btn" id="btn-emoji" type="button" title="表情和表情包" aria-label="打开表情和表情包" disabled>
             <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.2"></circle><path d="M6.8 11.8c.9 1.1 1.9 1.6 3.2 1.6s2.3-.5 3.2-1.6M7.2 8h.1M12.7 8h.1"></path></svg>
           </button>
-          <textarea id="input" rows="1" placeholder="说点什么…" title="Enter 发送，Shift+Enter 换行" aria-label="输入消息" disabled></textarea>
+          <textarea id="input" rows="1" placeholder="说点什么…" title="Enter 发送，Shift+Enter 换行" aria-label="输入消息，最多 12000 字" disabled maxlength="12000"></textarea>
           <button class="send" id="btn-send" type="button" title="发送" aria-label="发送" disabled>
             <svg class="send-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="m3.2 9.1 13.5-5.4-3.4 13.1-3.1-5.1-7-2.6Z"></path><path d="m10.2 11.7 6.5-8"></path></svg>
             <svg class="send-confirm" viewBox="0 0 20 20" aria-hidden="true"><path d="m4.2 10.2 3.7 3.7 8-8"></path></svg>
@@ -196,6 +199,7 @@
       friends: document.getElementById("friends"),
       chat: document.getElementById("chat"),
       stream: document.getElementById("stream"),
+      jumpBottom: document.getElementById("jump-bottom"),
       input: document.getElementById("input"),
       send: document.getElementById("btn-send"),
       imageButton: document.getElementById("btn-image"),
@@ -1195,7 +1199,35 @@
         statusTimer = null;
       }, 3200);
     }
-    function scrollDown() { el.stream.scrollTop = el.stream.scrollHeight; }
+    let autoScrollAllowed = true;
+    const SCROLL_BOTTOM_GAP = 24;
+
+    function isAtBottom() {
+      return el.stream.scrollHeight - el.stream.scrollTop - el.stream.clientHeight <= SCROLL_BOTTOM_GAP;
+    }
+
+    function updateJumpBottom() {
+      const shouldShow = el.stream.scrollHeight > el.stream.clientHeight && !isAtBottom();
+      el.jumpBottom.hidden = !shouldShow;
+    }
+
+    function scrollDown(force = false) {
+      if (!force && !autoScrollAllowed) {
+        updateJumpBottom();
+        return;
+      }
+      el.stream.scrollTop = el.stream.scrollHeight;
+      updateJumpBottom();
+    }
+
+    el.stream.addEventListener("scroll", () => {
+      autoScrollAllowed = isAtBottom();
+      updateJumpBottom();
+    }, { passive: true });
+    el.jumpBottom.addEventListener("click", () => {
+      autoScrollAllowed = true;
+      scrollDown(true);
+    });
 
     /**
      * 输入框跟着内容长：空着就一行，写多了自己长高。
@@ -1425,12 +1457,11 @@
       closeMessageActions();
       const layer = document.createElement("div");
       layer.className = "message-editor-layer";
-      layer.innerHTML = '<div class="message-editor" role="dialog" aria-modal="true" aria-label="调整伙伴回复"><div class="message-editor-head"><b>调整这条回复</b><button type="button" class="message-editor-close" aria-label="关闭">×</button></div><textarea maxlength="4000"></textarea><div class="message-editor-foot"><button type="button" class="message-editor-cancel">先不改</button><button type="button" class="message-editor-save">采用这版回复</button></div></div>';
+      layer.innerHTML = '<div class="message-editor" role="dialog" aria-modal="true" aria-label="调整伙伴回复"><div class="message-editor-head"><b>调整这条回复</b><button type="button" class="message-editor-close" aria-label="关闭">×</button></div><textarea maxlength="4000"></textarea><div class="message-editor-foot"><button type="button" class="message-editor-save">采用这版回复</button></div></div>';
       const textarea = layer.querySelector("textarea");
       textarea.value = message.text || "";
       const close = () => layer.remove();
       layer.querySelector(".message-editor-close").addEventListener("click", close);
-      layer.querySelector(".message-editor-cancel").addEventListener("click", close);
       layer.addEventListener("click", (event) => { if (event.target === layer) close(); });
       layer.querySelector(".message-editor-save").addEventListener("click", async (event) => {
         const button = event.currentTarget;
@@ -1667,23 +1698,30 @@
 
     /** 整段重画（改了外观开关之后用）。 */
     function renderAll(list) {
-      invalidateRendering();
-      el.stream.innerHTML = "";
-      seenIds = new Set();
-      lastRenderedConversationAt = null;
-      tickNodes.clear();
-      if (!list.length) {
-        const tip = document.createElement("div");
-        tip.className = "empty";
-        const p = partners.find((x) => x.id === current);
-        tip.textContent = `跟${p?.name || "他"}没什么正经事，随便扯吧`;
-        el.stream.appendChild(tip);
-      } else {
-        const read = readUserIds(list);
-        for (const m of list) renderMessage(m, { read: read.has(m.id), keepBottom: true });
-        scrollDown();
+      const previousAutoScroll = autoScrollAllowed;
+      autoScrollAllowed = true;
+      try {
+        invalidateRendering();
+        el.stream.innerHTML = "";
+        seenIds = new Set();
+        lastRenderedConversationAt = null;
+        tickNodes.clear();
+        if (!list.length) {
+          const tip = document.createElement("div");
+          tip.className = "empty";
+          const p = partners.find((x) => x.id === current);
+          tip.textContent = `跟${p?.name || "他"}没什么正经事，随便扯吧`;
+          el.stream.appendChild(tip);
+        } else {
+          const read = readUserIds(list);
+          for (const m of list) renderMessage(m, { read: read.has(m.id), keepBottom: true });
+          scrollDown(true);
+        }
+        paintedWithAvatars = showMessageAvatars;
+      } finally {
+        autoScrollAllowed = previousAutoScroll;
+        updateJumpBottom();
       }
-      paintedWithAvatars = showMessageAvatars;
     }
 
     /** 把线上已有的消息 id 都记成「画过了」，不重画。
@@ -1702,22 +1740,30 @@
     const ASYNC_BUBBLE_GAP_MS = 680;
     async function appendNewOnce(agentId, viewSeq) {
       const generation = renderGeneration;
+      const previousAutoScroll = autoScrollAllowed;
+      const stickToBottom = isAtBottom();
+      const restoreScroll = (value) => {
+        autoScrollAllowed = previousAutoScroll;
+        updateJumpBottom();
+        return value;
+      };
       const data = await api("GET", `thread/${agentId}`);
-      if (current !== agentId || viewSeq !== threadViewSeq || generation !== renderGeneration) return 0;
+      if (current !== agentId || viewSeq !== threadViewSeq || generation !== renderGeneration) return restoreScroll(0);
       currentMessages = data.messages || [];
+      autoScrollAllowed = stickToBottom;
       if (paintedWithAvatars !== showMessageAvatars) {
         renderAll(currentMessages);
-        return Math.max(1, currentMessages.length);
+        return restoreScroll(Math.max(1, currentMessages.length));
       }
       let added = 0;
       const read = readUserIds(currentMessages);
       for (const m of currentMessages) {
-        if (current !== agentId || viewSeq !== threadViewSeq || generation !== renderGeneration) return added;
+        if (current !== agentId || viewSeq !== threadViewSeq || generation !== renderGeneration) return restoreScroll(added);
         // 正在「演」的那一轮由 playLiveTurn 一条条摆出来，轮询别抢着把整条先画上
         if (m?.role === "assistant" && m.repliedTo && liveSkipRepliedTo.has(m.repliedTo)) continue;
         if (m?.role === "assistant" && Array.isArray(m.bubbles) && m.bubbles.length > 1 && !seenIds.has(m.id)) {
           for (let index = 0; index < m.bubbles.length; index += 1) {
-            if (current !== agentId || viewSeq !== threadViewSeq || generation !== renderGeneration) return added;
+            if (current !== agentId || viewSeq !== threadViewSeq || generation !== renderGeneration) return restoreScroll(added);
             renderMessage(m, {
               allowSeen: index > 0,
               assistantPieces: [m.bubbles[index]],
@@ -1732,7 +1778,7 @@
       }
       // 已经挂在屏幕上的未读小字也要跟着新状态走
       for (const m of currentMessages) paintTick(tickNodes.get(m.id), read.has(m.id));
-      return added;
+      return restoreScroll(added);
     }
     function appendNew(agentId) {
       const viewSeq = threadViewSeq;
@@ -2489,7 +2535,7 @@
       // 先摆上「未读」：她发出去那一刻就是未读，读到后收起（后端落盘的那一笔）
       const tickEl = tick(col, "未读");
       setStatus("");
-      scrollDown();
+      scrollDown(true);
 
       try {
         const started = await api("POST", "turns", {

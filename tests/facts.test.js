@@ -29,6 +29,14 @@ test("事实解析只收合法来源，并使用来源消息时间而不是模�
   assert.equal(facts[0].at, "2026-09-16T10:00:00.000Z");
 });
 
+test("用户事实不能只拿伙伴自己的话作来源", () => {
+  const facts = parseFacts(JSON.stringify([
+    { fact: "用户住在上海", kind: "other", sourceIds: ["m2"] },
+    { fact: "用户喜欢某种表达", kind: "preference", sourceIds: ["m2"] },
+  ]), batch);
+  assert.deepEqual(facts.map((row) => row.fact), ["用户住在上海"]);
+});
+
 test("重复事实和非法结构会被丢掉", () => {
   const facts = normalizeFacts([
     { fact: "喜欢像素艺术", kind: "interest", sourceIds: ["m1"] },

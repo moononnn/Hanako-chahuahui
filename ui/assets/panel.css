@@ -368,6 +368,26 @@ html, body {
   gap: 8px;
   position: relative;
 }
+.jump-bottom {
+  position: absolute;
+  z-index: 4;
+  right: 18px;
+  bottom: 78px;
+  width: 34px;
+  height: 34px;
+  padding: 7px;
+  border: 1px solid rgba(93, 174, 142, .28);
+  border-radius: 50%;
+  color: var(--primary-deep);
+  background: rgba(255, 253, 249, .92);
+  box-shadow: 0 4px 12px rgba(74, 70, 64, .14);
+  cursor: pointer;
+  transition: transform .15s ease, background .15s ease, box-shadow .15s ease;
+}
+.jump-bottom:hover { transform: translateY(-1px); background: var(--accent-soft); box-shadow: 0 6px 16px rgba(74, 70, 64, .18); }
+.jump-bottom:active { transform: scale(.94); }
+.jump-bottom svg { display: block; width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.jump-bottom[hidden] { display: none; }
 /* ── 房间的背景（她给这位伙伴铺的那张）──
    图铺在整个聊天窗上，一路顶到边缘：头顶的伙伴栏和脚下的输入框是两条半透明的
    磨砂玻璃，透上来的是同一张图，不再有「三块板拼起来」的缝。

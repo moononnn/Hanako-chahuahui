@@ -9,7 +9,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { PARTNER_ID_RE, isValidPartnerId, safePartnerId } from "../lib/partner-id.js";
+import { PARTNER_ID_RE, isValidPartnerId, requirePartnerId, safePartnerId } from "../lib/partner-id.js";
 
 test("伙伴 ID：正常 id 一律放行", () => {
   for (const id of ["hanako", "carol2", "local_abc", "a-b-c", "A1", "A".repeat(64)]) {
@@ -19,17 +19,19 @@ test("伙伴 ID：正常 id 一律放行", () => {
 });
 
 test("伙伴 ID：路径与怪字符一律挡掉", () => {
-  const bad = ["", "   ", "..", ".", "../x", "..\\x", "a/b", "a\\b", "C:", "a b", "中文", "a".repeat(65), "a.b", null, undefined];
+  const bad = ["", "   ", "..", ".", "../x", "..\\x", "a/b", "a\\b", "C:", "a b", "中文", "a".repeat(65), "a.b", "__proto__", "constructor", "prototype", null, undefined];
   for (const id of bad) {
     assert.equal(isValidPartnerId(id), false, JSON.stringify(id));
   }
 });
 
-test("safePartnerId：不合法一律返回空串，由调用方去拒", () => {
+test("伙伴 ID：文件系统边界必须抛错，不能把非法值改名", () => {
+  assert.equal(requirePartnerId("hanako"), "hanako");
+  for (const id of ["a/b", "a_b/", "__proto__", "..", null]) {
+    assert.throws(() => requirePartnerId(id), { code: "INVALID_PARTNER_ID" });
+  }
   assert.equal(safePartnerId("hanako"), "hanako");
   assert.equal(safePartnerId(".."), "");
-  assert.equal(safePartnerId("../hanako"), "");
-  assert.equal(safePartnerId(null), "");
 });
 
 test("loadPersona 碰到不合法 id 时压根不去读盘", async () => {
@@ -49,17 +51,14 @@ test("loadPersona 碰到不合法 id 时压根不去读盘", async () => {
   assert.deepEqual(out.files, {});
 });
 
-test("store：带 .. 的 id 不会被写到 partners 目录外面", async () => {
+test("store：非法 id 直接拒绝，不会与合法 id 共用账本", async () => {
   const os = await import("node:os");
   const fs = await import("node:fs");
   const path = await import("node:path");
   const { createStore } = await import("../lib/store.js");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chahuahui-safeid-"));
   const store = createStore(dir);
-  store.saveKnowing("..", { colors: [], derivatives: [], hobbies: {} });
-  assert.ok(!fs.existsSync(path.join(dir, "v2", "knowing.json")), "不能爬到 v2 根目录");
-  assert.ok(
-    fs.existsSync(path.join(dir, "v2", "partners", "__", "knowing.json")),
-    "落点被削成安全名字，留在 partners 里",
-  );
+  assert.throws(() => store.saveKnowing("..", { colors: [], derivatives: [], hobbies: {} }), { code: "INVALID_PARTNER_ID" });
+  assert.throws(() => store.saveKnowing("a/b", { colors: [], derivatives: [], hobbies: {} }), { code: "INVALID_PARTNER_ID" });
+  assert.ok(!fs.existsSync(path.join(dir, "v2", "partners", "a_b", "knowing.json")), "非法 id 不能撞进合法目录");
 });
