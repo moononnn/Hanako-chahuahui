@@ -104,6 +104,43 @@
           <button class="soft-button" id="workfeed-clear" type="button">清空</button>
         </div>
       </article>
+      <article class="setting-card compact">
+        <div class="setting-copy">
+          <h3>生活节拍分析</h3>
+          <p>让伙伴逐渐熟悉你常在什么时候聊天，以及你的表达习惯。只按茶话会里的聊天归纳，数据不足时不会猜。</p>
+        </div>
+        <button class="switch" id="rhythm-switch" type="button" role="switch" aria-checked="true">
+          <span class="track"><span></span></span><span class="switch-label">打开</span>
+        </button>
+      </article>
+      <article class="setting-card compact">
+        <div class="setting-copy">
+          <h3>表达习惯</h3>
+          <p>允许伙伴参考你平时的语气词和符号变化，只当作轻轻留意的背景，不直接判断你的心情。</p>
+        </div>
+        <button class="switch" id="rhythm-style-switch" type="button" role="switch" aria-checked="true">
+          <span class="track"><span></span></span><span class="switch-label">参考</span>
+        </button>
+      </article>
+      <article class="setting-card compact">
+        <div class="setting-copy">
+          <h3>按生活节拍主动关心</h3>
+          <p>如果你明显晚于自己的平时节奏还没有出现，伙伴最多一天轻轻问一次，多个伙伴不会重复提醒。</p>
+        </div>
+        <button class="switch" id="rhythm-proactive-switch" type="button" role="switch" aria-checked="true">
+          <span class="track"><span></span></span><span class="switch-label">允许</span>
+        </button>
+      </article>
+      <article class="setting-card compact">
+        <div class="setting-copy">
+          <h3>已分析的生活节拍</h3>
+          <p>查看目前归纳出的聊天时段、表达变化和样本数量。这里只显示趋势，不展示具体聊天原文。</p>
+        </div>
+        <div class="detail-actions rhythm-actions">
+          <button class="soft-button" id="rhythm-view" type="button">查看</button>
+          <button class="soft-button" id="rhythm-clear" type="button">重新开始积累</button>
+        </div>
+      </article>
 
       <div class="section-head roomy">
         <div><h2>模型</h2><p>决定聊天时用哪个模型。想单独给某位伙伴换，去 ta 的页面里挑。</p></div>
@@ -231,6 +268,12 @@
     <div class="modal workfeed-modal" role="dialog" aria-modal="true" aria-labelledby="workfeed-title">
       <div class="modal-head"><div><h2 id="workfeed-title">已收集的生活记录</h2><p class="modal-sub" id="workfeed-count"></p></div><button class="icon-button" data-close-modal="workfeed-modal" aria-label="关闭">×</button></div>
       <div class="modal-body scroll-body" id="workfeed-list"></div>
+    </div>
+  </div>
+  <div class="modal-layer" id="rhythm-modal" hidden>
+    <div class="modal rhythm-modal" role="dialog" aria-modal="true" aria-labelledby="rhythm-title">
+      <div class="modal-head"><div><h2 id="rhythm-title">你的生活节拍</h2><p class="modal-sub" id="rhythm-count"></p></div><button class="icon-button" data-close-modal="rhythm-modal" aria-label="关闭">×</button></div>
+      <div class="modal-body scroll-body" id="rhythm-list"></div>
     </div>
   </div>
 
@@ -442,6 +485,20 @@
       workfeedSwitch.classList.toggle("on", workfeedOn);
       workfeedSwitch.setAttribute("aria-checked", String(workfeedOn));
       workfeedSwitch.querySelector(".switch-label").textContent = workfeedOn ? "打开" : "关闭";
+      const rhythmOn = globalSettings.rhythmEnabled !== false;
+      const styleOn = globalSettings.rhythmStyleEnabled !== false;
+      const proactiveOn = globalSettings.rhythmProactiveEnabled !== false;
+      for (const [id, on, onLabel, offLabel] of [
+        ["rhythm-switch", rhythmOn, "打开", "关闭"],
+        ["rhythm-style-switch", rhythmOn && styleOn, "参考", "不参考"],
+        ["rhythm-proactive-switch", rhythmOn && proactiveOn, "允许", "关闭"],
+      ]) {
+        const button = document.getElementById(id);
+        button.disabled = !rhythmOn && id !== "rhythm-switch";
+        button.classList.toggle("on", on);
+        button.setAttribute("aria-checked", String(on));
+        button.querySelector(".switch-label").textContent = on ? onLabel : offLabel;
+      }
       document.getElementById("quiet-start").value = globalSettings.quiet?.start ?? "23:00";
       document.getElementById("quiet-end").value = globalSettings.quiet?.end ?? "08:00";
       document.getElementById("my-action-text").value = globalSettings.myActionTail ?? "";
@@ -643,6 +700,18 @@
       const next = globalSettings.workfeedEnabled === false;
       if (await saveGlobal({ workfeedEnabled: next }, next ? "伙伴又能参考 Hana 主对话近况了" : "已关闭，伙伴不再参考 Hana 主对话近况")) paintGlobal();
     });
+    document.getElementById("rhythm-switch").addEventListener("click", async () => {
+      const next = globalSettings.rhythmEnabled === false;
+      if (await saveGlobal({ rhythmEnabled: next }, next ? "生活节拍分析已打开" : "生活节拍分析已关闭")) paintGlobal();
+    });
+    document.getElementById("rhythm-style-switch").addEventListener("click", async () => {
+      const next = globalSettings.rhythmStyleEnabled === false;
+      if (await saveGlobal({ rhythmStyleEnabled: next }, next ? "以后会参考表达习惯" : "已关闭表达习惯参考")) paintGlobal();
+    });
+    document.getElementById("rhythm-proactive-switch").addEventListener("click", async () => {
+      const next = globalSettings.rhythmProactiveEnabled === false;
+      if (await saveGlobal({ rhythmProactiveEnabled: next }, next ? "允许按节拍主动关心" : "已关闭按节拍主动关心")) paintGlobal();
+    });
     function rNode(tag, className, text) {
       const node = document.createElement(tag);
       if (className) node.className = className;
@@ -726,6 +795,61 @@
         host.appendChild(day);
       }
     }
+
+    function renderRhythm(result) {
+      const host = document.getElementById("rhythm-list");
+      const count = document.getElementById("rhythm-count");
+      const profile = result?.profile ?? {};
+      host.replaceChildren();
+      count.textContent = profile.ready ? `${profile.count} 条发言，来自 ${profile.distinctDays} 个生活日` : "样本还不够，暂时不会归纳习惯";
+      if (!result?.settings?.enabled) {
+        host.appendChild(rNode("div", "workfeed-empty", "生活节拍分析目前是关闭的。"));
+        return;
+      }
+      if (!profile.ready) {
+        host.appendChild(rNode("div", "workfeed-empty", "再聊一些、跨几个生活日之后，这里会显示你的常见聊天时段。"));
+        return;
+      }
+      const block = rNode("div", "rhythm-summary");
+      if (profile.usualWindow) block.appendChild(rNode("p", "rhythm-line", `常见聊天时段：${profile.usualWindow.start}～${profile.usualWindow.end}`));
+      if (profile.style?.changed && result.settings.styleEnabled) {
+        block.appendChild(rNode("p", "rhythm-line", profile.style.direction === "quieter" ? "最近的语气词和轻松符号比平时少一些，伙伴只会把它当作轻轻问候的背景。" : "最近的语气词和轻松符号比平时多一些，伙伴会把它当作比较轻快的背景。"));
+      } else if (result.settings.styleEnabled) {
+        block.appendChild(rNode("p", "rhythm-line", "目前还没有明显的表达习惯变化。"));
+      }
+      block.appendChild(rNode("p", "rhythm-note", "这些只是根据你在茶话会里的聊天归纳出的倾向，不代表固定作息，也不会展示具体聊天原文。"));
+      host.appendChild(block);
+    }
+
+    document.getElementById("rhythm-view").addEventListener("click", async () => {
+      const host = document.getElementById("rhythm-list");
+      host.replaceChildren(rNode("div", "workfeed-empty", "正在整理…"));
+      openModal("rhythm-modal");
+      try {
+        renderRhythm(await api("GET", "user-rhythm"));
+      } catch (error) {
+        host.replaceChildren(rNode("div", "workfeed-empty", `读不到分析：${error.message}`));
+      }
+    });
+
+    let rhythmClearArmed = false;
+    document.getElementById("rhythm-clear").addEventListener("click", async (event) => {
+      const btn = event.currentTarget;
+      if (!rhythmClearArmed) {
+        rhythmClearArmed = true;
+        btn.textContent = "再点一次确认";
+        setTimeout(() => { rhythmClearArmed = false; btn.textContent = "重新开始积累"; }, 4000);
+        return;
+      }
+      rhythmClearArmed = false;
+      btn.textContent = "重新开始积累";
+      try {
+        await api("POST", "user-rhythm/clear");
+        say("已清空节拍，重新积累", "ok");
+      } catch (error) {
+        say(`清不掉：${error.message}`, "err");
+      }
+    });
 
     document.getElementById("workfeed-view").addEventListener("click", async () => {
       const host = document.getElementById("workfeed-list");

@@ -189,7 +189,7 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 @media (hover: hover) and (pointer: fine) { .seed-pick:not(:disabled):hover { border-color: var(--mint); } }
 .detail-field + .detail-field { margin-top: 16px; }
 .detail-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
-.workfeed-actions { flex: none; margin-top: 0; }
+.workfeed-actions, .rhythm-actions { flex: none; margin-top: 0; }
 .user-name-field .soft-button { display: block; margin-top: 12px; }
 .compact-time input { min-width: 0; }
 .action-preview { display: grid; grid-template-columns: 72px 1fr; gap: 8px 10px; margin-bottom: 13px; padding: 12px; border-radius: var(--r-md); background: var(--paper); }
@@ -273,7 +273,10 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 .modal-body { padding: 18px; overflow: auto; overscroll-behavior: contain; }
 .modal-body p { margin: 0; }
 .safe-note { margin-top: 12px; padding: 11px 12px; border-radius: 12px; background: var(--mint-soft); color: var(--mint-deep); font-size: 12.5px; }
-.workfeed-modal { width: min(620px, 100%); }
+.workfeed-modal, .rhythm-modal { width: min(620px, 100%); }
+.rhythm-summary { display: grid; gap: 10px; }
+.rhythm-line { margin: 0; padding: 12px 14px; border-radius: 12px; background: var(--mint-soft); color: var(--mint-deep); font-size: 13px; }
+.rhythm-note { margin: 2px 0 0; color: var(--ink-soft); font-size: 12px; }
 .workfeed-day + .workfeed-day { margin-top: 20px; }
 .workfeed-day-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 8px; color: var(--mint-deep); font-size: 13px; }
 .workfeed-day-count { color: var(--ink-soft); font-size: 11px; font-weight: 400; }

@@ -454,7 +454,7 @@ test("起跑线：自动量那边的痕迹，也能自己定从哪儿算，只�
   assert.match(app, /seedStale\(knowing\.relationSeed, seedLastTry\)/, "该重量的就重量一份（量不出东西也有节流）");
   assert.doesNotMatch(app, /session:list/, "量会话那条路 v2 应用走不通，别写");
   assert.match(app, /note: relationshipNote\(effectiveRelationship\(knowing\), knowing\.relationSeed\)/, "回复那一句也要带上起跑线");
-  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, topic, hobby, memoryText, relationNote, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, stickerText \}\)/, "ta 主动冒出来的消息也要带上兴趣、临时搜索素材、当前时间、未回应语境、醒来回声、最近场景、共享情境和表情包能力");
+  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, topic, hobby, memoryText, relationNote, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, stickerText, userRhythmText: userRhythm \}\)/, "ta 主动冒出来的消息也要带上兴趣、临时搜索素材、当前时间、未回应语境、醒来回声、最近场景、共享情境、表情包和生活节拍");
   assert.match(app, /const now = new Date\(\);[\s\S]{0,180}?currentTimeText/, "主动消息在搜索完成后再取当前时间");
   assert.match(app, /主动联系不能等用户先说话才有兴趣/);
   assert.match(app, /const personaText = renderPersona\(persona/);
@@ -489,6 +489,21 @@ test("设置页有 Hana 主对话近况的开关和记录查看入口", () => {
   assert.match(app, /app\.get\("\/workfeed"/, "查看要有读取路由");
   assert.match(app, /app\.delete\("\/workfeed\/:eventId"/, "单条删除要有路由");
   assert.match(app, /app\.post\("\/workfeed\/clear"/, "清空要有路由");
+});
+
+test("生活节拍设置可见、可开关、可查看并能重新开始积累", () => {
+  const settingsHtml = fs.readFileSync(new URL("../ui/settings.html", import.meta.url), "utf8");
+  assert.match(settingsHtml, /生活节拍分析/);
+  assert.match(settingsHtml, /id="rhythm-switch"/);
+  assert.match(settingsHtml, /id="rhythm-style-switch"/);
+  assert.match(settingsHtml, /id="rhythm-proactive-switch"/);
+  assert.match(settingsHtml, /id="rhythm-view"/);
+  assert.match(settingsHtml, /id="rhythm-clear"/);
+  assert.match(settingsHtml, /id="rhythm-list"/);
+  assert.match(app, /app\.get\("\/user-rhythm"/);
+  assert.match(app, /app\.post\("\/user-rhythm\/clear"/);
+  assert.match(app, /rhythmResetAt/);
+  assert.match(app, /userRhythmText/);
 });
 
 test("聊天输入框防中文输入法回车（选字时回车不能当发送）", () => {
@@ -1144,7 +1159,20 @@ test("图片选择不会跨伙伴或发送回包误清新图片", () => {
   assert.match(panel, /const owner = current;[\s\S]*?const choice = \+\+imageChoiceSeq/);
   assert.match(panel, /if \(current !== owner \|\| choice !== imageChoiceSeq\) return/);
   assert.match(panel, /el\.imageButton\.disabled = true;/);
-  assert.match(panel, /pendingImage === image && imageChoiceSeq === imageChoiceVersion/);
+  assert.match(panel, /pendingImage === image\) clearPendingImage\(\)/);
+});
+
+test("发送成功后只清理本次图片，不误删发送期间换上的新图片", () => {
+  assert.match(panel, /if \(pendingImage === image\) clearPendingImage\(\);/);
+  assert.doesNotMatch(panel, /imageChoiceVersion/);
+});
+
+test("聊天输入框可把剪贴板图片送进待发送图片链路", () => {
+  assert.match(panel, /async function chooseImageFile\(file\)/);
+  assert.match(panel, /el\.input\.addEventListener\("paste", \(event\) =>/);
+  assert.match(panel, /entry\.kind === "file" && entry\.type\.startsWith\("image\/"\)/);
+  assert.match(panel, /event\.preventDefault\(\);[\s\S]*?void chooseImageFile\(file\);/);
+  assert.match(panel, /name: file\.name \|\| "剪贴板图片\.png"/);
 });
 
 test("待发送图片有缩略图、放大预览和取消入口", () => {

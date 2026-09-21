@@ -2507,7 +2507,6 @@
       const text = el.input.value.trim();
       const image = pendingImage;
       const sticker = pendingSticker;
-      const imageChoiceVersion = imageChoiceSeq;
       if (!text && !image && !sticker) return;
       const inputVersion = inputRevision;
       let accepted = false;
@@ -2547,7 +2546,8 @@
           watching: document.visibilityState === "visible",
         });
         accepted = true;
-        if (pendingImage === image && imageChoiceSeq === imageChoiceVersion) clearPendingImage();
+        // 成功回包只清理本次仍挂在待发送区的那张图；若期间换过图，保留新图。
+        if (pendingImage === image) clearPendingImage();
         if (pendingSticker === sticker) clearPendingSticker();
         const draft = pendingDrafts.get(agentId);
         if (!draft || draft.revision <= inputVersion) pendingDrafts.delete(agentId);
@@ -2610,9 +2610,7 @@
       clearImagePickFeedback();
       setStatus("");
     });
-    el.imageFile.addEventListener("change", async () => {
-      const file = el.imageFile.files?.[0];
-      el.imageFile.value = "";
+    async function chooseImageFile(file) {
       if (!file) {
         clearImagePickFeedback();
         setStatus("");
@@ -2632,7 +2630,7 @@
       try {
         const data = await readImageFile(file);
         if (current !== owner || choice !== imageChoiceSeq) return;
-        pendingImage = { name: file.name, mimeType: file.type, data };
+        pendingImage = { name: file.name || "剪贴板图片.png", mimeType: file.type, data };
         renderPendingImage();
         clearImagePickFeedback();
         setStatus("图片已放好，按发送交给 ta");
@@ -2643,6 +2641,18 @@
           setStatus(error.message || "图片没读出来");
         }
       }
+    }
+    el.imageFile.addEventListener("change", () => {
+      const file = el.imageFile.files?.[0];
+      el.imageFile.value = "";
+      void chooseImageFile(file);
+    });
+    el.input.addEventListener("paste", (event) => {
+      const item = Array.from(event.clipboardData?.items || []).find((entry) => entry.kind === "file" && entry.type.startsWith("image/"));
+      const file = item?.getAsFile();
+      if (!file) return;
+      event.preventDefault();
+      void chooseImageFile(file);
     });
     el.pendingImageView.addEventListener("click", () => showImageLightbox(pendingImage?.data, pendingImage?.name || "待发送图片"));
     el.pendingImageRemove.addEventListener("click", () => {
