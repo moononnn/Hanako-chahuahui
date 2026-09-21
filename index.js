@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { splitReply } from "./lib/split.js";
 import { planTurn, DEFAULT_RHYTHM } from "./lib/rhythm.js";
+import { analyzeUserRhythm, lateStartCue, userRhythmText } from "./lib/user-rhythm.js";
 import { loadPersona, renderPersona } from "./lib/persona.js";
 import { resolveUserDisplayName } from "./lib/host-user.js";
 import { isValidPartnerId } from "./lib/partner-id.js";
@@ -315,6 +316,7 @@ export function apply(ctx) {
   const GLOBAL_SETTING_KEYS = new Set([
     "model", "recognitionModel", "vision", "userNameOverride", "daybookEnabled", "workfeedEnabled",
     "globalGate", "quiet", "actionStyle", "messageAvatars", "messageRefine", "myActionTail",
+    "rhythmEnabled", "rhythmStyleEnabled", "rhythmProactiveEnabled", "rhythmResetAt",
   ]);
   const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "vision"]);
 
@@ -968,6 +970,14 @@ export function apply(ctx) {
     }
     const now = new Date();
     const currentTimeText = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日，${spokenClock(now)}`;
+    const rhythmSettings = store.getGlobalSettings();
+    const userRhythm = rhythmSettings.rhythmEnabled
+      ? userRhythmText(store.getThread(agentId).messages, {
+          now,
+          since: rhythmSettings.rhythmResetAt,
+          includeStyle: rhythmSettings.rhythmStyleEnabled,
+        })
+      : "";
     // 开口的语气也要跟着起跑线走：熟人不能发出来像初次搭讪的话
     const knowing = store.getKnowing(agentId);
     const relationNote = relationshipNote(effectiveRelationship(knowing), knowing.relationSeed);
@@ -999,7 +1009,7 @@ export function apply(ctx) {
           correction: topic?.correction ?? "",
           currentTimeText,
         })
-      : proactiveSpec({ partnerName, userName: USER_NAME, topic, hobby, memoryText, relationNote, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, stickerText });
+      : proactiveSpec({ partnerName, userName: USER_NAME, topic, hobby, memoryText, relationNote, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, stickerText, userRhythmText: userRhythm });
 
     let raw = "";
     try {
@@ -1363,6 +1373,7 @@ export function apply(ctx) {
       return { ok: false, reason: "no-partners" };
     }
     const globalSettings = store.getGlobalSettings();
+    const rhythmSettings = globalSettings;
     const now = new Date();
     const report = [];
     /** 一轮 tick 最多自省一位，别一次叫一群模型 */
@@ -1449,9 +1460,16 @@ export function apply(ctx) {
       // 暂存意图也要遵守同题排除，不能从旁路把上一轮沉默的话题捞回来。
       // 暂存意图可能早于用户的手动操作，已放下的话题不能从这条旁路复活。
       const livePendingTopic = pendingTopic?.state === "dropped" ? null : pendingTopic;
+      const globalRuntime = store.getGlobalRuntime();
+      const rhythmCue = rhythmSettings.rhythmEnabled && rhythmSettings.rhythmProactiveEnabled
+        && !wakeEcho && !followup && !livePendingTopic && globalRuntime.rhythmCueDay !== dailyKey(now)
+        ? lateStartCue(thread.messages, { now, since: rhythmSettings.rhythmResetAt })
+        : null;
       const topic = wakeEcho || followup?.read
         ? null
-        : livePendingTopic?.id === followup?.previousTopicId ? readyTopic : (livePendingTopic ?? readyTopic);
+        : rhythmCue
+          ? { id: "user-rhythm:late-start", title: "她今天还没有像平时那样出现", note: `她通常在 ${rhythmCue.expectedAt} 左右来找伙伴，今天已经晚了约 ${rhythmCue.lateMinutes} 分钟。`, source: "user-rhythm" }
+          : livePendingTopic?.id === followup?.previousTopicId ? readyTopic : (livePendingTopic ?? readyTopic);
       const memoryText = buildMemoryBlock(store.readMemory(agentId));
       const knowing = store.getKnowing(agentId);
       // 有共同话题优先；没有时，伙伴自己的兴趣就是正式的主动由头，不再只是随机兜底。
@@ -1536,12 +1554,16 @@ export function apply(ctx) {
       );
       store.setProactiveState(agentId, {
         ...noted.state,
+        ...(rhythmCue ? { rhythmCueDay: dailyKey(now) } : {}),
         nextDueAt: nextDueFor(agentId, settings, now, globalSettings),
         lastInterestUse: sent.interest
           ? { ...sent.interest, at: now.toISOString() }
           : noted.state.lastInterestUse ?? null,
       });
-      store.setGlobalRuntime(noted.globalState);
+      store.setGlobalRuntime({
+        ...noted.globalState,
+        ...(rhythmCue ? { rhythmCueDay: dailyKey(now) } : {}),
+      });
       if (wakeEcho) {
         store.setPartnerSettings(agentId, { wakeEcho: { sourceId: wakeEcho.sourceId, consumedAt: now.toISOString() } });
       }
@@ -2165,6 +2187,14 @@ export function apply(ctx) {
     const partner = partners.find((row) => row.id === agentId);
     const memoryText = buildMemoryBlock(store.readMemory(agentId));
     const knowing = store.getKnowing(agentId);
+    const rhythmSettings = store.getGlobalSettings();
+    const rhythmText = rhythmSettings.rhythmEnabled
+      ? userRhythmText(store.getThread(agentId).messages, {
+          now: new Date(),
+          since: rhythmSettings.rhythmResetAt,
+          includeStyle: rhythmSettings.rhythmStyleEnabled,
+        })
+      : "";
     const knowingText = buildKnowingText({
       disclosure: disclosureRatio(effectiveRelationship(knowing)),
       personality: knowing.personality,
@@ -2219,6 +2249,7 @@ export function apply(ctx) {
       timeText,
       daybookText,
       workfeedText,
+      userRhythmText: rhythmText,
       // 正睡着被弄醒了：这一条得让ta带着起床气回
       wakeText: wakeBlockFor(agentId),
       // 每轮都给伙伴一个真实的回应出口：正常说、只发表情包，或安静收尾。
@@ -4742,6 +4773,42 @@ export function apply(ctx) {
         try {
           store.clearWorkfeed();
           return c.json({ ok: true, workfeed: store.readWorkfeed() });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 400);
+        }
+      });
+
+      app.get("/user-rhythm", async (c) => {
+        try {
+          const settings = store.getGlobalSettings();
+          const allPartners = await listAllPartners();
+          const messages = allPartners.flatMap((partner) => store.getThread(partner.id).messages);
+          const profile = analyzeUserRhythm(messages, { since: settings.rhythmResetAt });
+          return c.json({
+            ok: true,
+            settings: {
+              enabled: settings.rhythmEnabled,
+              styleEnabled: settings.rhythmStyleEnabled,
+              proactiveEnabled: settings.rhythmProactiveEnabled,
+              resetAt: settings.rhythmResetAt,
+            },
+            profile,
+            text: settings.rhythmEnabled ? userRhythmText(messages, {
+              since: settings.rhythmResetAt,
+              includeStyle: settings.rhythmStyleEnabled,
+            }) : "",
+          });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 400);
+        }
+      });
+
+      app.post("/user-rhythm/clear", (c) => {
+        try {
+          const resetAt = new Date().toISOString();
+          store.setGlobalSettings({ rhythmResetAt: resetAt });
+          store.setGlobalRuntime({ rhythmCueDay: null });
+          return c.json({ ok: true, resetAt });
         } catch (error) {
           return c.json({ ok: false, error: describeError(error) }, 400);
         }
