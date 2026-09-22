@@ -34,6 +34,7 @@ import { buildAmbientContextText, buildDaybookText, daybookHash, readDaybook, sh
 import { spokenClock, timeBlock } from "./lib/clock.js";
 import { askUtility, generateReply, normalizeModelRef, chatModelOptions, visionModelOptions, resolveModelChoice } from "./lib/model.js";
 import { createStore, createDiagnostics } from "./lib/store.js";
+import { protectKey } from "./lib/crypto.js";
 import { listBackgrounds, readBackgroundBytes, writeBackground, removeBackgroundFile, normalizeOpacity, normalizeTone, isBackgroundFile, fileTypeOf } from "./lib/background.js";
 import { recordStickerUsage } from "./lib/sticker-usage.js";
 import {
@@ -49,8 +50,21 @@ import {
 import { dailySpec, isProfileIdentitySafe, profileSpec, runSummary, segmentSpec } from "./lib/summarize.js";
 import { buildWorkfeedText, normalizeWorkEvent } from "./lib/workfeed.js";
 import { buildFactSpec, parseFactsResult } from "./lib/facts.js";
+import { migrateLegacyFacts } from "./lib/fact-migration.js";
+import { applyAdaptationCorrection, buildAdaptationCorrectionSpec, listAdaptationForUser, parseAdaptationCorrection, revokeAdaptationGuide } from "./lib/adaptation-correction.js";
+import { inferObservedGuide } from "./lib/observed.js";
 import { dayKey } from "./lib/days.js";
 import { advanceRelationship, disclosureRatio, mergeRelationship, relationshipNote, retractRelationshipSource, SEED_PICK_TIERS, SEED_TIER_IDS, seedByPick, seedFromTrace, traceSizeFromFiles, zeroSeed } from "./lib/relationship.js";
+import {
+  adaptationCandidate,
+  applyGuideOperation,
+  buildGuideReconcileSpec,
+  buildRelationshipAdaptationBlock,
+  effectiveClaimEntries,
+  observeAdviceStyle,
+  parseGuideReconcileResult,
+} from "./lib/adaptation.js";
+import { attributeFeedback, buildAdaptationFeedbackRuntime, commitWakeOutcome, consolidateHabitChanges, finalizeWakeReply, resolveDeferredWake, resolveSleepPolicy } from "./lib/plasticity.js";
 import {
   PERSONALITY_PRESETS,
   TEMPERAMENT_TAGS,
@@ -91,6 +105,7 @@ import {
   readCatalogWithReason,
   readStickerBytes,
   recentStickerIds,
+  resolveStickerPolicy,
   readSourceCatalog,
   sourceRowById,
   stickerLabelMap,
@@ -162,6 +177,7 @@ import { recallEligibility, shouldCancelScheduledReply } from "./lib/recall.js";
 import {
   dailyKey,
   decideForm,
+  applyProactiveInterval,
   dueNow,
   gateCheck,
   isDirectReplyToProactive,
@@ -172,6 +188,7 @@ import {
   wakeEchoFor,
   recentSceneFor,
   quietNow,
+  resolveProactivePolicy,
   scheduleNext,
   stageIntent,
   takeIntent,
@@ -185,6 +202,22 @@ import {
   reviewSpec,
   watchSummary,
 } from "./lib/selfwatch.js";
+import {
+  VOICE_PRESETS,
+  VOICE_TIERS,
+  activeVoiceModel,
+  activeVoiceProfileId,
+  voiceChoicesForModel,
+  cleanVoiceText,
+  nextTextRuntime,
+  nextVoiceRuntime,
+  resolveVoicePolicy,
+  shouldGenerateVoice,
+  normalizeVoiceModelConfig,
+  normalizeVoiceProfiles,
+  audioDurationMs,
+  synthesizeVoice,
+} from "./lib/voice.js";
 import {
   MAX_NUDGE_BUBBLES,
   nudgeDelay,
@@ -267,8 +300,11 @@ export function apply(ctx) {
 
   function globalSettingsView() {
     const global = store.getGlobalSettings();
+    const maskVoice = (config) => config ? { ...config, apiKey: config.apiKey ? "********" : "" } : null;
     return {
       ...global,
+      voiceModel: maskVoice(global.voiceModel),
+      voiceProfiles: Object.fromEntries(Object.entries(global.voiceProfiles || {}).map(([id, profile]) => [id, { ...profile, config: maskVoice(profile.config) }])),
       effectiveUserName: USER_NAME,
       myActionTail: actionTailFromTemplate(readMyTemplateEntry(global)),
     };
@@ -316,9 +352,9 @@ export function apply(ctx) {
   const GLOBAL_SETTING_KEYS = new Set([
     "model", "recognitionModel", "vision", "userNameOverride", "daybookEnabled", "workfeedEnabled",
     "globalGate", "quiet", "actionStyle", "messageAvatars", "messageRefine", "myActionTail",
-    "rhythmEnabled", "rhythmStyleEnabled", "rhythmProactiveEnabled", "rhythmResetAt",
+    "rhythmEnabled", "rhythmStyleEnabled", "rhythmProactiveEnabled", "rhythmResetAt", "voiceEnabled", "voiceProfiles", "voiceProfile",
   ]);
-  const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "vision"]);
+  const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "vision", "voice"]);
 
   function pickSettingsPatch(input, allowed, label) {
     const body = input && typeof input === "object" && !Array.isArray(input) ? input : {};
@@ -357,6 +393,26 @@ export function apply(ctx) {
     if (Object.prototype.hasOwnProperty.call(patch, "workfeedEnabled")) {
       patch.workfeedEnabled = patch.workfeedEnabled === true;
     }
+    if (Object.prototype.hasOwnProperty.call(patch, "voiceEnabled")) {
+      patch.voiceEnabled = patch.voiceEnabled === true;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "voiceProfiles")) {
+      const current = store.getGlobalSettings();
+      const incoming = patch.voiceProfiles && typeof patch.voiceProfiles === "object" ? patch.voiceProfiles : {};
+      const profiles = normalizeVoiceProfiles(incoming);
+      for (const id of Object.keys(profiles)) {
+        const nextKey = incoming[id]?.config?.apiKey;
+        const oldKey = current.voiceProfiles?.[id]?.config?.apiKey || "";
+        profiles[id].config.apiKey = nextKey && nextKey !== "********" ? nextKey : (oldKey ? "********" : "");
+      }
+      patch.voiceProfiles = profiles;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "voiceProfile")) {
+      const profiles = patch.voiceProfiles || normalizeVoiceProfiles(store.getGlobalSettings().voiceProfiles);
+      patch.voiceProfile = typeof patch.voiceProfile === "string" && Object.prototype.hasOwnProperty.call(profiles, patch.voiceProfile)
+        ? patch.voiceProfile
+        : "";
+    }
     return patch;
   }
 
@@ -366,7 +422,153 @@ export function apply(ctx) {
     if (Object.prototype.hasOwnProperty.call(patch, "model")) {
       patch.model = normalizeModelRef(patch.model);
     }
+    if (Object.prototype.hasOwnProperty.call(patch, "voice")) {
+      const voice = patch.voice && typeof patch.voice === "object" ? patch.voice : {};
+      patch.voice = {
+        enabled: voice.enabled === true,
+        voiceId: String(voice.voiceId || "female-shaonv").trim().slice(0, 100),
+        voiceByProfile: Object.fromEntries(Object.entries(voice.voiceByProfile && typeof voice.voiceByProfile === "object" ? voice.voiceByProfile : {}).map(([id, voiceId]) => [String(id).trim().slice(0, 40), String(voiceId || "").trim().slice(0, 100)]).filter(([, voiceId]) => voiceId)),
+        tier: ["rare", "sometimes", "often"].includes(voice.tier) ? voice.tier : "sometimes",
+      };
+    }
     return patch;
+  }
+
+  const voiceDir = path.join(ctx.dataDir, "v2", "voice");
+  const voiceGenerations = new Map();
+  function voiceFile(agentId, messageId, format = "wav") {
+    if (!isValidPartnerId(agentId) || !/^m_[A-Za-z0-9_-]+$/.test(String(messageId ?? ""))) return null;
+    const ext = format === "mp3" ? "mp3" : "wav";
+    return path.join(voiceDir, agentId, `${messageId}.${ext}`);
+  }
+
+  function effectivePartnerVoice(partnerSettings, globalSettings) {
+    const voice = partnerSettings?.voice && typeof partnerSettings.voice === "object" ? partnerSettings.voice : {};
+    const profileId = activeVoiceProfileId(globalSettings || {}) || "";
+    const profileVoice = voice.voiceByProfile?.[profileId];
+    return { ...voice, voiceId: profileVoice || voice.voiceId };
+  }
+
+  async function maybeGenerateVoice(agentId, stored, text) {
+    const globalSettings = store.getGlobalSettings();
+    const partnerSettings = { ...store.getPartnerSettings(agentId), voice: effectivePartnerVoice(store.getPartnerSettings(agentId), globalSettings) };
+    const runtime = store.getProactiveState(agentId);
+    const knowing = store.getKnowing(agentId);
+    const partnerAdaptation = store.getPartnerAdaptation(agentId);
+    const userAdaptation = store.getUserAdaptation();
+    const voiceContext = { kind: "reply", currentTurnId: stored.repliedTo ?? "", lifeDay: dayKey(new Date()) };
+    const voicePolicy = resolveVoicePolicy({
+      tier: partnerSettings.voice?.tier,
+      relationship: effectiveRelationship(knowing),
+      personality: knowing.personality,
+      guides: [...userAdaptation.guides, ...partnerAdaptation.guides],
+      context: voiceContext,
+      runtime: { ...runtime, ...adaptationFeedbackRuntime(agentId) },
+    });
+    const decision = shouldGenerateVoice({
+      globalSettings,
+      partnerSettings: partnerSettings.voice,
+      runtime,
+      text,
+      voicePolicy,
+    });
+    if (!decision.ok) {
+      store.setProactiveState(agentId, nextTextRuntime(runtime));
+      return { ok: false, reason: decision.reason };
+    }
+
+    const generationKey = `${agentId}|${stored.id}`;
+    const generationToken = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    const voiceEvidence = adaptationEvidence(agentId, voicePolicy.guideIds);
+    const generation = {
+      agentId,
+      resultMessageId: stored.id,
+      triggerMessageId: stored.repliedTo ?? null,
+      generationToken,
+      guideIds: voiceEvidence.guideIds,
+      sourceMessageIds: voiceEvidence.sourceMessageIds,
+      claimFingerprint: voicePolicy.claimFingerprint ?? [],
+      context: voiceContext,
+    };
+    voiceGenerations.set(generationKey, generation);
+    store.patchMessage(agentId, stored.id, {
+      voice: { status: "pending", text: decision.text, voiceId: decision.voiceId, layer: decision.layer ?? "normal", generationToken, createdAt: new Date().toISOString() },
+    });
+    try {
+      const generated = await synthesizeVoice(ctx, {
+        text: decision.text,
+        voiceId: decision.voiceId,
+        modelConfig: globalSettings.voiceModel,
+      });
+      const file = voiceFile(agentId, stored.id, generated.format);
+      if (!file) throw new Error("语音文件路径不合法");
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, generated.audio);
+      const thread = store.getThread(agentId);
+      const current = thread.messages.find((row) => row.id === stored.id);
+      const trigger = generation.triggerMessageId ? thread.messages.find((row) => row.id === generation.triggerMessageId) : null;
+      const activeGeneration = voiceGenerations.get(generationKey);
+      const currentGuides = [
+        ...store.getUserAdaptation().guides,
+        ...store.getPartnerAdaptation(agentId).guides,
+      ];
+      const currentPolicy = resolveVoicePolicy({
+        tier: partnerSettings.voice?.tier,
+        relationship: effectiveRelationship(store.getKnowing(agentId)),
+        personality: store.getKnowing(agentId).personality,
+        guides: currentGuides,
+        context: generation.context,
+        runtime: { ...store.getProactiveState(agentId), ...adaptationFeedbackRuntime(agentId) },
+      });
+      const guideStillActive = JSON.stringify(generation.claimFingerprint) === JSON.stringify(currentPolicy.claimFingerprint ?? []);
+      if (!current || current.recalled || current.voice?.text !== decision.text || current.voice?.generationToken !== generationToken
+        || activeGeneration?.generationToken !== generationToken || trigger?.recalled || !guideStillActive) {
+        try { fs.unlinkSync(file); } catch { /* 临时音频已不存在就算了 */ }
+        return { ok: false, reason: "stale" };
+      }
+      store.patchMessage(agentId, stored.id, {
+        voice: {
+          status: "ready",
+          text: decision.text,
+          voiceId: decision.voiceId,
+          format: generated.format,
+          durationMs: Number.isFinite(generated.durationMs) ? generated.durationMs : null,
+          playedAt: current.voice?.playedAt ?? null,
+          createdAt: current.voice?.createdAt ?? new Date().toISOString(),
+        },
+      });
+      store.setProactiveState(agentId, nextVoiceRuntime(store.getProactiveState(agentId), decision));
+      if (decision.layer === "exception") {
+        const evidence = adaptationEvidence(agentId, generation.guideIds);
+        store.commitException(agentId, {
+          id: `voice.frequency|${stored.id}`,
+          behavior: "voice.frequency",
+          description: "这次超出日常语音额度，多发了一条语音",
+          normalRule: `日常语音档位 ${decision.tier}`,
+          chosenAction: "额外发送语音",
+          guideIds: evidence.guideIds,
+          sourceMessageIds: evidence.sourceMessageIds,
+          triggerMessageId: generation.triggerMessageId,
+          resultMessageId: stored.id,
+          outcome: "committed",
+          committedAt: new Date().toISOString(),
+          lifeDay: dayKey(new Date()),
+          consolidated: false,
+        }, evidence.guides);
+      }
+      diagnostics({ event: "voice.ready", agentId, messageId: stored.id, chars: decision.text.length, layer: decision.layer ?? "normal", model: generated.model });
+      return { ok: true };
+    } catch (error) {
+      if (voiceGenerations.get(generationKey)?.generationToken === generationToken) {
+        store.patchMessage(agentId, stored.id, {
+          voice: { status: "failed", text: decision.text, voiceId: decision.voiceId, error: String(error?.message ?? error).slice(0, 180) },
+        });
+        diagnostics({ event: "voice.failed", agentId, messageId: stored.id, error: String(error?.message ?? error).slice(0, 180) });
+      }
+      return { ok: false, reason: "synthesis", error: error?.message ?? String(error) };
+    } finally {
+      if (voiceGenerations.get(generationKey)?.generationToken === generationToken) voiceGenerations.delete(generationKey);
+    }
   }
 
   let appDir = process.cwd();
@@ -793,7 +995,267 @@ export function apply(ctx) {
     return next;
   }
 
-  const askCheap = (systemPrompt, userText, maxTokens) => askUtility(ctx, { systemPrompt, userText, maxTokens });
+  const askCheap = (systemPrompt, userText, maxTokens, options = {}) => askUtility(ctx, {
+    systemPrompt,
+    userText,
+    maxTokens,
+    timeoutMs: options.timeoutMs ?? 120_000,
+  });
+
+  /**
+   * 明确偏好只在候选消息上走一次短 reconciler。
+   * 模型只负责理解，落账仍经过 adaptation 的本地协议校验；失败不挡正常聊天。
+   */
+  async function reconcileAdaptationFromUserMessage(agentId, stored) {
+    const hint = adaptationCandidate(stored?.text);
+    if (!hint.candidate) return { ok: false, reason: "not-candidate" };
+    const now = new Date();
+    const partnerBook = store.getPartnerAdaptation(agentId);
+    const userBook = store.getUserAdaptation();
+    const partners = await listPartners();
+    const partnerName = partners.find((row) => row.id === agentId)?.name ?? agentId;
+    const recentExceptions = partnerBook.exceptions.filter((row) => {
+      const at = Date.parse(String(row.committedAt ?? ""));
+      return row.outcome === "committed" && Number.isFinite(at) && now.getTime() - at <= 24 * 60 * 60 * 1000;
+    });
+    const spec = buildGuideReconcileSpec({
+      message: stored.text,
+      existingGuides: [...userBook.guides, ...partnerBook.guides],
+      recentExceptions,
+      userName: USER_NAME,
+      partnerName,
+    });
+    let raw = "";
+    try {
+      raw = await askCheap(spec.systemPrompt, spec.userText, 420, { timeoutMs: 20_000 });
+    } catch (error) {
+      diagnostics({ event: "adaptation.reconcile.failed", agentId, sourceMessageId: stored.id, error: describeError(error) });
+      return { ok: false, reason: "model-failed" };
+    }
+    const parsed = parseGuideReconcileResult(raw, {
+      sourceMessageId: stored.id,
+      currentTurnId: stored.id,
+      lifeDay: dayKey(now),
+      message: stored.text,
+      now,
+    });
+    if (!parsed.ok) {
+      diagnostics({ event: "adaptation.reconcile.ignored", agentId, sourceMessageId: stored.id, reason: parsed.reason });
+      return parsed;
+    }
+    const saveFeedback = () => {
+      if (!parsed.feedbackProposal) return null;
+      let result = null;
+      store.updatePartnerAdaptation(agentId, (book) => {
+        result = attributeFeedback({
+          exceptions: book.exceptions,
+          feedbackEvents: book.feedbackEvents,
+          proposal: parsed.feedbackProposal,
+          sourceMessageId: stored.id,
+          lifeDay: dayKey(now),
+          now,
+        });
+        if (!result.ok) return book;
+        const feedbackEvents = [...book.feedbackEvents, result.event].slice(-128);
+        return {
+          ...book,
+          feedbackEvents,
+          habitChanges: consolidateHabitChanges({ exceptions: book.exceptions, feedbackEvents, habitChanges: book.habitChanges, guides: [...userBook.guides, ...book.guides] }),
+        };
+      });
+      if (result?.ok) diagnostics({ event: "adaptation.feedback.saved", agentId, exceptionId: result.event.exceptionId, polarity: result.event.polarity });
+      return result;
+    };
+    if (parsed.operation === "none") {
+      const feedback = saveFeedback();
+      diagnostics({ event: "adaptation.reconcile.none", agentId, sourceMessageId: stored.id });
+      return { ...parsed, feedback };
+    }
+    if (parsed.operation === "revoke") {
+      const partnerHas = partnerBook.guides.some((row) => row.id === parsed.guideId);
+      const next = partnerHas
+        ? store.savePartnerAdaptation(agentId, applyGuideOperation(partnerBook, parsed, now))
+        : store.saveUserAdaptation(applyGuideOperation(userBook, parsed, now));
+      const feedback = saveFeedback();
+      diagnostics({ event: "adaptation.reconcile.saved", agentId, sourceMessageId: stored.id, operation: parsed.operation, guideId: parsed.guideId });
+      return { ...parsed, book: next, feedback };
+    }
+    const nextBook = parsed.guide.scope === "user-wide"
+      ? store.saveUserAdaptation(applyGuideOperation(userBook, parsed, now))
+      : store.savePartnerAdaptation(agentId, applyGuideOperation(partnerBook, parsed, now));
+    const feedback = saveFeedback();
+    diagnostics({ event: "adaptation.reconcile.saved", agentId, sourceMessageId: stored.id, operation: parsed.operation, guideId: parsed.guide.id, scope: parsed.guide.scope });
+    return { ...parsed, book: nextBook, feedback };
+  }
+
+  function observeAdaptationFromHistory(agentId) {
+    const partnerBook = store.getPartnerAdaptation(agentId);
+    const userBook = store.getUserAdaptation();
+    const observed = inferObservedGuide({
+      messages: store.getThread(agentId).messages,
+      guides: [...userBook.guides, ...partnerBook.guides],
+      locks: [...userBook.observationLocks, ...partnerBook.observationLocks],
+      now: new Date(),
+    });
+    if (!observed.guide) return null;
+    const saved = store.updatePartnerAdaptation(agentId, (book) => ({ ...book, guides: [...book.guides, observed.guide] }));
+    diagnostics({ event: "adaptation.observed", agentId, pattern: observed.pattern, evidenceCount: observed.evidenceCount, lifeDays: observed.lifeDays, guideId: observed.guide.id });
+    return saved.guides.find((guide) => guide.id === observed.guide.id) ?? observed.guide;
+  }
+
+  function adaptationTextFor(agentId, knowing = store.getKnowing(agentId), now = new Date(), currentContext = {}) {
+    const userBook = store.getUserAdaptation();
+    const partnerBook = store.getPartnerAdaptation(agentId);
+    return buildRelationshipAdaptationBlock({
+      userGuides: userBook.guides,
+      partnerGuides: partnerBook.guides,
+      habitChanges: [...userBook.habitChanges, ...partnerBook.habitChanges],
+      relationship: effectiveRelationship(knowing),
+      personality: knowing.personality,
+      now,
+      currentContext: { lifeDay: dayKey(now), ...currentContext },
+    });
+  }
+
+  function adaptationEvidence(agentId, guideIds = []) {
+    const wanted = new Set((Array.isArray(guideIds) ? guideIds : []).map(String));
+    const allGuides = [...store.getUserAdaptation().guides, ...store.getPartnerAdaptation(agentId).guides];
+    const guides = allGuides.filter((guide) => wanted.has(guide.id));
+    return {
+      guideIds: [...new Set(guides.map((guide) => guide.id))],
+      sourceMessageIds: [...new Set(guides.flatMap((guide) => guide.sourceMessageIds ?? []))],
+      guides: allGuides,
+    };
+  }
+
+  let legacyFactsMigrationPromise = null;
+
+  async function migrateLegacyFactsOnce() {
+    store.repairPendingUserAdaptationInvalidations();
+    let partners;
+    try {
+      partners = await listAllPartners();
+    } catch (error) {
+      diagnostics({ event: "adaptation.facts-migration.no-partners", error: describeError(error) });
+      return { ok: false, reason: "no-partners" };
+    }
+    const report = [];
+    for (const partner of partners) {
+      try {
+        const agentId = partner.id;
+        const book = store.getPartnerAdaptation(agentId);
+        if (book.migration?.factsV1CompletedAt) {
+          report.push({ agentId, action: "already-complete" });
+          continue;
+        }
+        const userBook = store.getUserAdaptation();
+        const migrated = migrateLegacyFacts({
+          facts: store.readMemory(agentId).facts,
+          messages: store.getThread(agentId).messages,
+          book,
+          existingGuides: [...userBook.guides, ...book.guides],
+          now: new Date(),
+        });
+        store.savePartnerAdaptation(agentId, migrated.book);
+        diagnostics({ event: "adaptation.facts-migration.ok", agentId, added: migrated.added.length, skipped: migrated.skipped.length });
+        report.push({ agentId, action: "migrated", added: migrated.added.length, skipped: migrated.skipped.length });
+      } catch (error) {
+        diagnostics({ event: "adaptation.facts-migration.failed", agentId: partner.id, error: describeError(error) });
+        report.push({ agentId: partner.id, action: "failed" });
+      }
+    }
+    return { ok: !report.some((row) => row.action === "failed"), report };
+  }
+
+  async function ensureLegacyFactsMigration() {
+    if (!legacyFactsMigrationPromise) {
+      legacyFactsMigrationPromise = migrateLegacyFactsOnce().then((result) => {
+        if (!result?.ok) throw new Error("旧 facts 迁移尚未完成");
+        return result;
+      });
+    }
+    try {
+      return await legacyFactsMigrationPromise;
+    } catch (error) {
+      legacyFactsMigrationPromise = null;
+      throw error;
+    }
+  }
+
+  function commitAdviceStyleException(agentId, stored, text, triggerMessageId, currentTurnId = "") {
+    const now = new Date(stored?.at ?? new Date());
+    const userBook = store.getUserAdaptation();
+    const partnerBook = store.getPartnerAdaptation(agentId);
+    const entries = effectiveClaimEntries({
+      userGuides: userBook.guides,
+      partnerGuides: partnerBook.guides,
+      capability: "reply.advice-style",
+      now,
+      currentTurnId,
+      lifeDay: dayKey(now),
+    }).filter(({ guide, claim }) => guide.kind === "preference" && claim.effect === "prefer" && claim.value === "comfort-first");
+    if (!entries.length || !observeAdviceStyle(text, "comfort-first").observed) return null;
+    const evidence = adaptationEvidence(agentId, entries.map(({ guide }) => guide.id));
+    return store.commitException(agentId, {
+      id: `reply.advice-style|${stored.id}`,
+      behavior: "reply.advice-style",
+      description: "这次回复真实采用了先陪伴、再给建议的顺序",
+      normalRule: "普通回复不保证固定采用先陪伴后建议",
+      chosenAction: "先接住感受，再给具体建议",
+      guideIds: evidence.guideIds,
+      sourceMessageIds: evidence.sourceMessageIds,
+      triggerMessageId,
+      resultMessageId: stored.id,
+      outcome: "committed",
+      committedAt: stored.at ?? now.toISOString(),
+      lifeDay: dayKey(now),
+      consolidated: false,
+    }, evidence.guides);
+  }
+
+  function contactPolicyFor(agentId, now = new Date(), kind = "proactive") {
+    const knowing = store.getKnowing(agentId);
+    const userBook = store.getUserAdaptation();
+    const partnerBook = store.getPartnerAdaptation(agentId);
+    return resolveProactivePolicy({
+      userGuides: userBook.guides,
+      partnerGuides: partnerBook.guides,
+      relationship: effectiveRelationship(knowing),
+      personality: knowing.personality,
+      context: { kind, lifeDay: dayKey(now) },
+      runtime: store.getProactiveState(agentId),
+      now,
+    });
+  }
+
+  function adaptationFeedbackRuntime(agentId) {
+    const book = store.getPartnerAdaptation(agentId);
+    const userBook = store.getUserAdaptation();
+    return buildAdaptationFeedbackRuntime({ ...book, guides: [...userBook.guides, ...book.guides] });
+  }
+
+  function commitWakeExceptionIfReady(agentId, pending) {
+    if (pending?.wakeDecision !== "exception" || pending?.wakeOutcome !== "committed") return null;
+    const triggerMessageId = pending.triggerMessageId ?? pending.messageId ?? "";
+    const resultMessageId = pending.resultMessageId ?? "";
+    if (!triggerMessageId || !resultMessageId) return null;
+    const evidence = adaptationEvidence(agentId, pending.guideIds);
+    return store.commitException(agentId, {
+      id: `sleep.wake|${triggerMessageId}`,
+      behavior: "sleep.wake",
+      description: "这次在原本会继续睡的情况下醒来接住了消息",
+      normalRule: "睡眠期间通常延后到后来看到",
+      chosenAction: "醒来并完成回复",
+      guideIds: evidence.guideIds,
+      sourceMessageIds: evidence.sourceMessageIds,
+      triggerMessageId,
+      resultMessageId,
+      outcome: "committed",
+      committedAt: pending.committedAt ?? new Date().toISOString(),
+      lifeDay: dayKey(new Date(pending.committedAt ?? new Date())),
+      consolidated: false,
+    }, evidence.guides);
+  }
 
   /**
    * 「认识 ta」这条链用哪个模型。
@@ -981,6 +1443,7 @@ export function apply(ctx) {
     // 开口的语气也要跟着起跑线走：熟人不能发出来像初次搭讪的话
     const knowing = store.getKnowing(agentId);
     const relationNote = relationshipNote(effectiveRelationship(knowing), knowing.relationSeed);
+    const adaptationText = adaptationTextFor(agentId, knowing, now, { kind: "proactive", lifeDay: dayKey(now) });
     let contextText = "";
     if (!exception) {
       try {
@@ -1005,11 +1468,12 @@ export function apply(ctx) {
           userName: USER_NAME,
           memoryText,
           relationNote,
+          adaptationText,
           worry: topic ? `${topic.title}${topic.note ? ` —— ${topic.note}` : ""}` : null,
           correction: topic?.correction ?? "",
           currentTimeText,
         })
-      : proactiveSpec({ partnerName, userName: USER_NAME, topic, hobby, memoryText, relationNote, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, stickerText, userRhythmText: userRhythm });
+      : proactiveSpec({ partnerName, userName: USER_NAME, topic, hobby, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, stickerText, userRhythmText: userRhythm });
 
     let raw = "";
     try {
@@ -1078,7 +1542,10 @@ export function apply(ctx) {
       interestName: hobby?.name ?? null,
       interestObject: hobby?.object ?? null,
     });
-    if (stored) recordPartnerStickerUsage(agentId, bubbles, stored.at);
+    if (stored) {
+      recordPartnerStickerUsage(agentId, bubbles, stored.at);
+      void maybeGenerateVoice(agentId, stored, text);
+    }
     if (topic) {
       // 记下这次聊的是哪一面：下次回来时拿它提醒模型换个延伸，而不是把话题封掉
       store.saveTopicBook(
@@ -1105,11 +1572,12 @@ export function apply(ctx) {
   /**
    * 等回音：她说了一句、ta接住了、她再没开口。
    *
-   * 跟主动那套分开：不看主动档位，也不占主动的日上限。
-   * 只看两件事：多熟了（坡上的位置）、等了多久。不熟的伙伴根本不催——刚认识就晾着，本来就正常。
+   * 跟主动话题是两种语义，但共用同一套主动出站硬门、关系频率策略和配额账。
+   * 是否真的在等她，仍看熟度、性格、开放话头和等待时长。
    */
   let awaitingTickPromise = null;
   async function runAwaitingTick() {
+    await ensureLegacyFactsMigration();
     // 跟主动巡检一样上锁：模型跑得久的时候，下一轮定时器不该再进来催一次。
     if (awaitingTickPromise) return awaitingTickPromise;
     awaitingTickPromise = runAwaitingTickInternal();
@@ -1143,6 +1611,20 @@ export function apply(ctx) {
 
       const knowing = store.getKnowing(agentId);
       const ratio = disclosureRatio(effectiveRelationship(knowing));
+      const contactPolicy = contactPolicyFor(agentId, now, "awaiting");
+      const gate = gateCheck({
+        now,
+        settings: { ...settings, sleep: sleepWindows(settings.sleep, now) },
+        globalSettings,
+        state: store.getProactiveState(agentId),
+        globalState: store.getGlobalRuntime(),
+        relationalPolicy: contactPolicy,
+      });
+      if (!gate.ok) {
+        store.setPartnerSettings(agentId, { awaiting: { ...state, nextCheckAt: now.getTime() + 30 * 60 * 1000 } });
+        report.push({ agentId, action: "blocked", reason: gate.reason });
+        continue;
+      }
       const plan = planNudge({
         history: store.getThread(agentId).messages,
         now: now.getTime(),
@@ -1151,28 +1633,20 @@ export function apply(ctx) {
         temperament: temperamentOf(knowing.personality),
         nudges: Number(state.nudges ?? 0),
         nextCheckAt: Number(state.nextCheckAt ?? 0),
+        contactPolicy,
       });
       if (!plan.due) continue;
 
-      // 她那边正在安静时间、或者ta睡着：这一趟往后挪，不搞破例。
-      // 破例留言是留给「想你」的，催人是小事，不值得把她吵醒。
-      const sleep = quietNow(now, globalSettings.quiet, settings.sleep);
-      if (sleep.sleeping) {
-        store.setPartnerSettings(agentId, {
-          awaiting: { ...state, nextCheckAt: now.getTime() + 30 * 60 * 1000 },
-        });
-        report.push({ agentId, action: "blocked", reason: "quiet" });
-        continue;
-      }
-
       const stamp = threadStamp(agentId);
-      const result = await withAutonomousLane(agentId, async () => {
+      const result = await withAutonomousLane(agentId, () => withGlobalAutonomousLane(async () => {
         if (hasReplyInFlight(agentId) || threadStamp(agentId) !== stamp) {
-          return { action: "blocked", nudges: Number(state.nudges ?? 0) };
+          return { action: "blocked", reason: "reply-in-flight", nudges: Number(state.nudges ?? 0) };
         }
-        return deliverNudge(agentId, { partner, plan, settings, ratio, knowing });
-      });
-      report.push({ agentId, action: result.action, nudges: result.nudges });
+        const finalGate = autonomousGateNow(agentId, "awaiting");
+        if (!finalGate.ok) return { action: "blocked", reason: finalGate.reason, nudges: Number(state.nudges ?? 0) };
+        return deliverNudge(agentId, { partner, plan, settings, ratio, knowing, contactPolicy: finalGate.contactPolicy });
+      }));
+      report.push({ agentId, action: result.action, reason: result.reason ?? null, nudges: result.nudges });
     }
     return { ok: true, report };
   }
@@ -1181,7 +1655,7 @@ export function apply(ctx) {
    * 催这一下：说什么、要不要说，全看ta自己。
    * 代码只管把处境摆给ta、把「催了几次」记住。
    */
-  async function deliverNudge(agentId, { partner, plan, settings, ratio, knowing }) {
+  async function deliverNudge(agentId, { partner, plan, settings, ratio, knowing, contactPolicy }) {
     await loadUserName();
     const recent = store.getThread(agentId).messages.slice(-10);
     const conversational = (row) => row && row.kind !== "action" && row.kind !== "poke";
@@ -1204,6 +1678,7 @@ export function apply(ctx) {
         palette: knowing.palette,
         userName: USER_NAME,
       }),
+      adaptationText: adaptationTextFor(agentId, knowing, new Date(), { kind: "awaiting", lifeDay: dayKey(new Date()) }),
       relationNote: relationshipNote(effectiveRelationship(knowing), knowing.relationSeed),
     });
 
@@ -1212,10 +1687,18 @@ export function apply(ctx) {
       store.setPartnerSettings(agentId, {
         awaiting: {
           nudges,
-          nextCheckAt: Date.now() + nudgeDelay({ stage: plan.stage, nudges }),
+          nextCheckAt: Date.now() + nudgeDelay({ stage: plan.stage, nudges, intervalFactor: contactPolicy?.intervalFactor }),
           done: done || nudges >= MAX_NUDGES,
         },
       });
+    };
+    const noteAwaitingSent = (at = new Date()) => {
+      const noted = noteSent(
+        { state: store.getProactiveState(agentId), globalState: store.getGlobalRuntime(), now: at },
+        { exception: false, quiet: store.getGlobalSettings().quiet },
+      );
+      store.setProactiveState(agentId, noted.state);
+      store.setGlobalRuntime(noted.globalState);
     };
 
     let raw = "";
@@ -1236,7 +1719,8 @@ export function apply(ctx) {
     }
 
     if (choice.kind === "poke") {
-      await deliverAction(agentId, { partnerName: partner.name, from: "partner" });
+      const action = await deliverAction(agentId, { partnerName: partner.name, from: "partner" });
+      if (action) noteAwaitingSent(new Date(action.at ?? new Date()));
       settle(nudges);
       diagnostics({ event: "awaiting.poke", agentId, stage: plan.stage, temperament: plan.temperament, waitedMs: plan.waitedMs ?? 0 });
       return { action: "poke", nudges };
@@ -1254,7 +1738,11 @@ export function apply(ctx) {
       bubbles,
       nudge: true,
     });
-    if (stored) recordPartnerStickerUsage(agentId, bubbles, stored.at);
+    if (stored) {
+      recordPartnerStickerUsage(agentId, bubbles, stored.at);
+      noteAwaitingSent(new Date(stored.at ?? new Date()));
+      void maybeGenerateVoice(agentId, stored, bubbles.join("\n"));
+    }
     settle(nudges);
     diagnostics({ event: "awaiting.nudge", agentId, stage: plan.stage, temperament: plan.temperament, bubbles: bubbles.length, waitedMs: plan.waitedMs ?? 0 });
     void announceArrival(agentId, partner.name);
@@ -1291,7 +1779,11 @@ export function apply(ctx) {
    * 自省说"太勤了"就往后再挪一截，说"总撞睡觉"就重新掷一个不落在睡觉段里的点。
    */
   function nextDueFor(agentId, settings, now, globalSettings) {
-    const roll = () => new Date(scheduleNext(now, settings.tier));
+    const contactPolicy = contactPolicyFor(agentId, now, "proactive");
+    const roll = () => {
+      const raw = new Date(scheduleNext(now, settings.tier));
+      return new Date(now.getTime() + applyProactiveInterval(raw.getTime() - now.getTime(), contactPolicy));
+    };
     const corrections = watchCorrections(agentId);
     const thread = store.getThread(agentId);
     const silenceCount = proactiveSilenceContext(thread.messages, { readThroughId: thread.readThroughId, readThroughAt: thread.readThroughAt })?.count ?? 0;
@@ -1351,6 +1843,7 @@ export function apply(ctx) {
 
   let proactiveTickPromise = null;
   async function runProactiveTick(options = {}) {
+    await ensureLegacyFactsMigration();
     if (proactiveTickPromise) return proactiveTickPromise;
     proactiveTickPromise = runProactiveTickInternal(options);
     try {
@@ -1423,6 +1916,7 @@ export function apply(ctx) {
       const readyTopic = followup?.read
         ? null
         : pickTopic(book, now, { excludeId: followup?.previousTopicId ?? null });
+      const contactPolicy = contactPolicyFor(agentId, now, "proactive");
       const gate = gateCheck({
         now,
         // ta今天的睡觉窗口先算好再递进去：主睡加可能的午觉，而且每天时长还会浮动
@@ -1430,6 +1924,7 @@ export function apply(ctx) {
         globalSettings,
         state,
         globalState: store.getGlobalRuntime(),
+        relationalPolicy: contactPolicy,
       });
 
       const wakeEcho = gate.ok && !gate.exception && !followup?.read
@@ -1441,9 +1936,13 @@ export function apply(ctx) {
 
       if (!gate.ok) {
         recordWatch(agentId, { action: "blocked", reason: gate.reason, topic: readyTopic?.title ?? null });
-        // 时机不合适：只记下"想找你"，不硬发
-        const alreadyStaged = pending.intent ?? (state.staged ?? [])[0] ?? null;
-        if (!alreadyStaged && readyTopic) {
+        // 时机不合适：只记下“想找你”，不硬发。takeIntent 是纯读取；这里仍显式写回，保证契约一眼可见。
+        if (pending.intent) {
+          store.setProactiveState(agentId, {
+            staged: [pending.intent, ...pending.rest],
+            lastSkippedAt: now.toISOString(),
+          });
+        } else if (readyTopic) {
           store.setProactiveState(agentId, {
             staged: stageIntent(state, { topicId: readyTopic.id, at: now.toISOString() }, now),
             lastSkippedAt: now.toISOString(),
@@ -1493,21 +1992,29 @@ export function apply(ctx) {
       if (form === "poke") {
         // 这个动作不需要由头——ta天然就是"我就是闲着"
         const stamp = threadStamp(agentId);
-        const sent = await withAutonomousLane(agentId, async () => {
-          if (hasReplyInFlight(agentId) || threadStamp(agentId) !== stamp) return false;
+        const sent = await withAutonomousLane(agentId, () => withGlobalAutonomousLane(async () => {
+          if (hasReplyInFlight(agentId) || threadStamp(agentId) !== stamp) return { ok: false, reason: "reply-in-flight" };
+          const finalGate = autonomousGateNow(agentId, "proactive");
+          if (!finalGate.ok) return { ok: false, reason: finalGate.reason, gateBlocked: true };
           await deliverAction(agentId, { partnerName: partner.name, from: "partner" });
-          return true;
-        });
-        if (!sent) {
-          report.push({ agentId, action: "blocked", reason: "reply-in-flight" });
+          const sentAt = new Date();
+          const noted = noteSent(
+            { state: { ...store.getProactiveState(agentId), staged: pending.rest }, globalState: store.getGlobalRuntime(), now: sentAt },
+            { exception: Boolean(finalGate.exception), quiet: store.getGlobalSettings().quiet },
+          );
+          store.setProactiveState(agentId, noted.state);
+          store.setGlobalRuntime(noted.globalState);
+          return { ok: true, finalGate, sentAt };
+        }));
+        if (!sent.ok) {
+          if (sent.gateBlocked && pending.intent) store.setProactiveState(agentId, { staged: [pending.intent, ...pending.rest] });
+          report.push({ agentId, action: "blocked", reason: sent.reason });
           continue;
         }
-        const noted = noteSent(
-          { state: { ...state, staged: pending.rest }, globalState: store.getGlobalRuntime(), now },
-          { exception: Boolean(gate.exception), quiet: globalSettings.quiet },
-        );
-        store.setProactiveState(agentId, { ...noted.state, nextDueAt: nextDueFor(agentId, settings, now, globalSettings) });
-        store.setGlobalRuntime(noted.globalState);
+        store.setProactiveState(agentId, {
+          ...store.getProactiveState(agentId),
+          nextDueAt: nextDueFor(agentId, settings, sent.sentAt, globalSettings),
+        });
         report.push({ agentId, action: "poked" });
         continue;
       }
@@ -1525,43 +2032,56 @@ export function apply(ctx) {
       }
 
       const stamp = threadStamp(agentId);
-      const sent = await withAutonomousLane(agentId, async () => {
+      const sent = await withAutonomousLane(agentId, () => withGlobalAutonomousLane(async () => {
         if (hasReplyInFlight(agentId) || threadStamp(agentId) !== stamp) return { ok: false, reason: "reply-in-flight" };
-        return deliverProactive(agentId, {
+        const finalGate = autonomousGateNow(agentId, "proactive");
+        if (!finalGate.ok) return { ok: false, reason: finalGate.reason, gateBlocked: true };
+        const delivered = await deliverProactive(agentId, {
           partnerName: partner.name,
           topic,
           hobby,
-          exception: Boolean(gate.exception),
+          exception: Boolean(finalGate.exception),
           followup,
           wakeEcho,
           sceneEcho,
         });
-      });
+        if (!delivered.ok) return delivered;
+        const sentAt = new Date();
+        const noted = noteSent(
+          { state: { ...store.getProactiveState(agentId), staged: pending.rest }, globalState: store.getGlobalRuntime(), now: sentAt },
+          { exception: Boolean(finalGate.exception), quiet: store.getGlobalSettings().quiet },
+        );
+        store.setProactiveState(agentId, noted.state);
+        store.setGlobalRuntime(noted.globalState);
+        return { ...delivered, sentAt };
+      }));
       if (!sent.ok) {
-        recordWatch(agentId, { action: "failed", reason: sent.reason, topic: topic?.title ?? null });
-        // 没生成出来不算发过，重点再试一次（不记入配额）
+        recordWatch(agentId, { action: sent.gateBlocked ? "blocked" : "failed", reason: sent.reason, topic: topic?.title ?? null });
+        // 没生成出来不算发过；临门被 gate 拦住时，旧意图原样归位，新挑出的正式话题也塞回抽屉。
+        const retryAt = new Date();
+        let staged = pending.rest;
+        if (sent.gateBlocked && pending.intent) staged = [pending.intent, ...pending.rest];
+        else if (sent.gateBlocked && readyTopic) {
+          staged = stageIntent({ ...store.getProactiveState(agentId), staged: pending.rest }, { topicId: readyTopic.id, at: retryAt.toISOString() }, retryAt);
+        }
         store.setProactiveState(agentId, {
-          nextDueAt: nextDueFor(agentId, settings, now, globalSettings),
-          staged: pending.rest,
+          nextDueAt: nextDueFor(agentId, settings, retryAt, globalSettings),
+          staged,
         });
-        report.push({ agentId, action: "failed", reason: sent.reason });
+        report.push({ agentId, action: sent.gateBlocked ? "blocked" : "failed", reason: sent.reason });
         continue;
       }
 
-      const noted = noteSent(
-        { state: { ...state, staged: pending.rest }, globalState: store.getGlobalRuntime(), now },
-        { exception: Boolean(gate.exception), quiet: globalSettings.quiet },
-      );
       store.setProactiveState(agentId, {
-        ...noted.state,
+        ...store.getProactiveState(agentId),
         ...(rhythmCue ? { rhythmCueDay: dailyKey(now) } : {}),
-        nextDueAt: nextDueFor(agentId, settings, now, globalSettings),
+        nextDueAt: nextDueFor(agentId, settings, sent.sentAt, globalSettings),
         lastInterestUse: sent.interest
           ? { ...sent.interest, at: now.toISOString() }
-          : noted.state.lastInterestUse ?? null,
+          : store.getProactiveState(agentId).lastInterestUse ?? null,
       });
       store.setGlobalRuntime({
-        ...noted.globalState,
+        ...store.getGlobalRuntime(),
         ...(rhythmCue ? { rhythmCueDay: dailyKey(now) } : {}),
       });
       if (wakeEcho) {
@@ -1644,6 +2164,7 @@ export function apply(ctx) {
           palette: knowing.palette,
           userName: USER_NAME,
         }),
+        adaptationText: adaptationTextFor(agentId, knowing),
         tone: current?.tone ?? null,
       });
 
@@ -2124,21 +2645,36 @@ export function apply(ctx) {
    * 就只是不发，不影响说话。甩不甩交给ta自己按情绪判断，代码只管一条回复最多出一张
    * （多余的标记在 parseStickerMarker 那里就被吃掉了）。
    */
-  async function composeBubbles(agentId, rawText, { maxBubbles = 6, history = [] } = {}) {
+  async function composeBubbles(agentId, rawText, { maxBubbles = 6, history = [], currentContext = {} } = {}) {
     const mark = parseStickerMarker(rawText);
     let stickerBubble = null;
     let stickerId = null;
+    let stickerException = null;
     if (mark.keyword) {
       const index = await readCatalog(ctx);
       const catalog = index ? buildCatalog(index, agentId) : null;
       if (catalog) {
+        const knowing = store.getKnowing(agentId);
+        const partnerAdaptation = store.getPartnerAdaptation(agentId);
+        const userAdaptation = store.getUserAdaptation();
+        const stickerPolicy = resolveStickerPolicy({
+          relationship: effectiveRelationship(knowing),
+          personality: knowing.personality,
+          guides: [...userAdaptation.guides, ...partnerAdaptation.guides],
+          context: { kind: "reply", lifeDay: dayKey(new Date()), ...currentContext },
+          runtime: adaptationFeedbackRuntime(agentId),
+        });
         const picked = pickSticker(catalog, {
           keyword: mark.keyword,
           recentIds: recentStickerIds(history),
+          policy: stickerPolicy,
         });
         if (picked) {
           stickerBubble = encodeStickerBubble(picked.id);
           stickerId = picked.id;
+          if (stickerPolicy.restrictToSpecific && stickerPolicy.allowedIds.includes(String(picked.id))) {
+            stickerException = { guideIds: stickerPolicy.guideIds, stickerId: String(picked.id) };
+          }
         }
       }
     }
@@ -2152,7 +2688,7 @@ export function apply(ctx) {
     const bubbles = [...before];
     if (stickerBubble) bubbles.push(stickerBubble);
     bubbles.push(...after);
-    return { bubbles, sentSticker: Boolean(stickerBubble), stickerId, marker: mark.keyword || "" };
+    return { bubbles, sentSticker: Boolean(stickerBubble), stickerId, stickerException, marker: mark.keyword || "" };
   }
 
   /** 落库用的纯文本：表情包不进去，只留一个记号，免得历史里带哨兵字符。 */
@@ -2203,6 +2739,9 @@ export function apply(ctx) {
       palette: knowing.palette,
       userName: USER_NAME,
     });
+    const adaptationText = adaptationTextFor(agentId, knowing, new Date(), {
+      currentTurnId: currentMessageId || replyTargetId || repliedTo || "",
+    });
     // 表情包：只借不给。读不到就什么都不提，聊天照常。
     const stickerIndex = await readCatalog(ctx);
     const stickerCatalog = stickerIndex ? buildCatalog(stickerIndex, agentId) : null;
@@ -2245,6 +2784,7 @@ export function apply(ctx) {
       personaText: renderPersona(persona, { partnerName: partner?.name ?? agentId, userName: USER_NAME, nameFallback: true }),
       memoryText,
       knowingText,
+      adaptationText,
       stickerText,
       timeText,
       daybookText,
@@ -2332,6 +2872,7 @@ export function apply(ctx) {
     const composed = await composeBubbles(agentId, replyText, {
       maxBubbles: store.getPref(agentId).maxBubbles ?? 6,
       history: windowed,
+      currentContext: { currentTurnId: currentMessageId || replyTargetId || repliedTo || "" },
     });
     const { bubbles } = composed;
     if (bubbles.length === 0) {
@@ -2376,6 +2917,28 @@ export function apply(ctx) {
       : store.appendMessage(agentId, reply);
     if (!stored) return { ok: false, reason: "message-missing", generationMs };
     recordPartnerStickerUsage(agentId, bubbles, stored.at);
+    if (composed.stickerException) {
+      const evidence = adaptationEvidence(agentId, composed.stickerException.guideIds);
+      store.commitException(agentId, {
+        id: `sticker.permission|${stored.id}`,
+        behavior: "sticker.permission",
+        description: "这次使用了关系中明确许可的特定表情包",
+        normalRule: "普通候选池不默认使用这张关系许可图",
+        chosenAction: `发送表情包 ${composed.stickerException.stickerId}`,
+        subject: `source:${composed.stickerException.stickerId}`,
+        guideIds: evidence.guideIds,
+        sourceMessageIds: evidence.sourceMessageIds,
+        triggerMessageId: replyTargetId,
+        resultMessageId: stored.id,
+        outcome: "committed",
+        committedAt: stored.at ?? new Date().toISOString(),
+        lifeDay: dayKey(new Date(stored.at ?? new Date())),
+        consolidated: false,
+      }, evidence.guides);
+    }
+    commitAdviceStyleException(agentId, stored, visibleTextOf(bubbles), replyTargetId, currentMessageId || replyTargetId || repliedTo || "");
+    // 先落完整文字，再后台生成一条整轮语音；失败仍保留原文字回复。
+    void maybeGenerateVoice(agentId, stored, cleanedText);
     return {
       ok: true,
       bubbles,
@@ -2396,14 +2959,23 @@ export function apply(ctx) {
    */
   function wakeBlockFor(agentId, now = new Date()) {
     const settings = store.getPartnerSettings(agentId);
+    const pending = store.getPendingReply(agentId);
+    if (pending?.wakeDecision === "later-notice") {
+      return [
+        "【你后来才看到这条消息】",
+        "这条消息到的时候你没有醒，也没有当场看到。现在接住它就好，不要说成她把你吵醒了。",
+        "- 可以自然带过时间差，但别为延迟回复写客服式道歉",
+      ].join("\n");
+    }
+    if (!["normal", "exception"].includes(pending?.wakeDecision)) return "";
     const state = dozingNow(now, settings.sleep);
-    if (!state.dozing) return "";
-    const night = windowStartDate(now, state.window) ?? dailyKey(now);
+    const night = pending.wakeNight ?? (state.dozing ? windowStartDate(now, state.window) ?? dailyKey(now) : dailyKey(now));
     const count = settings.wakeNight === night ? Number(settings.wakeCount ?? 0) : 0;
+    const kind = pending.wakeKind ?? state.kind ?? "main";
     const when = `${now.getHours()} 点多`;
     const lines = [
       "【你正睡着，被吵醒了】",
-      `现在${when}，你在睡${state.kind === "nap" ? "午觉" : "觉"}。她这条消息把你弄醒了。`,
+      `现在${when}，你在睡${kind === "nap" ? "午觉" : "觉"}。她这条消息把你弄醒了。`,
       "- 你困得很，带着起床气。先按你自己的性子抱怨一两句（可以凶她、可以阴阳两句，但别真伤人），然后再回她那句话",
       "- 困倦不等于每次都要说「再睡五分钟」；这句话偶尔可以出现，但不能当成所有伙伴被吵醒时的固定台词",
       "- 每次先有一个符合当下状态的醒来反应，再接她的话；这个反应可以很短：含糊确认是谁在叫、带起床气抱怨、先问时间或发生了什么、嘴硬说自己已经醒了，或短暂撒娇。按你自己的性子选一两个，不要把这些逐项说完",
@@ -2440,8 +3012,15 @@ export function apply(ctx) {
         }
         turn.status = "error";
         turn.error = { message: made.reason === "empty" ? "模型没有返回内容" : "没能生成回复" };
-        store.clearPendingReplyIf(turn.agentId, turn.userMessageId);
-        scheduleQueuedReply(turn.agentId, made.repliedTo ?? turn.userMessageId);
+        const pending = store.getPendingReply(turn.agentId);
+        scheduleReplyAt(
+          turn.agentId,
+          Date.now() + 5 * 60 * 1000,
+          "retry",
+          pending?.triggerMessageId ?? pending?.messageId ?? turn.userMessageId,
+          pending?.wakeDecision ?? null,
+          pending?.wakeNight ? { wakeNight: pending.wakeNight, wakeKind: pending.wakeKind ?? null } : null,
+        );
         scheduleTurnCleanup(turn);
         return;
       }
@@ -2461,15 +3040,31 @@ export function apply(ctx) {
       turn.via = made.via;
       turn.status = "ready";
       turn.replyMessageId = made.messageId;
-      store.clearPendingReplyIf(turn.agentId, turn.userMessageId);
+      const pendingWake = store.getPendingReply(turn.agentId);
+      const finalizedWake = finalizeWakeReply(pendingWake, made.messageId);
+      if (finalizedWake && finalizedWake !== pendingWake) store.setPendingReply(turn.agentId, finalizedWake);
+      if (finalizedWake?.wakeOutcome === "committed") {
+        commitWakeExceptionIfReady(turn.agentId, finalizedWake);
+        diagnostics({ event: "sleep.wake.committed", agentId: turn.agentId, messageId: made.messageId });
+        store.clearPendingReplyIf(turn.agentId, turn.userMessageId);
+      } else if (!pendingWake?.wakeDecision) {
+        store.clearPendingReplyIf(turn.agentId, turn.userMessageId);
+      }
       scheduleMemoryWork(turn.agentId, { burst: made.burst ?? 0 });
       scheduleQueuedReply(turn.agentId, made.repliedTo ?? turn.userMessageId);
       scheduleTurnCleanup(turn);
     } catch (error) {
       turn.status = "error";
       turn.error = describeError(error);
-      store.clearPendingReplyIf(turn.agentId, turn.userMessageId);
-      scheduleQueuedReply(turn.agentId, turn.userMessageId);
+      const pending = store.getPendingReply(turn.agentId);
+      scheduleReplyAt(
+        turn.agentId,
+        Date.now() + 5 * 60 * 1000,
+        "retry",
+        pending?.triggerMessageId ?? pending?.messageId ?? turn.userMessageId,
+        pending?.wakeDecision ?? null,
+        pending?.wakeNight ? { wakeNight: pending.wakeNight, wakeKind: pending.wakeKind ?? null } : null,
+      );
       scheduleTurnCleanup(turn);
       diagnostics({ event: "turn.failed", agentId: turn.agentId, error: turn.error });
     }
@@ -2482,8 +3077,15 @@ export function apply(ctx) {
 
   const pendingReplies = new Map(); // agentId → { timer, dueAt }
   const deliveringReplies = new Set(); // 已到点、正在排队或生成中的伙伴
-  // 同一个伙伴的自主行为共用一条出站通道；lane 内仍要复查线程，避免排队后把旧意图发出去。
+  // 同一个伙伴先排自己的队；真正出站时所有伙伴再过同一条全局单行道，保证 gate→发送→记账不可被插队。
   const autonomousLanes = new Map();
+  let globalAutonomousLane = Promise.resolve();
+
+  function withGlobalAutonomousLane(fn) {
+    const next = globalAutonomousLane.catch(() => {}).then(fn);
+    globalAutonomousLane = next;
+    return next;
+  }
 
   function withAutonomousLane(agentId, fn) {
     const previous = autonomousLanes.get(agentId) ?? Promise.resolve();
@@ -2492,6 +3094,25 @@ export function apply(ctx) {
     return next.finally(() => {
       if (autonomousLanes.get(agentId) === next) autonomousLanes.delete(agentId);
     });
+  }
+
+  function autonomousGateNow(agentId, kind = "proactive") {
+    const now = new Date();
+    const settings = store.getPartnerSettings(agentId);
+    const globalSettings = store.getGlobalSettings();
+    const contactPolicy = contactPolicyFor(agentId, now, kind);
+    return {
+      ...gateCheck({
+        now,
+        settings: { ...settings, sleep: sleepWindows(settings.sleep, now) },
+        globalSettings,
+        state: store.getProactiveState(agentId),
+        globalState: store.getGlobalRuntime(),
+        relationalPolicy: contactPolicy,
+      }),
+      contactPolicy,
+      now,
+    };
   }
 
   function hasReplyInFlight(agentId) {
@@ -2517,7 +3138,28 @@ export function apply(ctx) {
     diagnostics({ event: "reply.cancelled", agentId, reason: "all-user-messages-recalled" });
   }
 
-  function scheduleReplyAt(agentId, dueAt, mode = "scheduled", messageId = null) {
+  function commitWakeAtRead(agentId, { touchedIds = [], readConfirmed = false, wakeDecision = null, wakeNight = null, wakeKind = null } = {}) {
+    const pending = store.getPendingReply(agentId);
+    const triggerMessageId = pending?.triggerMessageId ?? pending?.messageId ?? null;
+    const firstRead = readConfirmed || (triggerMessageId && touchedIds.includes(triggerMessageId));
+    if (!pending || !firstRead || pending.wakeReadAt || !["normal", "exception"].includes(wakeDecision) || !wakeNight) return null;
+    const before = store.getPartnerSettings(agentId);
+    const next = {
+      wakeNight,
+      wakeCount: before.wakeNight === wakeNight ? Number(before.wakeCount ?? 0) + 1 : 1,
+    };
+    const advanced = commitWakeOutcome({ ...pending, wakeKind, wakeNight });
+    store.setPartnerSettings(agentId, next);
+    store.setPendingReply(agentId, advanced);
+    if (advanced?.wakeOutcome === "committed") {
+      commitWakeExceptionIfReady(agentId, advanced);
+      store.clearPendingReplyIf(agentId, triggerMessageId);
+    }
+    diagnostics({ event: "dozing.woken", agentId, kind: wakeKind, night: wakeNight, wakeDecision, phase: "read" });
+    return next;
+  }
+
+  function scheduleReplyAt(agentId, dueAt, mode = "scheduled", messageId = null, wakeDecision = null, wakeMeta = null) {
     const existing = pendingReplies.get(agentId);
     const merged = mergeDueAt(existing?.dueAt, dueAt);
     if (existing && merged === existing.dueAt) {
@@ -2526,10 +3168,22 @@ export function apply(ctx) {
     }
     if (existing) clearTimeout(existing.timer);
     const delay = Math.max(0, merged - Date.now());
+    const storedPending = store.getPendingReply(agentId) ?? {};
+    const triggerMessageId = messageId ?? storedPending.triggerMessageId ?? storedPending.messageId ?? null;
     store.setPendingReply(agentId, {
+      ...storedPending,
       dueAt: new Date(merged).toISOString(),
       mode,
-      messageId: messageId ?? existing?.messageId ?? null,
+      messageId: triggerMessageId,
+      triggerMessageId,
+      wakeOutcome: storedPending.wakeOutcome ?? "pending",
+      ...(wakeDecision ? { wakeDecision } : storedPending.wakeDecision ? { wakeDecision: storedPending.wakeDecision } : {}),
+      ...(wakeMeta ? {
+        wakeNight: wakeMeta.wakeNight ?? null,
+        wakeKind: wakeMeta.wakeKind ?? null,
+        guideIds: wakeMeta.guideIds ?? storedPending.guideIds ?? [],
+        sourceMessageIds: wakeMeta.sourceMessageIds ?? storedPending.sourceMessageIds ?? [],
+      } : {}),
     });
     const timer = setTimeout(() => {
       pendingReplies.delete(agentId);
@@ -2546,7 +3200,20 @@ export function apply(ctx) {
   }
 
   function scheduleReply(agentId, { plan, messageId = null }) {
-    return scheduleReplyAt(agentId, Date.now() + plan.delayMs, plan.mode, messageId);
+    const wakeNight = plan.window ? windowStartDate(new Date(), plan.window) ?? dailyKey(new Date()) : null;
+    return scheduleReplyAt(
+      agentId,
+      Date.now() + plan.delayMs,
+      plan.mode,
+      messageId,
+      plan.wakeDecision ?? null,
+      plan.wakeDecision && plan.wakeDecision !== "deferred" ? {
+        wakeNight,
+        wakeKind: plan.kind ?? null,
+        guideIds: plan.guideIds ?? [],
+        sourceMessageIds: plan.sourceMessageIds ?? [],
+      } : null,
+    );
   }
 
   /** 当前回复结束后，接住生成期间新进来的话；一批只排一个回合。 */
@@ -2578,7 +3245,24 @@ export function apply(ctx) {
       const messages = store.getThread(partner.id).messages;
       const targetMessageId = pending?.messageId ?? null;
       // 关机可能发生在回复已落盘、待办还没清掉的窄窗口；这种情况只收账，不再生成第二条。
-      if (targetMessageId && messages.some((row) => row?.role === "assistant" && row.repliedTo === targetMessageId && !row.recalled)) {
+      const delivered = targetMessageId
+        ? messages.find((row) => row?.role === "assistant" && row.repliedTo === targetMessageId && !row.recalled)
+        : null;
+      if (delivered) {
+        const replyReady = finalizeWakeReply(pending, delivered.id, delivered.at ? new Date(delivered.at) : new Date());
+        if (replyReady) store.setPendingReply(partner.id, replyReady);
+        const target = messages.find((row) => row?.id === targetMessageId);
+        if (["normal", "exception"].includes(replyReady?.wakeDecision) && !replyReady?.wakeReadAt) {
+          const touchedIds = target?.readAt ? [] : store.markUserMessagesRead(partner.id);
+          commitWakeAtRead(partner.id, {
+            touchedIds,
+            readConfirmed: Boolean(target?.readAt),
+            wakeDecision: replyReady.wakeDecision,
+            wakeNight: replyReady.wakeNight,
+            wakeKind: replyReady.wakeKind,
+          });
+        }
+        commitWakeExceptionIfReady(partner.id, store.getPendingReply(partner.id) ?? replyReady);
         store.clearPendingReply(partner.id);
         diagnostics({ event: "reply.recovered.already-delivered", agentId: partner.id, messageId: targetMessageId });
         continue;
@@ -2598,17 +3282,36 @@ export function apply(ctx) {
       const replyTargetMessageId = targetMessageId
         ?? tail.find((row) => !row.readAt && !row.recalled)?.id
         ?? null;
-      scheduleReplyAt(partner.id, dueAt, mode, replyTargetMessageId);
+      scheduleReplyAt(
+        partner.id,
+        dueAt,
+        mode,
+        replyTargetMessageId,
+        pending?.wakeDecision ?? null,
+        pending?.wakeNight ? { wakeNight: pending.wakeNight, wakeKind: pending.wakeKind ?? null } : null,
+      );
       diagnostics({ event: "reply.recovered", agentId: partner.id, dueAt, mode });
     }
   }
 
   /** 到点了：生成一条回复落库（她不在也照发，等她回来看）。 */
   async function deliverScheduledReply(agentId, generation = threadGeneration(agentId)) {
+    let pending = store.getPendingReply(agentId);
+    if (pending?.wakeDecision === "deferred") {
+      pending = resolveDeferredWake(pending);
+      store.setPendingReply(agentId, pending);
+      diagnostics({ event: "sleep.wake.later-notice", agentId, messageId: pending.messageId });
+    }
     // 手机拿起来了、也点开了：这条（连同她之前连着发的那几条）就算看到过了
     const touched = store.markUserMessagesRead(agentId);
-    diagnostics({ event: "reply.read", agentId, touched });
-    const pending = store.getPendingReply(agentId);
+    diagnostics({ event: "reply.read", agentId, touched: touched.length });
+    commitWakeAtRead(agentId, {
+      touchedIds: touched,
+      wakeDecision: pending?.wakeDecision,
+      wakeNight: pending?.wakeNight,
+      wakeKind: pending?.wakeKind,
+    });
+    pending = store.getPendingReply(agentId) ?? pending;
     const made = await composeReply(agentId, {
       mayPass: true,
       repliedTo: pending?.messageId ?? null,
@@ -2622,8 +3325,21 @@ export function apply(ctx) {
         return { ok: true, silent: made.reason === "silent", passed: made.reason === "passed" };
       }
       diagnostics({ event: "reply.failed", agentId, reason: made.reason });
-      scheduleReplyAt(agentId, Date.now() + 5 * 60 * 1000, "retry", pending?.messageId ?? null);
+      scheduleReplyAt(
+        agentId,
+        Date.now() + 5 * 60 * 1000,
+        "retry",
+        pending?.messageId ?? null,
+        pending?.wakeDecision ?? null,
+        pending?.wakeNight ? { wakeNight: pending.wakeNight, wakeKind: pending.wakeKind ?? null } : null,
+      );
       return { ok: false, reason: made.reason };
+    }
+    const finalized = finalizeWakeReply(store.getPendingReply(agentId) ?? pending, made.messageId);
+    if (finalized) store.setPendingReply(agentId, finalized);
+    if (finalized?.wakeOutcome === "committed") {
+      commitWakeExceptionIfReady(agentId, finalized);
+      diagnostics({ event: "sleep.wake.committed", agentId, messageId: made.messageId });
     }
     store.clearPendingReply(agentId);
     const partners = await listPartners().catch(() => []);
@@ -2744,20 +3460,21 @@ export function apply(ctx) {
   }
 
   /** 她手动关掉横幅（或点了「知道了」）→ 这批翻篇，条子也从输入框上方摘下来。 */
-  function acknowledgeBatch(via) {
+  function acknowledgeBatch(via, eventSessionPath = null) {
     const banner = notifyState.banner;
     clearNotifyRetry();
     notifyState.batch = null;
     notifyState.banner = null;
+    // 热重载后内存里的 banner 可能已经没了，但宿主回传的会话路径仍然可靠。
     // 按钮点击宿主只管通知，「条子还留在原处」——摘下来得应用自己动手。
-    // 不摘的话她点了「知道了」那条还会一直挂在那里，看着就像点不动。
-    if (banner?.sessionPath) dismissBanner(banner.sessionPath);
+    const sessionPath = banner?.sessionPath || eventSessionPath;
+    if (sessionPath) dismissBanner(sessionPath);
     const at = new Date().toISOString();
     store.setBannerAck(at);
-    diagnostics({ event: "notify.ack", via, at });
+    diagnostics({ event: "notify.ack", via, at, sessionPath: sessionPath || null });
   }
 
-  function handleBannerBusEvent(event) {
+  function handleBannerBusEvent(event, eventSessionPath = null) {
     // 宿主回包只有文档里那一个形状是准的，但信封到底是挂在身上还是包一层 payload，
     // 不同版本不一定一样；这里两种都认，认不出来也不报错（只是把条子留着）。
     const payload = event?.payload ?? event?.data ?? event ?? {};
@@ -2765,7 +3482,7 @@ export function apply(ctx) {
     const bannerId = payload?.bannerId ?? event?.bannerId ?? null;
     // 以后要是茶话会再挂第二条横幅，别让它们互相误伤
     if (bannerId && bannerId !== BANNER_ID) return;
-    if (kind === "dismissed" || kind === "button") acknowledgeBatch(kind);
+    if (kind === "dismissed" || kind === "button") acknowledgeBatch(kind, eventSessionPath || payload?.sessionPath || event?.sessionPath || null);
   }
 
   /** 她换窗口了：横幅跟着人走。 */
@@ -3501,6 +4218,7 @@ export function apply(ctx) {
         personaText,
         memoryText,
         knowingText,
+        adaptationText: adaptationTextFor(agentId, knowing),
         stickerText,
         timeText,
         daybookText,
@@ -3592,13 +4310,31 @@ export function apply(ctx) {
     return file;
   }
 
+  // 纠错建议只在内存里短暂停留：前端拿到的是可预览文案，真正的 claims 不往界面暴露。
+  const adaptationDrafts = new Map();
+  const ADAPTATION_DRAFT_TTL_MS = 30 * 60 * 1000;
+  const adaptationSnapshot = (agentId) => {
+    const partnerBook = store.getPartnerAdaptation(agentId);
+    const userBook = store.getUserAdaptation();
+    return {
+      revisions: { relationship: partnerBook.revision, "user-wide": userBook.revision },
+      items: listAdaptationForUser({ partnerBook, userBook }),
+    };
+  };
+  const adaptationBookByScope = (agentId, scope) => scope === "user-wide"
+    ? store.getUserAdaptation()
+    : store.getPartnerAdaptation(agentId);
+  const saveAdaptationBookByScope = (agentId, scope, book) => scope === "user-wide"
+    ? store.saveUserAdaptation(book)
+    : store.savePartnerAdaptation(agentId, book);
+
   // ─────────────────────────── 路由 ───────────────────────────
 
   try {
     ctx.routes.register((app) => {
       // 伙伴级路由共用一扇门，避免某个新入口忘记单独校验 agentId。
       app.use("*", async (c, next) => {
-        const match = c.req.path.match(/^\/(?:thread|attachment|settings\/partner|memory|topics|action|knowing|background|backgrounds|sticker|avatar|recognition|persona-review)\/([^/]+)/);
+        const match = c.req.path.match(/^\/(?:thread|attachment|voice|settings\/partner|memory|topics|action|knowing|background|backgrounds|sticker|avatar|recognition|persona-review|adaptation)\/([^/]+)/);
         if (match) {
           let agentId = match[1];
           try { agentId = decodeURIComponent(agentId); } catch { agentId = ""; }
@@ -3648,6 +4384,78 @@ export function apply(ctx) {
         } catch (error) {
           return c.json({ ok: false, error: describeError(error) }, 500);
         }
+      });
+
+      app.get("/adaptation/:agentId", (c) => {
+        const agentId = c.req.param("agentId");
+        try {
+          return c.json({ ok: true, ...adaptationSnapshot(agentId) });
+        } catch (error) {
+          return c.json({ ok: false, error: { message: describeError(error) } }, 500);
+        }
+      });
+
+      app.post("/adaptation/:agentId/revoke", async (c) => {
+        const agentId = c.req.param("agentId");
+        const body = await c.req.json().catch(() => null);
+        const scope = body?.scope === "user-wide" ? "user-wide" : body?.scope === "relationship" ? "relationship" : "";
+        const guideId = String(body?.guideId ?? "").trim();
+        const expectedRevision = Math.max(0, Math.floor(Number(body?.expectedRevision) || 0));
+        if (!scope || !guideId) return c.json({ ok: false, error: { message: "要忘掉的理解不完整" } }, 400);
+        const current = adaptationBookByScope(agentId, scope);
+        if (current.revision !== expectedRevision) return c.json({ ok: false, error: { code: "ADAPTATION_STALE", message: "这份理解刚有变化，刷新后再试" } }, 409);
+        const revoked = revokeAdaptationGuide(current, guideId, new Date());
+        if (!revoked.ok) return c.json({ ok: false, error: { message: "这条理解已经不在当前列表里了" } }, 404);
+        saveAdaptationBookByScope(agentId, scope, revoked.book);
+        diagnostics({ event: "adaptation.user-revoked", agentId, scope, guideId });
+        return c.json({ ok: true, ...adaptationSnapshot(agentId) });
+      });
+
+      app.post("/adaptation/:agentId/suggest", async (c) => {
+        const agentId = c.req.param("agentId");
+        const body = await c.req.json().catch(() => null);
+        const scope = body?.scope === "user-wide" ? "user-wide" : body?.scope === "relationship" ? "relationship" : "";
+        const guideId = String(body?.guideId ?? "").trim();
+        const instruction = String(body?.instruction ?? "").trim().slice(0, 800);
+        const conversation = Array.isArray(body?.conversation) ? body.conversation.slice(-8) : [];
+        if (!scope || !guideId || !instruction) return c.json({ ok: false, error: { message: "先说说这条理解想怎么改" } }, 400);
+        const current = adaptationBookByScope(agentId, scope);
+        const guide = current.guides.find((row) => row.id === guideId && row.status === "active" && row.scope === scope);
+        if (!guide) return c.json({ ok: false, error: { code: "ADAPTATION_STALE", message: "这条理解刚有变化，刷新后再聊" } }, 409);
+        let partnerName = "";
+        try { partnerName = (await listAllPartners()).find((row) => row.id === agentId)?.name ?? ""; } catch { /* 名字拿不到不挡纠错 */ }
+        const spec = buildAdaptationCorrectionSpec({ guide, instruction, conversation, partnerName });
+        try {
+          const raw = await askCheap(spec.systemPrompt, spec.userText, 500);
+          const parsed = parseAdaptationCorrection(raw, { guide, userInstruction: instruction });
+          if (!parsed.ok) return c.json({ ok: false, error: { message: "这次建议没有守住原来的边界，换种说法再试试" } }, 422);
+          const draftId = `ad_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+          adaptationDrafts.set(draftId, { agentId, scope, guideId, baseRevision: current.revision, proposal: parsed.proposal, createdAt: Date.now() });
+          return c.json({ ok: true, draftId, before: guide.meaning, after: parsed.proposal.meaning, kind: parsed.proposal.kind, scope });
+        } catch (error) {
+          diagnostics({ event: "adaptation.correction-suggest.failed", agentId, scope, guideId, error: describeError(error) });
+          return c.json({ ok: false, error: { message: "这次建议没生成出来，刚才聊的内容还在，可以再试" } }, 502);
+        }
+      });
+
+      app.post("/adaptation/:agentId/apply", async (c) => {
+        const agentId = c.req.param("agentId");
+        const body = await c.req.json().catch(() => null);
+        const draftId = String(body?.draftId ?? "").trim();
+        const draft = adaptationDrafts.get(draftId);
+        if (!draft || draft.agentId !== agentId || Date.now() - draft.createdAt > ADAPTATION_DRAFT_TTL_MS) {
+          return c.json({ ok: false, error: { code: "ADAPTATION_DRAFT_EXPIRED", message: "这份建议已经过期，聊天内容还在，重新生成一次就好" } }, 409);
+        }
+        const current = adaptationBookByScope(agentId, draft.scope);
+        const applied = applyAdaptationCorrection(current, { guideId: draft.guideId, baseRevision: draft.baseRevision, proposal: draft.proposal, now: new Date() });
+        if (!applied.ok) {
+          const stale = applied.reason === "stale" || applied.reason === "not-found";
+          return c.json({ ok: false, error: { code: stale ? "ADAPTATION_STALE" : "ADAPTATION_INVALID", message: stale ? "这份理解刚有变化，当前建议没有写入；刷新后再生成一次" : "这份建议不能安全应用，原内容没有改变" } }, 409);
+        }
+        saveAdaptationBookByScope(agentId, draft.scope, applied.book);
+        adaptationDrafts.delete(draftId);
+        diagnostics({ event: "adaptation.correction-applied", agentId, scope: draft.scope, guideId: draft.guideId, replacementId: applied.guide.id });
+        return c.json({ ok: true, ...adaptationSnapshot(agentId) });
       });
 
       app.get("/thread/:agentId", async (c) => {
@@ -3814,6 +4622,13 @@ export function apply(ctx) {
             cancelScheduledReply(agentId);
           }
         }
+        store.revokePartnerGuidesBySource(agentId, messageId);
+        store.revokeUserGuidesBySource(messageId);
+        const pending = store.getPendingReply(agentId);
+        if ((pending?.triggerMessageId ?? pending?.messageId) === messageId) cancelScheduledReply(agentId);
+        for (const [key, generation] of voiceGenerations) {
+          if (generation.agentId === agentId && generation.triggerMessageId === messageId) voiceGenerations.delete(key);
+        }
         diagnostics({ event: "message.retracted", agentId, messageId, read: verdict.read });
         return c.json({ ok: true, mode: verdict.read ? "placeholder" : "removed", message: result, expiresAt: verdict.expiresAt });
       });
@@ -3826,6 +4641,61 @@ export function apply(ctx) {
         return c.body(attachment.data, 200, {
           "content-type": attachment.mimeType,
           "cache-control": "private, max-age=31536000, immutable",
+        });
+      });
+
+      app.post("/voice/test", async (c) => {
+        try {
+          const body = await c.req.json().catch(() => ({}));
+          const submittedConfig = normalizeVoiceModelConfig(body?.modelConfig);
+          if (submittedConfig.apiKey === "********") {
+            submittedConfig.apiKey = activeVoiceModel(store.getGlobalSettings()).apiKey || "";
+          }
+          const result = await synthesizeVoice(ctx, {
+            text: String(body?.text || "你好呀，这是茶话会的语音试听。" ).slice(0, 120),
+            voiceId: String(body?.voiceId || "female-shaonv"),
+            modelConfig: submittedConfig,
+          });
+          return c.body(result.audio, 200, {
+            "content-type": result.format === "mp3" ? "audio/mpeg" : "audio/wav",
+            "cache-control": "no-store",
+            "x-chahuahui-voice-model": result.model || "",
+          });
+        } catch (error) {
+          return c.json({ ok: false, error: { message: String(error?.message ?? error).slice(0, 240) } }, 400);
+        }
+      });
+
+      app.post("/voice/:agentId/:messageId/played", (c) => {
+        const agentId = String(c.req.param("agentId") ?? "").trim();
+        const messageId = String(c.req.param("messageId") ?? "").trim();
+        const message = store.getThread(agentId).messages.find((row) => row.id === messageId);
+        if (!message?.voice || message.voice.status !== "ready") {
+          return c.json({ ok: false, error: { message: "这条语音还没准备好" } }, 404);
+        }
+        const playedAt = message.voice.playedAt || new Date().toISOString();
+        const updated = store.patchMessage(agentId, messageId, { voice: { ...message.voice, playedAt } });
+        diagnostics({ event: "voice.played", agentId, messageId });
+        return c.json({ ok: true, playedAt, message: updated });
+      });
+
+      app.get("/voice/:agentId/:messageId", (c) => {
+        const agentId = String(c.req.param("agentId") ?? "").trim();
+        const messageId = String(c.req.param("messageId") ?? "").trim();
+        const message = store.getThread(agentId).messages.find((row) => row.id === messageId);
+        const format = message?.voice?.format === "mp3" ? "mp3" : "wav";
+        const file = voiceFile(agentId, messageId, format);
+        if (!file || !message?.voice || message.voice.status !== "ready" || !fs.existsSync(file)) {
+          return c.json({ ok: false, error: { message: "这条语音还没准备好" } }, 404);
+        }
+        if (!Number.isFinite(message.voice.durationMs) || message.voice.durationMs <= 0) {
+          const durationMs = audioDurationMs(fs.readFileSync(file), format);
+          if (durationMs) store.patchMessage(agentId, messageId, { voice: { ...message.voice, durationMs } });
+        }
+        return c.body(fs.readFileSync(file), 200, {
+          "content-type": format === "mp3" ? "audio/mpeg" : "audio/wav",
+          "cache-control": "private, max-age=31536000, immutable",
+          "accept-ranges": "bytes",
         });
       });
 
@@ -3898,6 +4768,14 @@ export function apply(ctx) {
           ...(isSticker ? { kind: "sticker", bubbles: userBubbles } : {}),
           ...(attachment ? { attachment: { id: attachment.id, name: attachment.name, mimeType: attachment.mimeType, size: attachment.size }, visionNote } : {}),
         });
+        // 明确偏好先只做本地候选预筛：普通聊天不额外叫模型，候选也必须绑定已落盘的用户消息 id。
+        const adaptationHint = adaptationCandidate(messageText);
+        if (adaptationHint.candidate) {
+          diagnostics({ event: "adaptation.candidate", agentId, sourceMessageId: stored.id, signals: adaptationHint.signals });
+          await reconcileAdaptationFromUserMessage(agentId, stored);
+        }
+        // 弱观察只看用户真实发过的多日行为；explicit 刚落账时会先把同目标观察挡住。
+        observeAdaptationFromHistory(agentId);
         const responseInFlight = [...turns.values()].some((turn) => turn.agentId === agentId && ["pending", "generating"].includes(turn.status))
           || pendingReplies.has(agentId)
           || deliveringReplies.has(agentId)
@@ -3915,25 +4793,35 @@ export function apply(ctx) {
 
         // 手机在不在ta手里是ta自己的事，不看她；这里只把ta那份状态推进到现在
         const settings = store.getPartnerSettings(agentId);
+        const nowDate = new Date();
+        const knowingForReply = store.getKnowing(agentId);
+        const partnerAdaptation = store.getPartnerAdaptation(agentId);
+        const userAdaptation = store.getUserAdaptation();
+        const sleepValue = directReplyToProactive ? null : settings.sleep;
+        const sleepingNow = dozingNow(nowDate, sleepValue);
+        const sleepPolicy = sleepingNow.dozing
+          ? resolveSleepPolicy({
+              relationship: effectiveRelationship(knowingForReply),
+              personality: knowingForReply.personality,
+              guides: [...userAdaptation.guides, ...partnerAdaptation.guides],
+              context: { kind: /难过|急|重要/u.test(messageText) ? "distressed" : "normal", currentTurnId: stored.id, lifeDay: dayKey(nowDate) },
+              runtime: { sameDayExceptionCount: Number(settings.wakeCount ?? 0), ...adaptationFeedbackRuntime(agentId) },
+              random: Math.random,
+            })
+          : null;
         const plan = planReply({
           phone: settings.phone,
-          now: new Date(),
+          now: nowDate,
           // 主动消息已经把伙伴带进醒着的聊天场景，直接回复不能再次算作吵醒。
-          sleep: directReplyToProactive ? null : settings.sleep,
+          sleep: sleepValue,
+          sleepPolicy: sleepPolicy ? { ...sleepPolicy, wakeDecision: sleepPolicy.wakeDecision?.decision ?? sleepPolicy.wakeDecision } : null,
         });
-        store.setPartnerSettings(agentId, { phone: plan.phone });
-
-        // ta在睡、她这时候发消息，就是把人家弄醒了：按「这一觉」记一笔，脾气一次比一次大
-        if (plan.mode === "dozing") {
-          const nowDate = new Date();
-          const night = windowStartDate(nowDate, plan.window) ?? dailyKey(nowDate);
-          const before = store.getPartnerSettings(agentId);
-          store.setPartnerSettings(agentId, {
-            wakeNight: night,
-            wakeCount: before.wakeNight === night ? Number(before.wakeCount ?? 0) + 1 : 1,
-          });
-          diagnostics({ event: "dozing.woken", agentId, kind: plan.kind ?? null, night });
+        if (sleepPolicy) {
+          const evidence = adaptationEvidence(agentId, sleepPolicy.guideIds);
+          plan.guideIds = evidence.guideIds;
+          plan.sourceMessageIds = evidence.sourceMessageIds;
         }
+        store.setPartnerSettings(agentId, { phone: plan.phone });
 
         if (responseInFlight) {
           diagnostics({ event: "turn.queued", agentId, reason: "response-in-flight", messageId: stored.id });
@@ -3943,7 +4831,7 @@ export function apply(ctx) {
         // 面对面（醒着、手机在手）和打盹都演实时那套——打盹只是演得慢：
         // 半天才变已读，打字也磨蹭。递出去不演的那些（手机不在手）就只记一个时刻。
         const watching = body?.watching === true;
-        const live = plan.mode === "hand" || plan.mode === "dozing";
+        const live = plan.mode === "hand" || (plan.mode === "dozing" && plan.wakeDecision !== "deferred");
         if (!live || !watching) {
           scheduleReply(agentId, { plan, messageId: stored.id });
           diagnostics({ event: "turn.queued", agentId, mode: plan.mode, watching });
@@ -3960,10 +4848,20 @@ export function apply(ctx) {
           threadGeneration: threadGeneration(agentId),
         };
         // 实时生成也要先留恢复凭证；关机时 readAt 可能已经落盘，但回合本身还没结束。
+        const wakeNight = plan.window ? windowStartDate(nowDate, plan.window) ?? dailyKey(nowDate) : null;
         store.setPendingReply(agentId, {
           dueAt: new Date().toISOString(),
           mode: `live-${plan.mode}`,
           messageId: stored.id,
+          triggerMessageId: stored.id,
+          wakeOutcome: "pending",
+          ...(plan.wakeDecision ? { wakeDecision: plan.wakeDecision } : {}),
+          ...(plan.wakeDecision && plan.wakeDecision !== "deferred" ? {
+            wakeNight,
+            wakeKind: plan.kind ?? null,
+            guideIds: plan.guideIds ?? [],
+            sourceMessageIds: plan.sourceMessageIds ?? [],
+          } : {}),
         });
         turns.set(turn.id, turn);
         void runTurn(turn);
@@ -3982,7 +4880,13 @@ export function apply(ctx) {
         // 不落盘的话，她一刷新就不知道读过没读过——只在屏幕上演一遍是不算数的。
         const readTimer = setTimeout(() => {
           const touched = store.markUserMessagesRead(agentId);
-          diagnostics({ event: "turn.read", agentId, mode: plan.mode, touched });
+          diagnostics({ event: "turn.read", agentId, mode: plan.mode, touched: touched.length });
+          commitWakeAtRead(agentId, {
+            touchedIds: touched,
+            wakeDecision: plan.wakeDecision,
+            wakeNight,
+            wakeKind: plan.kind ?? null,
+          });
         }, readAfterMs);
         readTimer.unref?.();
 
@@ -4041,6 +4945,9 @@ export function apply(ctx) {
             partners,
             models,
             visionModels,
+            voiceChoices: voiceChoicesForModel(store.getGlobalSettings().voiceModel),
+            voiceTiers: VOICE_TIERS,
+            voicePresets: VOICE_PRESETS,
             hiddenPartners: hidden.map(({ id, name, unavailable = false }) => ({ id, name, unavailable })),
             styles: ACTION_STYLES.map((s) => ({ id: s.id, label: s.label, verb: s.verb, emoji: s.emoji })),
           });
@@ -4088,7 +4995,15 @@ export function apply(ctx) {
         try {
           const body = await c.req.json();
           const wasDaybookOn = daybookOn();
-          store.setGlobalSettings(normalizeGlobalSettingsPatch(body));
+          const globalPatch = normalizeGlobalSettingsPatch(body);
+          if (globalPatch.voiceProfiles) {
+            const currentProfiles = store.getGlobalSettings().voiceProfiles || {};
+            for (const [id, profile] of Object.entries(globalPatch.voiceProfiles)) {
+              if (profile.config?.apiKey && profile.config.apiKey !== "********") profile.config.apiKey = await protectKey(profile.config.apiKey);
+              else profile.config.apiKey = currentProfiles[id]?.config?.apiKey || "";
+            }
+          }
+          store.setGlobalSettings(globalPatch);
           // 今日情境从关到开：清掉「今天已经露过」的记账。
           // 她打开就是为了让伙伴知道今天的事，不该因为同一天早先露过而当场没反应。
           if (!wasDaybookOn && daybookOn()) {
@@ -4099,7 +5014,11 @@ export function apply(ctx) {
             }
           }
           await loadUserName();
-          return c.json({ ok: true, global: globalSettingsView() });
+          return c.json({
+            ok: true,
+            global: globalSettingsView(),
+            voiceChoices: voiceChoicesForModel(store.getGlobalSettings().voiceModel),
+          });
         } catch (error) {
           return c.json({ ok: false, error: describeError(error) }, 400);
         }
@@ -5408,7 +6327,7 @@ export function apply(ctx) {
           }
           return;
         }
-        if (type === `plugin-v2:${name}:banner`) handleBannerBusEvent(event);
+        if (type === `plugin-v2:${name}:banner`) handleBannerBusEvent(event, sessionPath);
       },
       { types: ["turn_start", "message_end", `plugin-v2:${name}:banner`] },
     );
@@ -5438,8 +6357,10 @@ export function apply(ctx) {
   recover.unref?.();
   // 起来一会儿后再看第一眼（不是立刻）
   const kick = setTimeout(() => {
-    void runProactiveTick().catch(() => {});
-    void runAwaitingTick().catch(() => {});
+    void ensureLegacyFactsMigration().catch(() => {}).finally(() => {
+      void runProactiveTick().catch(() => {});
+      void runAwaitingTick().catch(() => {});
+    });
   }, 90 * 1000);
   kick.unref?.();
 }

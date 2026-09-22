@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import test from "node:test";
 import assert from "node:assert/strict";
+import { canonicalGuide } from "./helpers/adaptation.js";
 
 import {
   buildCatalog,
+  applyStickerPolicy,
   buildStickerHint,
   encodeStickerBubble,
   hasUsableTags,
@@ -16,6 +18,7 @@ import {
   readCatalogWithReason,
   recentStickerIds,
   referenceWords,
+  resolveStickerPolicy,
   sourceRowById,
   stickerAbsolutePath,
   stickerIdFromBubble,
@@ -116,6 +119,56 @@ test("打分：命中情绪标签高于命中场景，未命中返回空", () =>
   assert.equal(byEmotion[0].score > byScene[0].score, true);
   assert.deepEqual(matchStickers(catalog.stickers, "完全不存在的词"), []);
   assert.deepEqual(matchStickers(catalog.stickers, ""), []);
+});
+
+test("canonical specific allow 经归一后只影响对应稳定 subject，不改原图库", () => {
+  const catalog = buildCatalog(INDEX, "someone-else");
+  const policy = resolveStickerPolicy({
+    guides: [canonicalGuide({
+      id: "allow-stk-3",
+      meaning: "这张可以用",
+      kind: "permission",
+      claims: [{ target: "sticker.permission", effect: "allow", value: "specific", subject: "source:stk_3" }],
+    })],
+  });
+  const filtered = applyStickerPolicy(catalog, policy);
+  assert.deepEqual(filtered.stickers.map((row) => row.id), ["stk_3"]);
+  assert.deepEqual(catalog.stickers.map((row) => row.id), ["stk_1", "stk_2", "stk_3", "stk_4"]);
+});
+
+test("canonical specific deny 只排除对应图，且本地 veto 仍优先", () => {
+  const catalog = buildCatalog(INDEX, "someone-else");
+  const policy = resolveStickerPolicy({
+    guides: [canonicalGuide({
+      id: "deny-stk-1",
+      meaning: "别用这张",
+      kind: "boundary",
+      claims: [{ target: "sticker.permission", effect: "deny", value: "specific", subject: "source:stk_1" }],
+    })],
+  });
+  const filtered = applyStickerPolicy(catalog, policy);
+  assert.deepEqual(filtered.stickers.map((row) => row.id), ["stk_2", "stk_3", "stk_4"]);
+  assert.equal(pickSticker(filtered, { keyword: "无语" })?.id, "stk_2");
+});
+
+test("具体表情的负反馈立即撤掉关系许可并封住同一张，不误伤图库其他图", () => {
+  const catalog = buildCatalog(INDEX, "someone-else");
+  const policy = resolveStickerPolicy({
+    guides: [canonicalGuide({ claims: [{ target: "sticker.permission", effect: "allow", value: "specific", subject: "source:stk_3" }] })],
+    runtime: { negativeStickerSubjects: ["source:stk_3"] },
+  });
+  assert.deepEqual(applyStickerPolicy(catalog, policy).stickers.map((row) => row.id), ["stk_1", "stk_2", "stk_4"]);
+});
+
+test("specific allow 缺稳定 subject 时安全关闭，不退化成整库放行", () => {
+  const catalog = buildCatalog(INDEX, "someone-else");
+  const policy = resolveStickerPolicy({
+    guides: [canonicalGuide({
+      kind: "permission",
+      claims: [{ target: "sticker.permission", effect: "allow", value: "specific" }],
+    })],
+  });
+  assert.deepEqual(applyStickerPolicy(catalog, policy).stickers, []);
 });
 
 test("挑图：同一档里随机，且优先避开最近发过的", () => {

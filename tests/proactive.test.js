@@ -12,6 +12,7 @@ import {
   gateCheck,
   inWindow,
   dailyKey,
+  applyProactiveInterval,
   normalizeGateMax,
   noteSent,
   planFor,
@@ -29,6 +30,7 @@ import {
   textSimilarity,
   wakeEchoFor,
   recentSceneFor,
+  resolveProactivePolicy,
 } from "../lib/proactive.js";
 
 const at = (h, m = 0) => new Date(2026, 8, 12, h, m);
@@ -84,6 +86,35 @@ test("档位间隔：低的比高的稀", () => {
   assert.ok(TIER_PLANS.rare.minMs > TIER_PLANS.clingy.maxMs);
   assert.equal(planFor("clingy").label, "很黏人");
   assert.equal(planFor("不存在的档位").label, "偶尔聊聊就好");
+});
+
+test("关系主动策略：none 阻断，more / baseline / less 只单调调整软间隔", () => {
+  const guide = (value, extra = {}) => ({
+    id: `g-${value}`,
+    meaning: value,
+    kind: value === "none" ? "boundary" : "preference",
+    scope: "relationship",
+    duration: "persistent",
+    origin: "explicit",
+    status: "active",
+    sourceMessageIds: [`m-${value}`],
+    claims: [{ target: "proactive.frequency", effect: value === "none" ? "deny" : "prefer", value }],
+    createdAt: "2026-09-22T08:00:00.000Z",
+    ...extra,
+  });
+  const more = resolveProactivePolicy({ guides: [guide("more")] });
+  const baseline = resolveProactivePolicy();
+  const less = resolveProactivePolicy({ guides: [guide("less")] });
+  const none = resolveProactivePolicy({ guides: [guide("none")] });
+  assert.equal(none.allowed, false);
+  assert.ok(applyProactiveInterval(1000, more) < applyProactiveInterval(1000, baseline));
+  assert.ok(applyProactiveInterval(1000, baseline) < applyProactiveInterval(1000, less));
+});
+
+test("关系 more 不能突破全局日上限和静默时段", () => {
+  const policy = { allowed: true, intervalFactor: 0.75 };
+  assert.equal(gateCheck({ now: at(12), settings: {}, globalSettings: { globalGate: { maxPerDay: 1 }, quiet: DEFAULT_QUIET }, globalState: { sentToday: { day: dailyKey(at(12)), count: 1 } }, relationalPolicy: policy }).reason, "global-daily-max");
+  assert.equal(gateCheck({ now: at(23, 30), settings: {}, globalSettings: { quiet: DEFAULT_QUIET }, relationalPolicy: policy }).reason, "quiet");
 });
 
 test("落点在区间内随机，不是固定周期", () => {

@@ -5,6 +5,8 @@ import {
   BACK_JITTER_MAX_MS,
   DOZE_NOTICE_MAX_MS,
   DOZE_NOTICE_MIN_MS,
+  DEFERRED_NOTICE_MAX_MS,
+  DEFERRED_NOTICE_MIN_MS,
   HEARD_MAX_MS,
   HEARD_MIN_MS,
   HERE_MAX_MS,
@@ -90,6 +92,21 @@ test("合并排期：取更早的那个，不往后推", () => {
   assert.equal(mergeDueAt(500, null), 500);
   assert.equal(mergeDueAt(900, 500), 500, "她在接着说，就该早点接，不往后拖");
   assert.equal(mergeDueAt(500, 900), 500);
+});
+
+test("睡眠策略落到 deferred 时，不启动实时回合，只排一段有限的后来看到", () => {
+  const sleep = { start: "01:00", hours: 6 };
+  const plan = planReply({
+    phone: holding,
+    now: at(2),
+    sleep,
+    sleepPolicy: { wakeDecision: "deferred", hardDelayCapMs: 30 * 60 * 1000 },
+    rnd: fixed(0),
+  });
+  assert.equal(plan.mode, "dozing");
+  assert.equal(plan.wakeDecision, "deferred");
+  assert.equal(plan.delayMs, Math.min(DEFERRED_NOTICE_MIN_MS, 30 * 60 * 1000));
+  assert.ok(plan.delayMs <= DEFERRED_NOTICE_MAX_MS);
 });
 
 test("ta在睡：不等ta醒，只是半天才摸到手机——拿没拿着都一样", () => {

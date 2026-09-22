@@ -7,11 +7,24 @@ import path from "node:path";
 import { createStore } from "../lib/store.js";
 import { applyPersonalityPreset, hasPersonality } from "../lib/knowing.js";
 import { createRelationship } from "../lib/relationship.js";
+import { applyStickerPolicy, resolveStickerPolicy } from "../lib/stickers.js";
+import { canonicalGuide } from "./helpers/adaptation.js";
+
+const storeSource = fs.readFileSync(new URL("../lib/store.js", import.meta.url), "utf8");
 
 function freshStore() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chahuahui-store-"));
   return { store: createStore(dir), dir };
 }
+
+test("旧档位 id 存的音色会跟到迁移后的朗读模型条目上", () => {
+  const { store } = freshStore();
+  store.setPartnerSettings("hanako", { voice: { enabled: true, voiceId: "female-shaonv", voiceByProfile: { minimax: "Chinese (Mandarin)_Warm_Girl" } } });
+  assert.equal(store.getPartnerSettings("hanako").voice.voiceByProfile["custom-minimax"], "Chinese (Mandarin)_Warm_Girl");
+  // 新键已经有值时不跟着旧键走
+  store.setPartnerSettings("mimo-fan", { voice: { enabled: true, voiceByProfile: { "custom-minimax": "Chinese (Mandarin)_Soft_Girl", minimax: "Chinese (Mandarin)_Warm_Girl" } } });
+  assert.equal(store.getPartnerSettings("mimo-fan").voice.voiceByProfile["custom-minimax"], "Chinese (Mandarin)_Soft_Girl");
+});
 
 test("茶话会本地角色只存自己的账本，重开仍能读到", () => {
   const { store, dir } = freshStore();
@@ -384,6 +397,129 @@ test("伙伴 id 里有奇怪字符直接拒绝，不会生成替代账本", () =
 
 });
 
+test("关系适应账独立于 knowing，重启后仍保留并隔离伙伴", () => {
+  const { store, dir } = freshStore();
+  const guide = {
+    id: "g-voice",
+    meaning: "我喜欢你多发一点语音",
+    kind: "preference",
+    scope: "relationship",
+    duration: "persistent",
+    origin: "explicit",
+    sourceMessageIds: ["m-pref"],
+    claims: [{ target: "voice.frequency", effect: "prefer", value: "more" }],
+    createdAt: "2026-09-22T00:00:00.000Z",
+  };
+  const firstSaved = store.savePartnerAdaptation("nova", { guides: [guide], exceptions: [{ id: "ex-1", behavior: "voice.frequency", resultMessageId: "m-reply" }], migration: { factsV1CompletedAt: "2026-09-22T12:00:00.000Z", sourceIds: ["m-pref"] } });
+  const secondSaved = store.updatePartnerAdaptation("nova", (book) => book);
+  store.saveUserAdaptation({ guides: [{ ...guide, id: "g-wide", scope: "user-wide" }] });
+  const reopened = createStore(dir);
+  assert.equal(firstSaved.revision, 1);
+  assert.equal(secondSaved.revision, 2, "每次关系账写入都要推进 revision，旧建议才能被识别");
+  assert.equal(reopened.getPartnerAdaptation("nova").guides[0].id, "g-voice");
+  assert.equal(reopened.getPartnerAdaptation("nova").migration.factsV1CompletedAt, "2026-09-22T12:00:00.000Z");
+  assert.deepEqual(reopened.getPartnerAdaptation("nova").migration.sourceIds, ["m-pref"]);
+  assert.equal(reopened.getUserAdaptation().guides[0].scope, "user-wide");
+  assert.equal(reopened.getPartnerAdaptation("other").guides.length, 0);
+  assert.equal(reopened.getKnowing("nova").relationship.familiarity.turns, 0);
+});
+
+test("伙伴目录枚举失败时保留 user-wide 恢复账，不能把扫描失败冒充零伙伴", () => {
+  assert.match(storeSource, /catch \{ return null; \}[\s\S]*?if \(!partnerIds\) return false;/);
+});
+
+test("user-wide guide 忘掉或被取代时，会回退所有伙伴账本里的派生 habit", () => {
+  const { store } = freshStore();
+  const guide = {
+    id: "g-wide",
+    meaning: "所有伙伴都先给建议",
+    kind: "preference",
+    scope: "user-wide",
+    duration: "persistent",
+    origin: "explicit",
+    sourceMessageIds: ["m-wide"],
+    claims: [{ target: "reply.advice-style", effect: "prefer", value: "advice-first" }],
+    status: "active",
+    createdAt: "2026-09-20T00:00:00.000Z",
+  };
+  store.saveUserAdaptation({ guides: [guide] });
+  for (const agentId of ["nova", "luna"]) {
+    store.savePartnerAdaptation(agentId, {
+      exceptions: [{ id: `ex-${agentId}`, behavior: "reply.advice-style", guideIds: ["g-wide"], outcome: "committed" }],
+      habitChanges: [{ key: "reply.advice-style", guideIds: ["g-wide"], state: "settled" }],
+    });
+  }
+  store.savePartnerAdaptation("terra", {
+    guides: [{ ...guide, scope: "relationship" }],
+    exceptions: [{ id: "ex-terra", behavior: "reply.advice-style", guideIds: ["g-wide"], outcome: "committed" }],
+    habitChanges: [{ key: "reply.advice-style", guideIds: ["g-wide"], state: "settled" }],
+  });
+  const repaired = store.saveUserAdaptation({ guides: [{ ...guide, status: "revoked", revokedAt: "2026-09-22T12:00:00.000Z" }], pendingInvalidationGuideIds: ["g-wide"] });
+  assert.deepEqual(repaired.pendingInvalidationGuideIds, [], "跨账本回退完成后才清恢复账；若中断，下次启动会重试");
+  for (const agentId of ["nova", "luna"]) {
+    const book = store.getPartnerAdaptation(agentId);
+    assert.equal(book.exceptions[0].sourceGuideRevoked, true);
+    assert.equal(book.habitChanges[0].state, "reverted");
+  }
+  assert.equal(store.getPartnerAdaptation("terra").habitChanges[0].state, "settled", "极旧数据跨 scope 撞 ID 时不能误伤仍 active 的伙伴级 guide");
+});
+
+test("统一 exception 入口按稳定 id 幂等提交，近同时写入不同破例不会互相覆盖", () => {
+  const { store } = freshStore();
+  store.commitException("nova", { id: "voice.frequency|m-v", behavior: "voice.frequency", resultMessageId: "m-v", outcome: "committed" });
+  store.commitException("nova", { id: "sticker.permission|m-s", behavior: "sticker.permission", resultMessageId: "m-s", outcome: "committed" });
+  store.commitException("nova", { id: "voice.frequency|m-v", behavior: "voice.frequency", resultMessageId: "m-v", description: "补齐描述", outcome: "committed" });
+  const rows = store.getPartnerAdaptation("nova").exceptions;
+  assert.equal(rows.length, 2);
+  assert.equal(rows.find((row) => row.id === "voice.frequency|m-v").description, "补齐描述");
+  const finalized = store.finalizeException("nova", "sticker.permission|m-s", { consolidated: true });
+  assert.equal(finalized.exceptions.find((row) => row.id === "sticker.permission|m-s").consolidated, true);
+});
+
+test("表情包 stable subject 经 store 往返后仍能进入正式策略过滤", () => {
+  const { store } = freshStore();
+  store.savePartnerAdaptation("nova", {
+    guides: [canonicalGuide({
+      id: "allow-one-sticker",
+      meaning: "这张可以用",
+      kind: "permission",
+      claims: [{ target: "sticker.permission", effect: "allow", value: "specific", subject: "source:stk-2" }],
+    })],
+  });
+  const policy = resolveStickerPolicy({ guides: store.getPartnerAdaptation("nova").guides });
+  const catalog = {
+    stickers: [{ id: "stk-1" }, { id: "stk-2" }],
+    byId: new Map([["stk-1", { id: "stk-1" }], ["stk-2", { id: "stk-2" }]]),
+    preferred: new Set(["stk-1", "stk-2"]),
+  };
+  assert.deepEqual(applyStickerPolicy(catalog, policy).stickers.map((row) => row.id), ["stk-2"]);
+});
+
+test("关系适应账撤回来源会同时撤伙伴级与 user-wide guide，并回退引用习惯", () => {
+  const { store } = freshStore();
+  const book = {
+    guides: [{ id: "g-1", meaning: "先陪我", origin: "explicit", sourceMessageIds: ["m-1"] }],
+    exceptions: [{ id: "ex-1", behavior: "reply.advice-style", outcome: "committed", guideIds: ["g-1"], committedAt: "2026-09-22T00:30:00.000Z", lifeDay: "2026-09-22" }],
+    feedbackEvents: [{ id: "fb-1", exceptionId: "ex-1", type: "explicit-like", polarity: "positive", sourceMessageId: "m-1", lifeDay: "2026-09-22", at: "2026-09-22T00:35:00.000Z" }],
+    habitChanges: [{ key: "reply.advice-style", description: "先陪再分析", state: "emerging", guideIds: ["g-1"] }],
+  };
+  store.savePartnerAdaptation("nova", book);
+  store.saveUserAdaptation({
+    ...book,
+    guides: [{ ...book.guides[0], id: "g-wide", scope: "user-wide" }],
+    habitChanges: [{ ...book.habitChanges[0], guideIds: ["g-wide"] }],
+  });
+  const at = new Date("2026-09-22T08:35:00+08:00");
+  const next = store.revokePartnerGuidesBySource("nova", "m-1", at);
+  const wide = store.revokeUserGuidesBySource("m-1", at);
+  assert.equal(next.guides[0].status, "revoked");
+  assert.equal(next.habitChanges[0].state, "reverted");
+  assert.equal(next.exceptions[0].sourceGuideRevoked, true);
+  assert.equal(next.feedbackEvents.length, 0);
+  assert.equal(wide.guides[0].status, "revoked");
+  assert.equal(wide.habitChanges[0].state, "reverted");
+});
+
 test("关系账、性格和爱好各存一本，重启还在", () => {
   const { store, dir } = freshStore();
   const fresh = store.getKnowing("nova");
@@ -475,8 +611,8 @@ test("ta看到她的话要盖个 readAt：刷新还在，没看到就是没看�
   assert.equal(store.getThread("nova").messages.every((m) => !m.readAt), true, "刚发出去都还是未读");
 
   const at = "2026-09-13T01:00:00.000Z";
-  assert.equal(store.markUserMessagesRead("nova", at), 3, "三条她的话都算看到过了");
-  assert.equal(store.markUserMessagesRead("nova", at), 0, "再盖一遍不该重复计");
+  assert.deepEqual(store.markUserMessagesRead("nova", at).length, 3, "三条她的话都算看到过了");
+  assert.deepEqual(store.markUserMessagesRead("nova", at), [], "再盖一遍不该重复计");
 
   const thread = store.getThread("nova");
   for (const row of thread.messages.filter((m) => m.role === "user")) assert.equal(row.readAt, at);
