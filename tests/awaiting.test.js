@@ -17,6 +17,18 @@ import {
 
 const MIN = 60_000;
 
+test("等回音提示词会带入相处理解", () => {
+  const spec = nudgeSpec({
+    partnerName: "小花",
+    userName: "阿舟",
+    stage: "ask",
+    waitedMinutes: 20,
+    adaptationText: "【你们相处出来的理解】\\n偏好：先接具体话头，不要空问候",
+  });
+  assert.match(spec.systemPrompt, /你们相处出来的理解/);
+  assert.match(spec.systemPrompt, /先接具体话头/);
+});
+
 test("催的力度按熟悉度分三档：不熟不催，熟了才能连发", () => {
   assert.equal(awaitingStage(0), "off");
   assert.equal(awaitingStage(AWAITING_MIN_RATIO - 0.01), "off");
@@ -114,6 +126,18 @@ test("生产里的 ISO 时间戳也能进入等回音", () => {
     { role: "assistant", text: "回了嘛，你还要接着说吗？", at: new Date(now - 55 * MIN).toISOString() },
   ];
   assert.equal(planNudge({ history, now, ratio: 0.2, rnd: () => 0.5 }).due, true);
+});
+
+test("等回音共用主动关系策略：none 不催，more 比 less 更早到点", () => {
+  const now = 1_700_000_000_000;
+  const since = now - 35 * MIN;
+  const history = [
+    { role: "user", text: "我去倒杯水", at: new Date(since - MIN).toISOString() },
+    { role: "assistant", text: "要得，你回来还想接着说吗？", at: new Date(since).toISOString() },
+  ];
+  assert.equal(planNudge({ history, now, ratio: 0.4, contactPolicy: { allowed: false, intervalFactor: 1 } }).reason, "relationship-denied");
+  assert.equal(planNudge({ history, now, ratio: 0.4, rnd: () => 0.5, contactPolicy: { allowed: true, intervalFactor: 0.75 } }).due, true);
+  assert.equal(planNudge({ history, now, ratio: 0.4, rnd: () => 0.5, contactPolicy: { allowed: true, intervalFactor: 1.5 } }).due, false);
 });
 
 test("该不该催：不熟、催满了、没在等、时间没到，都不催", () => {

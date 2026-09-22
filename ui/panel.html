@@ -280,6 +280,7 @@
     let partnersLoadSeq = 0;
     /** 已经画过的消息 id，用来增量补新消息（戳一下之后要等ta回应） */
     let seenIds = new Set();
+    const voiceStates = new Map();
     /** 聊天窗里要不要给两边挂头像（设置里开的，默认关，跟以前一样） */
     let showMessageAvatars = false;
     /** 默认关闭：打开后才给伙伴回复显示重新生成/编辑入口。 */
@@ -314,16 +315,28 @@
      * 手动那笔只在她当时那一档宽度里算数，跨过档位就还给自动，不然一次点击会按着窄窗不让收。
      */
     const FOLD_KEY = "chahuahui.listCollapsed";
+    const FOLD_PAGE_KEY = `${FOLD_KEY}.page`;
     const FOLD_AUTO_WIDTH = 820;
     /** 窄到这个份上展板就浮到聊天区上（跟 CSS 里那条断点对齐），选完伙伴自己收 */
     const NARROW_WIDTH = 600;
-    /** 她手动点的收/展；null = 没点过，跟着窗口宽窄走 */
+    /** page / embedded / unknown；unknown 只表示宿主信号还没到，不是第三种布局 */
+    let surfaceMode = "unknown";
+    /** 她手动点的收/展；null = 没点过，跟着当前布局的自动规则走 */
     let foldManual = null;
     /** 上一回的自动判断，用来认出「跨档了」 */
     let foldAutoLast = null;
 
-    const autoFolds = () => window.innerWidth < FOLD_AUTO_WIDTH;
+    const isPrimaryPage = () => surfaceMode === "page";
+    const autoFolds = () => isPrimaryPage() ? false : window.innerWidth < FOLD_AUTO_WIDTH;
     const isNarrow = () => window.innerWidth < NARROW_WIDTH;
+    const foldStorageKey = () => isPrimaryPage() ? FOLD_PAGE_KEY : FOLD_KEY;
+
+    function readFoldPreference() {
+      let stored = null;
+      try { stored = localStorage.getItem(foldStorageKey()); } catch { /* 读不到就当没选过 */ }
+      // 主页用新键，嵌入模式继续兼容旧键；没存过就让布局自己的自动规则接管。
+      foldManual = stored === null ? null : stored === "1";
+    }
 
     function applyFolded(collapsed, { persist = true } = {}) {
       const fold = Boolean(collapsed);
@@ -335,11 +348,30 @@
           : "左边点一位伙伴<br>就能开始聊了";
       }
       if (persist) {
-        try { localStorage.setItem(FOLD_KEY, fold ? "1" : "0"); } catch { /* 记不住就算了，这一轮照用 */ }
+        try { localStorage.setItem(foldStorageKey(), fold ? "1" : "0"); } catch { /* 记不住就算了，这一轮照用 */ }
       }
     }
 
-    /** 该收还是该展：她手动点过就认她的，没点过看窗口宽窄 */
+    /** 宿主 v2 页面是 flexible 高度；独立卡片是 fixed 高度。旧宿主没有这项时返回 null。 */
+    function detectSurfaceMode() {
+      const context = hana.surface?.getContext?.() || null;
+      if (context?.slot === "function-panel") return "embedded";
+      const envelope = hana.envelope?.getSnapshot?.() || null;
+      if (envelope?.height?.mode === "flexible") return "page";
+      if (envelope?.height?.mode === "fixed") return "embedded";
+      return null;
+    }
+
+    function setSurfaceMode(next) {
+      if (!next || next === surfaceMode) return;
+      surfaceMode = next;
+      el.shell.dataset.surfaceMode = surfaceMode;
+      readFoldPreference();
+      foldAutoLast = autoFolds();
+      syncFold();
+    }
+
+    /** 该收还是该展：她手动点过就认她的，没点过看当前布局规则 */
     function foldWanted() {
       return foldManual === null ? autoFolds() : foldManual;
     }
@@ -348,20 +380,20 @@
       applyFolded(foldWanted(), { persist });
     }
 
-    {
-      let stored = null;
-      try { stored = localStorage.getItem(FOLD_KEY); } catch { /* 读不到就当没选过 */ }
-      if (stored !== null) foldManual = stored === "1";
-      foldAutoLast = autoFolds();
-      syncFold();
-    }
+    readFoldPreference();
+    foldAutoLast = autoFolds();
+    syncFold();
+    setSurfaceMode(detectSurfaceMode());
+    hana.envelope?.subscribe?.(() => setSurfaceMode(detectSurfaceMode()));
+    hana.surface?.onContextChanged?.(() => setSurfaceMode(detectSurfaceMode()));
 
     // 窗口宽窄一変就重新判；跨过档位就把手动那笔让开，回到自动
     window.addEventListener("resize", () => {
       const nowAuto = autoFolds();
       if (nowAuto !== foldAutoLast) {
         foldAutoLast = nowAuto;
-        foldManual = null;
+        // 独立主页不因窄宽变化抹掉用户选择；嵌入模式保持原来的自动档位行为。
+        if (!isPrimaryPage()) foldManual = null;
       }
       if (foldWanted() !== el.shell.classList.contains("list-collapsed")) syncFold();
     });
@@ -371,9 +403,9 @@
       applyFolded(value);
     }
 
-    // 窄窗下展板是盖在聊天区上的浮层，选完人得把它收回去，不然聊天窗一直被盖着
+    // 窄窗下展板是盖在聊天区上的浮层；嵌入模式选完人收回，独立主页保留在左边。
     function foldAfterPick() {
-      if (isNarrow() && !el.shell.classList.contains("list-collapsed")) {
+      if (!isPrimaryPage() && isNarrow() && !el.shell.classList.contains("list-collapsed")) {
         applyFolded(true, { persist: false });
       }
     }
@@ -1626,6 +1658,104 @@
 
     const TIME_DIVIDER_GAP_MS = 10 * 60 * 1000;
 
+    function renderVoiceMessage(m, opts = {}) {
+      const rendered = bubble("assistant", "", null, m.at);
+      const box = rendered.bubble;
+      box.classList.add("voice-bubble");
+
+      const main = document.createElement("div");
+      main.className = "voice-main";
+      const play = document.createElement("button");
+      play.type = "button";
+      play.className = "voice-play";
+      play.setAttribute("aria-label", m.voice?.status === "pending" ? "正在准备语音" : "播放语音");
+      const icon = document.createElement("span");
+      icon.className = "voice-play-icon";
+      icon.textContent = m.voice?.status === "pending" ? "…" : "▶";
+      play.appendChild(icon);
+
+      const wave = document.createElement("span");
+      wave.className = "voice-wave";
+      for (let index = 0; index < 11; index += 1) wave.appendChild(document.createElement("i"));
+      const duration = document.createElement("span");
+      duration.className = "voice-duration";
+      duration.textContent = formatVoiceDuration(m.voice?.durationMs);
+      const unplayed = document.createElement("span");
+      unplayed.className = "voice-unplayed-dot";
+      unplayed.title = "还没播放过";
+      unplayed.setAttribute("aria-label", "还没播放过");
+      unplayed.hidden = Boolean(m.voice?.playedAt);
+      const transcript = document.createElement("button");
+      transcript.type = "button";
+      transcript.className = "voice-transcript-toggle";
+      transcript.textContent = "转文字";
+      main.append(play, wave, duration, unplayed);
+      box.appendChild(main);
+      const messageLine = box.parentElement;
+      if (messageLine) messageLine.insertBefore(transcript, messageLine.querySelector(".msg-time"));
+
+      const transcriptLine = document.createElement("div");
+      transcriptLine.className = "msg-line voice-transcript-line";
+      const transcriptText = document.createElement("div");
+      transcriptText.className = "bubble voice-transcript";
+      transcriptText.hidden = true;
+      transcriptText.textContent = m.voice?.text || m.text || "";
+      transcriptLine.appendChild(transcriptText);
+      rendered.col.appendChild(transcriptLine);
+      transcript.addEventListener("click", () => {
+        transcriptText.hidden = !transcriptText.hidden;
+        transcript.textContent = transcriptText.hidden ? "转文字" : "收起文字";
+      });
+
+      if (m.voice?.status === "ready") {
+        const audio = new Audio();
+        audio.preload = "metadata";
+        let audioLoading = null;
+        const loadAudio = () => {
+          if (!audioLoading) {
+            audioLoading = hana.api.fetch(`voice/${encodeURIComponent(current)}/${encodeURIComponent(m.id)}`, { method: "GET" })
+              .then((response) => {
+                if (!response.ok) throw new Error("语音文件没读到");
+                return response.blob();
+              })
+              .then((blob) => { audio.src = URL.createObjectURL(blob); });
+          }
+          return audioLoading;
+        };
+        audio.addEventListener("loadedmetadata", () => {
+          duration.textContent = formatVoiceDuration(audio.duration * 1000);
+        });
+        if (!m.voice?.durationMs) void loadAudio().catch(() => {});
+        play.addEventListener("click", async () => {
+          unplayed.hidden = true;
+          if (!m.voice?.playedAt) {
+            void hana.api.fetch(`voice/${encodeURIComponent(current)}/${encodeURIComponent(m.id)}/played`, { method: "POST" }).catch(() => {});
+          }
+          if (!audio.paused) { audio.pause(); return; }
+          if (!audio.paused) { audio.pause(); return; }
+          try {
+            if (!audio.src) await loadAudio();
+            box.classList.add("is-playing");
+            icon.textContent = "Ⅱ";
+            await audio.play();
+          } catch { setStatus("这条语音暂时播不出来"); }
+        });
+        audio.addEventListener("ended", () => { box.classList.remove("is-playing"); icon.textContent = "▶"; });
+        audio.addEventListener("pause", () => { if (audio.ended || audio.currentTime === 0) { box.classList.remove("is-playing"); icon.textContent = "▶"; } });
+      } else {
+        play.disabled = true;
+        transcript.disabled = true;
+      }
+      if (opts.bindAssistantActions !== false) bindMessageActions(rendered.row, m);
+      return rendered.row;
+    }
+
+    function formatVoiceDuration(value) {
+      const seconds = Math.max(0, Math.round(Number(value) / 1000));
+      if (!seconds) return "";
+      return `${seconds}\u2033`;
+    }
+
     /** 画一条消息（历史与增量都走这里） */
     function renderMessage(m, opts = {}) {
       if (!m || (seenIds.has(m.id) && !opts.allowSeen)) return false;
@@ -1676,6 +1806,15 @@
         if (!read) tickNodes.set(m.id, tick(col));
         if (isLatestUserMessage(m)) bindMessageActions(row, m);
       } else {
+        if (m.voice && !Array.isArray(opts.assistantPieces)) {
+          voiceStates.set(m.id, `${m.voice.status || ""}:${m.voice.format || ""}:${m.voice.durationMs || ""}:${m.voice.playedAt || ""}`);
+        }
+        const voice = m.voice?.status === "ready" || m.voice?.status === "pending";
+        if (voice && !Array.isArray(opts.assistantPieces)) {
+          renderVoiceMessage(m, opts);
+          voiceStates.set(m.id, `${m.voice.status}:${m.voice.format || ""}:${m.voice.durationMs || ""}:${m.voice.playedAt || ""}`);
+          return true;
+        }
         const rawList = Array.isArray(opts.assistantPieces)
           ? opts.assistantPieces
           : (Array.isArray(m.bubbles) && m.bubbles.length ? m.bubbles : [m.text]);
@@ -1704,6 +1843,7 @@
         invalidateRendering();
         el.stream.innerHTML = "";
         seenIds = new Set();
+        voiceStates.clear();
         lastRenderedConversationAt = null;
         tickNodes.clear();
         if (!list.length) {
@@ -1751,6 +1891,15 @@
       if (current !== agentId || viewSeq !== threadViewSeq || generation !== renderGeneration) return restoreScroll(0);
       currentMessages = data.messages || [];
       autoScrollAllowed = stickToBottom;
+      const voiceChanged = currentMessages.some((message) => {
+        if (!message?.id || !message.voice) return false;
+        const key = `${message.voice.status || ""}:${message.voice.format || ""}:${message.voice.durationMs || ""}:${message.voice.playedAt || ""}`;
+        return seenIds.has(message.id) && voiceStates.get(message.id) !== key;
+      });
+      if (voiceChanged) {
+        renderAll(currentMessages);
+        return restoreScroll(currentMessages.length);
+      }
       if (paintedWithAvatars !== showMessageAvatars) {
         renderAll(currentMessages);
         return restoreScroll(Math.max(1, currentMessages.length));
@@ -1855,6 +2004,7 @@
       current = null;
       currentMessages = [];
       seenIds = new Set();
+      voiceStates.clear();
       el.title.textContent = "选一位伙伴";
       el.chatAvatar.hidden = true;
       el.input.disabled = true;
@@ -2008,6 +2158,9 @@
       el.send.style.removeProperty("--send-bg");
       el.send.style.removeProperty("--send-fg");
       el.send.style.removeProperty("--send-border");
+      el.chat.style.removeProperty("--voice-bg");
+      el.chat.style.removeProperty("--voice-fg");
+      el.chat.style.removeProperty("--voice-border");
       el.chat.style.removeProperty("--status-bg");
       el.chat.style.removeProperty("--status-fg");
       el.chat.style.removeProperty("--status-border");
@@ -2033,6 +2186,9 @@
       el.send.style.setProperty("--send-bg", theme.background);
       el.send.style.setProperty("--send-fg", theme.foreground);
       el.send.style.setProperty("--send-border", theme.border);
+      el.chat.style.setProperty("--voice-bg", theme.background);
+      el.chat.style.setProperty("--voice-fg", theme.foreground);
+      el.chat.style.setProperty("--voice-border", theme.border);
       el.chat.style.setProperty("--status-bg", theme.noticeBackground);
       el.chat.style.setProperty("--status-fg", theme.noticeForeground);
       el.chat.style.setProperty("--status-border", theme.noticeBorder);
@@ -2345,6 +2501,7 @@
       el.stream.innerHTML = "";
       clearChatBackground(); // 新的人进来，先把上一位的房间收走
       seenIds = new Set();
+      voiceStates.clear();
       try {
         const data = await api("GET", `thread/${agentId}`);
         if (openSeq !== openPartnerSeq) return;

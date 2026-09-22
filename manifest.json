@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "chahuahui",
   "name": "茶话会",
-  "version": "0.7.306",
+  "version": "0.7.366",
   "entry": "index.js",
   "description": "茶话会：像 QQ 一样跟伙伴闲聊。主对话框面对面谈正事，这里围炉聊八卦。",
   "icon": "assets/icon.png",
@@ -13,8 +13,8 @@
     "app/resources.read"
   ],
   "network": {
-    "allowedHosts": ["news.google.com"],
-    "methods": ["GET"],
+    "allowedHosts": ["news.google.com", "api.minimaxi.com", "api.xiaomimimo.com"],
+    "methods": ["GET", "POST"],
     "defaultTimeoutMs": 8000,
     "maxResponseBytes": 1048576
   },

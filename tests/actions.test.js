@@ -32,6 +32,15 @@ import {
 
 const T0 = new Date("2026-09-12T10:00:00.000Z");
 
+test("动作文案提示词会带入相处理解", () => {
+  const spec = actionTemplateSpec({
+    styleId: DEFAULT_STYLE_ID,
+    partnerName: "小花",
+    adaptationText: "偏好：熟人玩笑里可以轻轻损一点",
+  });
+  assert.match(spec.userText, /熟人玩笑里可以轻轻损一点/);
+});
+
 test("每个叫法有自己的 emoji，而且不重样", () => {
   for (const style of ACTION_STYLES) {
     assert.equal(typeof style.emoji, "string");

@@ -61,6 +61,27 @@
           <span class="track"><span></span></span><span class="switch-label">不显示</span>
         </button>
       </article>
+      <article class="setting-card compact">
+        <div class="setting-copy">
+          <h3>伙伴语音消息</h3>
+          <p>打开后，伙伴偶尔会把适合短短说出来的回复发成一条语音；长回复仍然用文字。</p>
+        </div>
+        <button class="switch" id="voice-switch" type="button" role="switch" aria-checked="false">
+          <span class="track"><span></span></span><span class="switch-label">关闭</span>
+        </button>
+      </article>
+      <article class="setting-card" id="voice-model-card">
+        <div class="setting-copy">
+          <h3>朗读模型</h3>
+          <p>茶话会自己的一套朗读配置：填好接口、模型名和 Key 就能存下来，可以存多条，随时在不同供应商之间切换；伙伴页只负责选择各自的声音和频率。</p>
+        </div>
+        <div class="detail-field">
+          <div id="voice-model-host"></div>
+          <small id="voice-model-note">可以存多条朗读模型，随时切换。</small>
+          <button class="soft-button" id="voice-model-test" type="button">测试模型连接</button>
+          <small id="voice-model-test-note" class="detail-field-note"></small>
+        </div>
+      </article>
       <article class="setting-card">
         <div class="setting-copy">
           <h3>我在茶话会里叫什么</h3>
@@ -313,6 +334,13 @@
     let styleCatalog = [];
     let modelCatalog = [];
     let visionModelCatalog = [];
+    let voiceChoices = [];
+    let voiceTiers = [];
+    let voicePresets = [];
+    /** 新建朗读模型时的底稿；模板按钮只改这份，不动已保存的条目 */
+    let voiceDraft = null;
+    /** 当前表单里那份还没保存的配置；「测试模型连接」先用它 */
+    let voiceFormReader = null;
     let currentId = null;
     let pendingRemoveId = null;
     let partnerRequestSeq = 0;
@@ -435,6 +463,7 @@
         try {
           const data = await api("PUT", "settings/global", payload);
           globalSettings = data.global;
+          if (Array.isArray(data.voiceChoices)) voiceChoices = data.voiceChoices;
           say(successText, "ok");
           return true;
         } catch (error) {
@@ -471,6 +500,11 @@
       refineSwitch.classList.toggle("on", refineOn);
       refineSwitch.setAttribute("aria-checked", String(refineOn));
       refineSwitch.querySelector(".switch-label").textContent = refineOn ? "显示" : "不显示";
+      const voiceSwitch = document.getElementById("voice-switch");
+      const voiceOn = Boolean(globalSettings.voiceEnabled);
+      voiceSwitch.classList.toggle("on", voiceOn);
+      voiceSwitch.setAttribute("aria-checked", String(voiceOn));
+      voiceSwitch.querySelector(".switch-label").textContent = voiceOn ? "打开" : "关闭";
       const daybookSwitch = document.getElementById("daybook-switch");
       const daybookOn = daybookInstalled && Boolean(globalSettings.daybookEnabled);
       daybookSwitch.disabled = !daybookInstalled;
@@ -507,6 +541,7 @@
       paintGlobalModel();
       paintGlobalRecognitionModel();
       paintGlobalVision();
+      paintGlobalVoiceModel();
     }
 
     // ── 模型：全局一份默认，每位伙伴还能各自再压一个（2026-09-13）──
@@ -545,6 +580,206 @@
     function dressSelects(host) {
       if (typeof window.beautifySelect !== "function") return;
       host.querySelectorAll("select:not(.dd-native)").forEach((sel) => window.beautifySelect(sel));
+    }
+
+    function voiceProfilesDraft() {
+      return globalSettings.voiceProfiles && typeof globalSettings.voiceProfiles === "object"
+        ? structuredClone(globalSettings.voiceProfiles)
+        : {};
+    }
+
+    function voiceProfileId() {
+      const profiles = voiceProfilesDraft();
+      const wanted = String(globalSettings.voiceProfile ?? "");
+      return Object.prototype.hasOwnProperty.call(profiles, wanted) ? wanted : (Object.keys(profiles)[0] || "");
+    }
+
+    /** 新建一条时的空白底稿；套模板只是把协议和默认地址先填好。 */
+    function blankVoiceDraft(preset = null) {
+      return {
+        label: preset ? preset.label : "",
+        providerId: preset?.providerId || "",
+        protocol: preset?.protocol || "chat",
+        baseUrl: preset?.baseUrl || "",
+        model: preset?.model || "",
+        groupId: "",
+        apiKey: "",
+      };
+    }
+
+    function voiceModelInput(label, key, value, type = "text") {
+      const wrap = document.createElement("label");
+      wrap.className = "inline-field";
+      const title = document.createElement("span");
+      title.textContent = label;
+      const input = document.createElement("input");
+      input.type = type;
+      input.value = value ?? "";
+      input.dataset.voiceKey = key;
+      input.placeholder = key === "apiKey" ? "留空保持已保存的 Key" : "";
+      wrap.append(title, input);
+      return wrap;
+    }
+
+    function paintGlobalVoiceModel() {
+      const host = document.getElementById("voice-model-host");
+      const note = document.getElementById("voice-model-note");
+      if (!host || !note) return;
+      host.replaceChildren();
+      const profiles = voiceProfilesDraft();
+      const activeId = voiceProfileId();
+      // 正在编辑哪一条：空串表示新建
+      let editing = host.dataset.editing ?? activeId;
+      if (editing && !Object.prototype.hasOwnProperty.call(profiles, editing)) editing = "";
+      host.dataset.editing = editing;
+      const isNew = editing === "";
+      if (isNew && !voiceDraft) voiceDraft = blankVoiceDraft();
+      const stored = isNew ? { ...voiceDraft } : { ...profiles[editing].config, label: profiles[editing].label };
+
+      const list = document.createElement("select");
+      list.setAttribute("aria-label", "已保存的朗读模型");
+      const blank = document.createElement("option");
+      blank.value = "new";
+      blank.textContent = "＋ 新建一条朗读模型";
+      list.appendChild(blank);
+      for (const [id, profile] of Object.entries(profiles)) {
+        const option = document.createElement("option");
+        option.value = id;
+        option.textContent = id === activeId ? `${profile.label || id}（使用中）` : (profile.label || id);
+        list.appendChild(option);
+      }
+      list.value = isNew ? "new" : editing;
+      host.appendChild(list);
+
+      // 新建时先给三个模板按钮，点一下把协议和默认地址填好
+      if (isNew) {
+        const row = document.createElement("div");
+        row.className = "voice-model-presets";
+        const tip = document.createElement("small");
+        tip.textContent = "套个模板快速开始：";
+        row.appendChild(tip);
+        for (const preset of voicePresets) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = preset.label;
+          button.addEventListener("click", () => { voiceDraft = blankVoiceDraft(preset); paintGlobalVoiceModel(); });
+          row.appendChild(button);
+        }
+        host.appendChild(row);
+      }
+
+      const fields = document.createElement("div");
+      fields.className = "voice-model-fields";
+      host.appendChild(fields);
+      const protocol = document.createElement("select");
+      protocol.setAttribute("aria-label", "朗读协议");
+      [["chat", "OpenAI 兼容"], ["t2a", "MiniMax t2a_v2"]].forEach(([value, label]) => {
+        const option = document.createElement("option"); option.value = value; option.textContent = label; protocol.appendChild(option);
+      });
+      protocol.value = stored.protocol === "t2a" ? "t2a" : "chat";
+      const groupField = voiceModelInput("GroupId", "groupId", stored.groupId || "");
+      groupField.hidden = protocol.value !== "t2a";
+      // API Key 看不到内容，就用一枚状态小胶囊告诉她到底填没填
+      const keyField = voiceModelInput("API Key", "apiKey", "", "password");
+      const keyInput = keyField.querySelector("input");
+      const keyBadge = document.createElement("em");
+      keyBadge.className = "field-state";
+      keyField.querySelector("span").appendChild(keyBadge);
+      const hasStoredKey = !isNew && Boolean(profiles[editing]?.config?.apiKey);
+      keyInput.placeholder = hasStoredKey ? "已保存，留空就不改动" : "粘贴这条模型的 API Key";
+      const paintKeyState = () => {
+        const typed = keyInput.value.trim();
+        if (typed) {
+          keyBadge.className = "field-state pending";
+          keyBadge.textContent = hasStoredKey ? "会覆盖已保存的" : "待保存";
+        } else if (hasStoredKey) {
+          keyBadge.className = "field-state saved";
+          keyBadge.textContent = "已保存";
+        } else {
+          keyBadge.className = "field-state missing";
+          keyBadge.textContent = "还没填";
+        }
+      };
+      keyInput.addEventListener("input", paintKeyState);
+      paintKeyState();
+      fields.append(
+        voiceModelInput("名称", "label", stored.label || ""),
+        protocol,
+        voiceModelInput("接口地址", "baseUrl", stored.baseUrl || ""),
+        voiceModelInput("模型名", "model", stored.model || ""),
+        keyField,
+        groupField,
+      );
+      protocol.addEventListener("change", () => { groupField.hidden = protocol.value !== "t2a"; });
+
+      const readConfig = () => {
+        const read = (key) => (fields.querySelector(`[data-voice-key="${key}"]`)?.value ?? "").trim();
+        const typedKey = read("apiKey");
+        const previousKey = isNew ? "" : (profiles[editing]?.config?.apiKey || "");
+        return {
+          label: read("label"),
+          config: {
+            providerId: stored.providerId || "",
+            protocol: protocol.value,
+            baseUrl: read("baseUrl").replace(/\/+$/, ""),
+            model: read("model"),
+            groupId: protocol.value === "t2a" ? read("groupId") : "",
+            apiKey: typedKey || (previousKey === "********" ? "********" : ""),
+          },
+        };
+      };
+      // 外面的「测试模型连接」拿得到还没保存的草稿，不用先存再测
+      voiceFormReader = () => readConfig().config;
+
+      const actions = document.createElement("div");
+      actions.className = "detail-actions";
+      const save = document.createElement("button");
+      save.type = "button";
+      save.className = "soft-button";
+      save.textContent = isNew ? "保存这条朗读模型" : "保存修改";
+      save.addEventListener("click", async () => {
+        const { label, config } = readConfig();
+        if (!label) { say("请先给这条朗读模型起个名字", "warn"); return; }
+        const id = isNew ? `custom-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}` : editing;
+        const nextProfiles = voiceProfilesDraft();
+        nextProfiles[id] = { label, config };
+        if (!await saveGlobal({ voiceProfiles: nextProfiles, voiceProfile: id }, isNew ? "朗读模型已保存" : "朗读模型已更新")) return;
+        voiceDraft = null;
+        host.dataset.editing = id;
+        paintGlobalVoiceModel();
+      });
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "remove-link";
+      remove.textContent = "删除这条";
+      remove.hidden = isNew;
+      remove.addEventListener("click", async () => {
+        const shown = profiles[editing]?.label || "这条模型";
+        if (!confirm(`删除后「${shown}」不能再使用，确定删除吗？`)) return;
+        const nextProfiles = voiceProfilesDraft();
+        delete nextProfiles[editing];
+        if (!await saveGlobal({ voiceProfiles: nextProfiles, voiceProfile: activeId === editing ? "" : activeId }, "朗读模型已删除")) return;
+        voiceDraft = null;
+        host.dataset.editing = "";
+        paintGlobalVoiceModel();
+      });
+      actions.append(save, remove);
+      host.appendChild(actions);
+
+      list.addEventListener("change", async () => {
+        const value = list.value;
+        voiceDraft = null;
+        host.dataset.editing = value === "new" ? "" : value;
+        if (value !== "new" && value !== activeId) {
+          if (!await saveGlobal({ voiceProfile: value }, "已切换到这条朗读模型")) return;
+        }
+        paintGlobalVoiceModel();
+      });
+
+      dressSelects(host);
+      note.textContent = isNew
+        ? "填好接口地址、模型名和 API Key，保存后就能随时切换。"
+        : "留空的 API Key 会沿用已保存的 Key；换个供应商就新建一条。";
     }
 
     function paintGlobalModel() {
@@ -690,6 +925,35 @@
     document.getElementById("msg-refine-switch").addEventListener("click", async () => {
       const next = !Boolean(globalSettings.messageRefine);
       if (await saveGlobal({ messageRefine: next }, next ? "回复修整入口已打开" : "回复修整入口已关闭")) paintGlobal();
+    });
+    document.getElementById("voice-switch").addEventListener("click", async () => {
+      const next = !Boolean(globalSettings.voiceEnabled);
+      if (await saveGlobal({ voiceEnabled: next }, next ? "伙伴语音消息已打开" : "伙伴语音消息已关闭")) paintGlobal();
+    });
+    document.getElementById("voice-model-test").addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      const note = document.getElementById("voice-model-test-note");
+      button.disabled = true;
+      button.textContent = "正在测试…";
+      note.textContent = "正在生成一小段试听音频，不会写进聊天记录。";
+      try {
+        const modelConfig = voiceFormReader ? voiceFormReader() : globalSettings.voiceModel;
+        const response = await hana.api.fetch("voice/test", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ modelConfig }),
+        });
+        if (!response.ok) throw new Error((await response.text()).slice(0, 200) || `HTTP ${response.status}`);
+        const blob = await response.blob();
+        const audio = new Audio(URL.createObjectURL(blob));
+        await audio.play();
+        note.textContent = "模型连接正常，试听已经播放。";
+      } catch (error) {
+        note.textContent = `测试没通过：${error.message}`;
+      } finally {
+        button.disabled = false;
+        button.textContent = "测试模型连接";
+      }
     });
     document.getElementById("daybook-switch").addEventListener("click", async () => {
       if (!daybookInstalled) return say("先装上拾光记，这一项才能开", "err");
@@ -999,7 +1263,9 @@
       let memory = { profile: { text: "" }, ledger: [], archive: [], pendingMessages: 0 };
       let topicBook = { topics: [] };
       let topicBookFailed = false;
+      let adaptation = { items: [], revisions: { relationship: 0, "user-wide": 0 } };
       try { memory = await api("GET", `memory/${encodeURIComponent(agentId)}`); } catch (error) { say(`记忆没读出来：${error.message}`, "err"); }
+      try { adaptation = await api("GET", `adaptation/${encodeURIComponent(agentId)}`); } catch (error) { say(`相处出来的理解没读出来：${error.message}`, "err"); }
       try { topicBook = await api("GET", `topics/${encodeURIComponent(agentId)}`); }
       catch (error) { topicBookFailed = true; say(`话题本没读出来：${error.message}`, "err"); }
       let knowing = { personality: { surface: { tag: "", signals: [] }, inner: { tag: "", signals: [] } }, presets: [], drafting: false };
@@ -1134,6 +1400,72 @@
           if (currentId === agentId) openPartner(agentId, "contact");
         }
       })));
+
+      const voiceCard = detailCard("偶尔用声音说话", "这一位的语音只会在短回复、合适的情境里低频出现；长回复仍然发文字。");
+      const voiceSwitch = document.createElement("button");
+      voiceSwitch.type = "button";
+      voiceSwitch.className = `switch${s.voice?.enabled ? " on" : ""}`;
+      voiceSwitch.setAttribute("role", "switch");
+      voiceSwitch.setAttribute("aria-checked", String(Boolean(s.voice?.enabled)));
+      voiceSwitch.innerHTML = `<span class="track"><span></span></span><span class="switch-label">${s.voice?.enabled ? "允许" : "关闭"}</span>`;
+      voiceSwitch.addEventListener("click", async () => {
+        const next = !Boolean(s.voice?.enabled);
+        if (await savePartner(agentId, { voice: { ...(s.voice ?? {}), enabled: next } }, next ? "已允许这位伙伴发语音" : "这位伙伴暂时只发文字")) {
+          if (currentId === agentId) openPartner(agentId, "contact");
+        }
+      });
+      voiceCard.appendChild(field("语音开关", voiceSwitch));
+      const profileId = voiceProfileId();
+      const savedVoiceId = s.voice?.voiceByProfile?.[profileId] || s.voice?.voiceId;
+      const pickedVoice = voiceChoices.some((item) => item.id === savedVoiceId);
+      const voiceId = pickedVoice ? savedVoiceId : (voiceChoices[0]?.id || "");
+      if (voiceChoices.length) {
+        voiceCard.appendChild(field("声音", segment(voiceChoices.map((item) => [item.id, item.name]), voiceId, async (value) => {
+          if (await savePartner(agentId, { voice: { ...(s.voice ?? {}), voiceId: value, voiceByProfile: { ...(s.voice?.voiceByProfile || {}), [profileId]: value } } }, "音色已保存")) {
+            if (currentId === agentId) openPartner(agentId, "contact");
+          }
+        }), pickedVoice ? "" : "这条朗读模型还没给 ta 选过声音，现在是默认音色，挑一个就好。"));
+      } else {
+        voiceCard.appendChild(field("声音", document.createTextNode("暂时没读到可用音色"), "先在上面选一条朗读模型，音色列表会跟着它走。"));
+      }
+      const tierRows = voiceTiers.length ? voiceTiers : [["sometimes", "偶尔"]];
+      voiceCard.appendChild(field("出现频率", segment(tierRows, s.voice?.tier ?? "sometimes", async (value) => {
+        if (await savePartner(agentId, { voice: { ...(s.voice ?? {}), tier: value } }, "语音频率已调整")) {
+          if (currentId === agentId) openPartner(agentId, "contact");
+        }
+      })));
+      const previewRow = document.createElement("div");
+      previewRow.className = "detail-actions";
+      const previewButton = document.createElement("button");
+      previewButton.type = "button";
+      previewButton.className = "soft-button";
+      previewButton.textContent = "试听这位伙伴的声音";
+      const previewNote = document.createElement("small");
+      previewNote.className = "detail-field-note";
+      previewButton.addEventListener("click", async () => {
+        previewButton.disabled = true;
+        previewButton.textContent = "正在生成试听…";
+        previewNote.textContent = "只生成试听，不会写进聊天记录。";
+        try {
+          const response = await hana.api.fetch("voice/test", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ voiceId: voiceId, modelConfig: globalSettings.voiceModel, text: `你好呀，我是${partner.name}。这是我的声音试听。` }),
+          });
+          if (!response.ok) throw new Error((await response.text()).slice(0, 200) || `HTTP ${response.status}`);
+          const audio = new Audio(URL.createObjectURL(await response.blob()));
+          await audio.play();
+          previewNote.textContent = "试听已经播放。";
+        } catch (error) {
+          previewNote.textContent = `试听没通过：${error.message}`;
+        } finally {
+          previewButton.disabled = false;
+          previewButton.textContent = "试听这位伙伴的声音";
+        }
+      });
+      previewRow.append(previewButton, previewNote);
+      voiceCard.appendChild(previewRow);
+      detailPanels.contact.appendChild(voiceCard);
       // 作息不摆在这儿了（2026-09-13）：ta是伙伴的内在状态，跟隐性爱好一个待遇——
       // 影响行为，不上页面。看一眼就想改，那就别让她看见；睡着时也不再是"等ta醒"，回是回的，只是慢。
 
@@ -1739,6 +2071,167 @@
       }
       detailPanels.personality.appendChild(personCard);
 
+      const adaptationCard = detailCard("我们相处出来的理解", "这里只放会改变相处方式的理解。写偏了可以一起改，也可以让 ta 忘掉；不会碰 Hana 的人格和全局记忆。");
+      const adaptationItems = Array.isArray(adaptation.items) ? adaptation.items : [];
+      if (!adaptationItems.length) {
+        adaptationCard.appendChild(Object.assign(document.createElement("div"), { className: "empty-note", textContent: "还没有形成需要单独记下的相处习惯。" }));
+      }
+      for (const guide of adaptationItems) {
+        const item = document.createElement("div");
+        item.className = "adaptation-item";
+        const scope = document.createElement("span");
+        scope.className = `adaptation-scope ${guide.scope === "user-wide" ? "wide" : ""}`;
+        scope.textContent = guide.scope === "user-wide" ? "所有伙伴都这样理解" : `只在你和 ${partner.name} 之间`;
+        const itemText = document.createElement("p");
+        itemText.textContent = guide.meaning;
+        const actions = document.createElement("div");
+        actions.className = "item-actions adaptation-actions";
+        const revise = document.createElement("button");
+        revise.type = "button";
+        revise.className = "soft-button";
+        revise.textContent = "一起改改";
+        const forget = document.createElement("button");
+        forget.type = "button";
+        forget.className = "remove-link";
+        forget.textContent = "忘掉";
+        actions.append(revise, forget);
+        item.append(scope, itemText, actions);
+
+        forget.addEventListener("click", async () => {
+          const reach = guide.scope === "user-wide" ? "这会让所有伙伴都忘掉这条理解。" : `这只会影响你和 ${partner.name}。`;
+          if (!confirm(`忘掉「${guide.meaning}」？\n${reach}\n历史会保留，但从下一轮起不再生效。`)) return;
+          forget.disabled = true;
+          forget.textContent = "正在忘掉…";
+          try {
+            await api("POST", `adaptation/${encodeURIComponent(agentId)}/revoke`, {
+              guideId: guide.id,
+              scope: guide.scope,
+              expectedRevision: adaptation.revisions?.[guide.scope] ?? 0,
+            });
+            say("这条理解已经放下了", "ok");
+            if (currentId === agentId) await openPartner(agentId, "memory");
+          } catch (error) {
+            say(`没能忘掉：${error.message}`, "err");
+            forget.disabled = false;
+            forget.textContent = "忘掉";
+          }
+        });
+
+        revise.addEventListener("click", () => {
+          if (item.querySelector(".adaptation-editor")) return;
+          const editor = document.createElement("div");
+          editor.className = "adaptation-editor";
+          const history = document.createElement("div");
+          history.className = "adaptation-chat";
+          const opening = document.createElement("div");
+          opening.className = "adaptation-bubble assistant";
+          opening.textContent = `现在记的是：“${guide.meaning}”。你想把哪里改准一点？`;
+          history.appendChild(opening);
+          const input = document.createElement("textarea");
+          input.rows = 2;
+          input.maxLength = 800;
+          input.placeholder = "比如：语音可以发，但别太频繁";
+          input.setAttribute("aria-label", "告诉小花这条理解要怎么改");
+          const status = document.createElement("div");
+          status.className = "adaptation-status";
+          const editorActions = document.createElement("div");
+          editorActions.className = "item-actions adaptation-editor-actions";
+          const suggest = document.createElement("button");
+          suggest.type = "button";
+          suggest.className = "primary-button";
+          suggest.textContent = "看看修改建议";
+          const cancel = document.createElement("button");
+          cancel.type = "button";
+          cancel.className = "remove-link";
+          cancel.textContent = "先不改";
+          editorActions.append(suggest, cancel);
+          editor.append(history, input, status, editorActions);
+          item.appendChild(editor);
+          input.focus();
+
+          const conversation = [];
+          let latestDraftId = "";
+          let preview = null;
+          const addBubble = (role, value) => {
+            const bubble = document.createElement("div");
+            bubble.className = `adaptation-bubble ${role}`;
+            bubble.textContent = value;
+            history.appendChild(bubble);
+            history.scrollTop = history.scrollHeight;
+          };
+          const removePreview = () => { if (preview) preview.remove(); preview = null; latestDraftId = ""; };
+          cancel.addEventListener("click", () => editor.remove());
+          suggest.addEventListener("click", async () => {
+            const instruction = input.value.trim();
+            if (!instruction) { status.textContent = "先说一句想怎么改。"; input.focus(); return; }
+            addBubble("user", instruction);
+            conversation.push({ role: "user", text: instruction });
+            input.value = "";
+            status.textContent = "正在把这句话整理成一份可确认的建议…";
+            suggest.disabled = true;
+            suggest.textContent = "正在整理…";
+            try {
+              const result = await apiLong("POST", `adaptation/${encodeURIComponent(agentId)}/suggest`, {
+                guideId: guide.id,
+                scope: guide.scope,
+                instruction,
+                conversation,
+              });
+              removePreview();
+              latestDraftId = result.draftId;
+              const reply = `我建议改成：“${result.after}”`;
+              conversation.push({ role: "assistant", text: reply });
+              addBubble("assistant", reply);
+              preview = document.createElement("div");
+              preview.className = "adaptation-preview";
+              const oldSide = document.createElement("div");
+              oldSide.innerHTML = "<b>现在</b>";
+              oldSide.appendChild(Object.assign(document.createElement("p"), { textContent: result.before }));
+              const newSide = document.createElement("div");
+              newSide.innerHTML = "<b>改成</b>";
+              newSide.appendChild(Object.assign(document.createElement("p"), { textContent: result.after }));
+              const confirmRow = document.createElement("div");
+              confirmRow.className = "item-actions adaptation-confirm-actions";
+              const apply = document.createElement("button");
+              apply.type = "button";
+              apply.className = "primary-button";
+              apply.textContent = "确认修改";
+              const keepTalking = document.createElement("button");
+              keepTalking.type = "button";
+              keepTalking.className = "soft-button";
+              keepTalking.textContent = "再商量一下";
+              confirmRow.append(apply, keepTalking);
+              preview.append(oldSide, newSide, confirmRow);
+              editor.insertBefore(preview, status);
+              keepTalking.addEventListener("click", () => input.focus());
+              apply.addEventListener("click", async () => {
+                if (!latestDraftId) return;
+                apply.disabled = true;
+                apply.textContent = "正在写下…";
+                status.textContent = "正在确认修改，聊天和建议都会留在这里。";
+                try {
+                  await api("POST", `adaptation/${encodeURIComponent(agentId)}/apply`, { draftId: latestDraftId });
+                  say("这条理解已经改好了", "ok");
+                  if (currentId === agentId) await openPartner(agentId, "memory");
+                } catch (error) {
+                  status.textContent = `没写进去：${error.message}。上面的聊天和建议都还在，可以重试。`;
+                  apply.disabled = false;
+                  apply.textContent = "确认修改";
+                }
+              });
+              status.textContent = "确认前不会写入。想换个说法，也可以继续聊。";
+            } catch (error) {
+              status.textContent = `这次没整理出来：${error.message}。刚才聊的内容还在，可以再试。`;
+            } finally {
+              suggest.disabled = false;
+              suggest.textContent = "看看修改建议";
+            }
+          });
+        });
+        adaptationCard.appendChild(item);
+      }
+      detailPanels.memory.appendChild(adaptationCard);
+
       const profileCard = detailCard("ta 眼里的你", "料有两份：主对话框那边记着的关于你的事，和这儿聊出来的印象。压缩以后可能记偏，你可以直接校对。");
       const area = document.createElement("textarea"); area.value = memory.profile?.text ?? ""; area.placeholder = "聊久了，这里会慢慢长出一份关系档案。";
       const saveProfile = document.createElement("button"); saveProfile.type = "button"; saveProfile.className = "primary-button"; saveProfile.textContent = "保存档案";
@@ -2197,6 +2690,9 @@
       styleCatalog = data.styles ?? [];
       modelCatalog = data.models ?? [];
       visionModelCatalog = data.visionModels ?? [];
+      voiceChoices = data.voiceChoices ?? [];
+      voiceTiers = data.voiceTiers ?? [];
+      voicePresets = data.voicePresets ?? [];
       daybookInstalled = Boolean(data.daybookInstalled);
       if (currentId && !partners.some((p) => p.id === currentId)) currentId = partners[0]?.id ?? null;
       paintGlobal();

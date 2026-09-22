@@ -1,6 +1,66 @@
 # TESTING · 茶话会
 
-当前版本与测试状态以 `manifest.json` 为准；最近一次全量：**724 条通过**（2026-09-21，v0.7.306）。
+当前版本与测试状态以 `manifest.json` 为准；最近一次全量：**841 条通过**（2026-09-23，v0.7.366）。
+
+本轮（v0.7.366，语音体验修复）：新增 WAV/MP3 时长解析测试；UI 回归覆盖语音背景色悬停、持久化时长、未播放红点与播放状态落盘。全量 841 条通过，语法检查通过。
+
+本轮（v0.7.365，恢复账枚举失败守门）：伙伴 adaptation 目录枚举失败会返回失败并保留 pending invalidation，下一次启动继续重试，不再把 I/O/权限错误误当作“零伙伴”。新增 1 条自动测试，全量 840 条通过；Hana v2 静态校验 0 error、1 条动态资源不可静态证明 warning。
+
+本轮（v0.7.364，终审恢复护栏）：user-wide 跨伙伴回退增加持久恢复账与启动重试，runtime habit 增加 active guide 二次校验；显式 guide ID 按 scope 命名并保护旧撞 ID 数据；observationLocks 独立于 guide 容量长期保留；敏感表情许可改向同时校验用户原话与预览文义；语音配额测试固定检查日期。新增 1 条自动测试，全量 839 条通过；Hana v2 静态校验 0 error、1 条动态资源不可静态证明 warning。
+
+本轮（v0.7.363，observed 弱观察 + user-wide 回退修复）：只从用户主动发送的两类安全、可解释模式建立低置信度 observed guide，要求至少 3 条证据且跨 3 个生活日；明确声明永远胜出，敏感许可永不观察，被纠错/忘掉后不复活。另补 user-wide guide 失效后的跨伙伴 exception/habit 回退。新增 5 条自动测试，全量 838 条通过；Hana v2 静态校验 0 error、1 条动态资源不可静态证明 warning。
+
+本轮（v0.7.362，相处理解查看/忘掉/对话式纠错）：新增脱敏只读列表、按 guide revoke、自然语言协商建议、前后预览与确认应用；关系账引入 revision，服务端短存机器 proposal，旧建议不可覆盖新账；确认失败时前端保留聊天、预览和按钮；user-wide 与 relationship 分账操作，表情许可 subject 不可扩张。新增 6 条自动测试，全量 833 条通过；Hana v2 静态校验 0 error、1 条动态资源不可静态证明 warning。
+
+本轮（v0.7.361，迁移审查修复）：补测旧 `permission` fact；收紧 meaning-only 迁移边界，防止普通兴趣因“分析”等泛词误迁；所有 proactive/awaiting 入口增加迁移完成硬屏障，迁移失败会阻止自主发送并在下轮重试；隐藏伙伴也纳入迁移。新增 1 条自动测试，全量 827 条通过；Hana v2 静态校验 0 error、1 条动态资源不可静态证明 warning。
+
+本轮（v0.7.360，旧 facts 幂等迁移）：新增纯函数迁移器与每伙伴 migration 水位；仅迁移可追溯到未撤回用户消息的明确互动 preference/boundary，同源 guide 去重；可确定的语音/睡眠/主动/回复风格 claim 本地生成，表情许可必须解析稳定 subject；无来源、伙伴推测、普通兴趣和模糊许可不迁移；保留原事实时间。新增 4 条自动测试，全量 826 条通过；Hana v2 静态校验 0 error、1 条动态资源不可静态证明 warning。
+
+本轮（v0.7.359，临门新话题暂存）：proactive 已选出 readyTopic 后若在全局锁内二次 gate 被拦，会用 stageIntent 将该正式话题暂存；旧 pending intent 仍原样归还，模型失败及无稳定 topicId 的 hobby/场景不误暂存。扩展集成回归，全量 822 条通过；Hana v2 静态校验 0 error、1 条动态资源不可静态证明 warning。
+
+本轮（v0.7.358，全局自主出站竞态）：proactive/awaiting 在伙伴级 lane 外再共用一条全局自主出站 lane；进入 lane 后重新读取最新 gate，模型生成、真实发送与 noteSent 记账保持在同一临界区，避免跨伙伴或两套 tick 并发突破全局间隔/日上限。扩展集成回归，全量 822 条通过；Hana v2 静态校验 0 error、1 条动态资源不可静态证明 warning。
+
+本轮（v0.7.357，awaiting 硬门与暂存契约）：awaiting 在发送前完整经过主动开关、伙伴/全局日上限、全局间隔、静默与关系 deny；成功发出戳或文字后调用统一 noteSent 更新伙伴及全局配额，[等] 不计数。proactive 被 gate 拦截时显式写回 takeIntent 返回的活跃暂存意图。新增 1 条集成回归，全量 822 条通过；Hana v2 静态校验 0 error、1 条动态资源不可静态证明 warning。
+
+本轮（v0.7.356，proactive/awaiting 与首个文本观察器）：主动联系和等回音共用 `proactive.frequency` resolver，none 阻断、more/less 单调调整软间隔，硬设置/静默/日上限/全局间隔保持优先；两条链传 life-day 上下文。`reply.advice-style` 只有结果消息真实出现“先陪伴后建议”才提交 exception。新增 4 条自动测试，全量 821 条通过；Hana v2 静态校验 0 error、1 条动态资源不可静态证明 warning。
+
+本轮（v0.7.355，短反馈形态补全）：feedback 预筛补齐省略宾语的独立短句“停/别发了/不用了/再来/继续/这不对”等，并用长度、整句锚定与反例保证长句中的普通“继续”不被误当作反馈。专项与全量 817 条通过；Hana v2 静态校验 0 error、1 条动态资源不可静态证明 warning。
+
+本轮（v0.7.354，feedback/habit 交叉审查修复）：补齐“停一下/再来一次/不是这样”等短反馈入口；负反馈改为持续锁定，普通正反馈不可解锁，只有负反馈之后建立的新 explicit preference 才能重新开始沉淀；consolidation 校验 guide 元数据，仅 explicit preference 或 confidence≥0.8 的 observed preference 可形成 habit，permission/boundary 被排除。新增 3 条失败基线与回归，全量 817 条通过；Hana v2 静态校验 0 error、1 条动态资源不可静态证明 warning。
+
+本轮（v0.7.353，feedback 与 habit 沉淀）：reconciler 可把后续明确喜欢/继续/叫停/纠正归因到 24 小时内具体 committed exception，同一消息不可重复占用，沉默不推断；按跨日破例与独立正反馈形成 emerging/settled，负反馈立即 reverted 并阻断同类后续破例；语音、睡眠与具体表情策略已接入反馈和习惯状态。专项回归 233 条、全量 814 条通过；Hana v2 静态校验 0 error、1 条动态资源不可静态证明 warning。
+
+本轮（v0.7.352，统一 exception 落账）：store 增加同步幂等的 update/commit/finalize 入口；睡眠仅 exception+committed、语音仅 exception+ready、表情包仅关系 specific permission 真正发送成功后落账；恢复重放沿用稳定键去重；修正 resolveSleepPolicy 的 decision 对象未传给 planReply。专项回归 168 条、全量 808 条通过；Hana v2 静态校验 0 error、1 条动态资源不可静态证明 warning。
+
+本轮（v0.7.351，交叉审查补严）：新增 deny claim 独立优先规则与 claim 内容指纹；表情包和 TTS 异步复核补齐 current-turn/life-day 上下文；同 guide id 内改口或移除 voice claim 会让旧 TTS 任务失效。专项 132 条、全量 806 条通过；Hana v2 静态校验 0 error、1 条动态资源不可静态证明 warning。
+
+本轮（v0.7.350，关系可塑性事务与撤回修复）：睡眠 read/reply-ready 改为交换律事务，覆盖重复事件、later-notice、失败重试与恢复；撤回同时失效伙伴级/user-wide guide、相关排期及 TTS generation token；临时 guide 由系统补 current-turn/life-day，坏 until 降级为当前生活日。全量 804 条通过；Hana v2 静态校验 0 error、1 条动态资源不可静态证明 warning。
+
+上一轮（v0.7.349，关系可塑性 canonical 运行时修复）：新增统一 canonical 测试工厂与 claim 级决胜查询；语音 deny/more/less、真实关系形状和表情包稳定 subject 均改用正式持久化协议；补 store 往返过滤。专项 111 条通过。
+
+本轮（v0.7.348，关系可塑性阶段 C · 表情包许可适配）：伙伴选图接入 `sticker.permission` 的具体 allow/deny；适配器只过滤本轮选图，不改图库；快照白名单、本地 veto 与最近发送去重继续生效；用户主动发送不受影响；新增 2 条测试，全量 796 条通过。
+
+本轮（v0.7.347，关系可塑性阶段 C · 语音适配）：新增 `resolveVoicePolicy()` 与 normal/exception/hard 三层决策；关系只增加软额度和缩短冷却，不突破 hardMax；明确 voice deny 硬拦截；语音 runtime 延后到音频写盘、消息 ready 后提交，合成失败保持原账本；新增 3 条策略测试，全量 794 条通过。
+
+本轮（v0.7.346，关系可塑性阶段 C · 睡眠提交点收拢）：normal/exception 的 wakeCount 统一移到真实 readAt 提交点；实时 `readTimer` 与排期 `deliverScheduledReply()` 共用提交逻辑；exception 回复落库后完成 woken → committed，失败重试保留 wake 元数据；全量 791 条通过。
+
+本轮（v0.7.345，关系可塑性阶段 C · 睡眠策略接入排期）：`planReply()` 接收 `wakeDecision`；deferred 回复不进入实时回合，pending 保存策略并在恢复/到点时单向转为 `later-notice`；normal/exception dozing 保留现有实时路径；新增回复与 UI 契约测试，全量 791 条通过。
+
+本轮（v0.7.344，关系可塑性阶段 C · 睡眠/回复纯逻辑适配器）：新增 `sleepWakeDecision()`、`resolveSleepPolicy()`、`resolveDeferredWake()`、`commitWakeOutcome()` 与 `finalizeWakeReply()`；覆盖 baseline/exception/deferred、关系单调性、硬上限、later-notice 单向转换及两阶段提交；全量 790 条通过。当前尚未替换现有 `planReply()` 与 index 执行链。
+
+本轮（v0.7.343，关系可塑性阶段 B · 通用 adaptation block）：将归一化的相处理解接入普通回复、主动联系/夜间留言、等回音和小动作文案；不注入来源消息、claims、关系分数或概率；新增 5 条提示词断链测试，全量 786 条通过。当前尚未接入睡眠、语音或表情包执行链。
+
+本轮（v0.7.342，关系可塑性阶段 A · 明确偏好结构化 reconciler）：候选消息调用一次 20 秒超时的 utility 模型，严格解析 `add/update/revoke/temporary/none`；本地校验来源、user-wide 普遍范围、claims 白名单和 supersede/revoke，模型失败、空回包与脏 JSON 都不挡正常聊天；新增 4 条协议测试，全量 781 条通过。当前尚未接入睡眠、语音或表情包执行链。
+
+本轮（v0.7.341，关系可塑性阶段 A · 明确偏好候选预筛）：新增本地 `adaptationCandidate()`，覆盖第一人称偏好、指令、临时要求、行为落点与提问排除；普通聊天不触发额外模型调用，`/turns` 在用户消息落盘后记录候选及真实 sourceMessageId；专项 55 条、全量 777 条通过。当前尚未接入结构化 reconciler、睡眠、语音或表情包执行链。
+
+本轮（v0.7.340，关系可塑性阶段 A · adaptation 持久化）：新增全局 `user-adaptation.json` 与伙伴级 `partners/<agentId>/adaptation.json`，覆盖重启恢复、全局/伙伴隔离、来源撤回后的习惯回退与脏数据归一；`tests/store.test.js` 新增 2 条存储回归。前一节点的 `adaptation/plasticity` 专项 14 条继续通过。当前尚未接入真实消息入口、睡眠、语音或表情包执行链。
+
+本轮（v0.7.339，关系可塑性阶段 A · 纯逻辑核心）：新增 `tests/adaptation.test.js` 与 `tests/plasticity.test.js`，覆盖 guide 归一、明确/观察来源、有效期、作用域、claim 白名单、冲突覆盖、撤回、通用提示词脱敏、hard 边界、关系单调因子、疲劳衰减、明确拒绝、破例幂等记录；专项 14 条通过。当前尚未接入真实消息入口、睡眠、语音或表情包执行链。
+
+本轮（v0.7.336–338，朗读模型配置重做、UI 收口与音色回归修复）：分享版不再有「从 Hana 已配置模型中选择」这条路（Hanako 没有朗读模型，拉不到东西），朗读侧只留用户自己保存的多条自定义模型：新建时可套 MiniMax / MiMo / OpenAI 兼容模板，保存后可切换、编辑、删除，当前使用项独立记住。旧数据里带 Key 的 MiniMax / MiMo 固定档位自动迁成 `custom-*` 普通条目，空壳和 hana-* 条目丢弃；更早的单条全局朗读配置只在从没存过多条结构时救一次，用户删光条目后不会把旧配置复活。UI 上：password 输入框纳入统一字段样式、API Key 旁加「已保存 / 还没填」状态胶囊、删除与模板按钮改用设置页已有的轻量款式。音色修复：合成前归一化会把 voiceId 洗掉，导致所有伙伴都发同一条默认音色（MiniMax 表首位是「可靠高管」，听上去是男声）；现在音色跟着配置一起传下去，旧档位 id 存的音色也会自动跟到迁移后的条目上，没给某条模型选过音色时会在伙伴页说明白。`tests/voice.test.js` 覆盖迁移、选中项、音色透传与目录回退；`tests/store.test.js` 覆盖音色键名迁移；`tests/ui.test.js` 同步朗读设置的新交互断言。
+
+本轮（v0.7.307，伙伴展板自适应布局）：独立茶话会主页默认展开左侧伙伴列表，嵌入其他位置继续沿用原有收起/展开方式；两种布局分别记忆状态。`tests/ui.test.js` 补充宿主挂载环境、分模式状态键和主页不自动收起的静态回归检查。
 
 本轮修订（v0.7.306，生活节拍设置与分析查看）：设置页新增生活节拍开关、表达习惯与主动关心分项控制、分析内容查看窗和重新开始积累入口；伙伴可见摘要与用户可见详情分开。
 
@@ -48,7 +108,7 @@
 
 ```sh
 cd app/chahuahui
-node --test tests/actions.test.js tests/analyze.test.js tests/avatar.test.js tests/awaiting.test.js tests/background-adaptive.test.js tests/background.test.js tests/clock.test.js tests/compose.test.js tests/daybook.test.js tests/days.test.js tests/facts.test.js tests/growth.test.js tests/host-user.test.js tests/knowing.test.js tests/load.test.js tests/memory.test.js tests/model.test.js tests/notify.test.js tests/palette.test.js tests/partner-id.test.js tests/pass.test.js tests/persona-review.test.js tests/persona-standard.test.js tests/persona.test.js tests/phone.test.js tests/poke.test.js tests/proactive.test.js tests/prompt.test.js tests/recall.test.js tests/recognition.test.js tests/relationship.test.js tests/reply.test.js tests/rhythm.test.js tests/selfwatch.test.js tests/sleep.test.js tests/split.test.js tests/sticker-library.test.js tests/stickers.test.js tests/store-durability.test.js tests/store.test.js tests/summarize.test.js tests/topic-search.test.js tests/topics.test.js tests/ui.test.js tests/vision.test.js tests/workfeed.test.js
+node --test tests/voice.test.js tests/actions.test.js tests/analyze.test.js tests/avatar.test.js tests/awaiting.test.js tests/background-adaptive.test.js tests/background.test.js tests/clock.test.js tests/compose.test.js tests/daybook.test.js tests/days.test.js tests/facts.test.js tests/growth.test.js tests/host-user.test.js tests/knowing.test.js tests/load.test.js tests/memory.test.js tests/model.test.js tests/notify.test.js tests/palette.test.js tests/partner-id.test.js tests/pass.test.js tests/persona-review.test.js tests/persona-standard.test.js tests/persona.test.js tests/phone.test.js tests/poke.test.js tests/proactive.test.js tests/prompt.test.js tests/recall.test.js tests/recognition.test.js tests/relationship.test.js tests/reply.test.js tests/rhythm.test.js tests/selfwatch.test.js tests/sleep.test.js tests/split.test.js tests/sticker-library.test.js tests/stickers.test.js tests/store-durability.test.js tests/store.test.js tests/summarize.test.js tests/topic-search.test.js tests/topics.test.js tests/ui.test.js tests/vision.test.js tests/workfeed.test.js
 ```
 
 零额外依赖，用 Node 内置 `node:test`。

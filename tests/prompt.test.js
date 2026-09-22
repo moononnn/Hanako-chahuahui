@@ -121,6 +121,18 @@ test("名牌摆在系统提示词最前，人设那份带一句“说的是你�
   assert.match(prompt, /下面这些说的是你自己/);
 });
 
+test("普通回复提示词会带入相处理解，但不带内部机制", () => {
+  const prompt = buildSystemPrompt({
+    partnerName: "小七",
+    userName: "阿舟",
+    personaText: "小七很安静。",
+    adaptationText: "【你们相处出来的理解】\\n偏好：难过时先陪她，别急着分析",
+  });
+  assert.match(prompt, /你们相处出来的理解/);
+  assert.match(prompt, /难过时先陪她/);
+  assert.doesNotMatch(prompt, /sourceMessageId|claims|概率|分数/);
+});
+
 test("手打的文字表情：像自己打出来的图名，用得很松", () => {
   assert.match(CHAT_HOUSE_STYLE, /手打的文字表情/);
   assert.match(CHAT_HOUSE_STYLE, /无语\.jpg/);

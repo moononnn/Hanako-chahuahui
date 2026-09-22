@@ -21,6 +21,25 @@ test("渠道塞在末尾的广告尾巴剥掉，正常聊天里的加号不动",
   assert.equal(looksLikeAdTail("前面说完了"), false);
 });
 
+test("主动消息提示词会带入相处理解", () => {
+  const spec = proactiveSpec({
+    partnerName: "小花",
+    userName: "阿舟",
+    adaptationText: "【你们相处出来的理解】\\n边界：认真说事时先接住情绪",
+  });
+  assert.match(spec.userText, /你们相处出来的理解/);
+  assert.match(spec.userText, /认真说事时先接住情绪/);
+});
+
+test("夜间留言提示词也会带入相处理解", () => {
+  const spec = nightSpec({
+    partnerName: "小花",
+    userName: "阿舟",
+    adaptationText: "【你们相处出来的理解】\\n偏好：多分享一点自己的事",
+  });
+  assert.match(spec.userText, /多分享一点自己的事/);
+});
+
 test("睡醒回声优先于普通话题，并允许共享窗外情境作为背景", () => {
   const spec = proactiveSpec({
     partnerName: "小花",

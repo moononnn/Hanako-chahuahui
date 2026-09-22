@@ -144,7 +144,7 @@ test("设置接口只接受用户设置字段", () => {
   assert.match(app, /app\.use\("\*", async \(c, next\) =>/);
   assert.match(app, /INVALID_PARTNER_ID/);
   assert.match(app, /const GLOBAL_SETTING_KEYS = new Set\(\[/);
-  assert.match(app, /const PARTNER_SETTING_KEYS = new Set\(\["tier", "proactiveEnabled", "model", "vision"\]\)/);
+  assert.match(app, /const PARTNER_SETTING_KEYS = new Set\(\["tier", "proactiveEnabled", "model", "vision", "voice"\]\)/);
   assert.match(app, /code = "UNKNOWN_SETTING"/);
   assert.match(app, /pickSettingsPatch\(body, PARTNER_SETTING_KEYS, "伙伴设置"\)/);
   assert.doesNotMatch(app, /function normalizePartnerSettingsPatch\(body\) \{\n\s*const patch = \{ \.\.\.\(body/);
@@ -297,6 +297,53 @@ test("设置页完全不展示伙伴爱好", () => {
   assert.doesNotMatch(executableSettings, /爱好|hobbies/, "伙伴爱好只能从聊天里慢慢了解");
   assert.match(app, /app\.get\("\/knowing\/:agentId"/);
   assert.doesNotMatch(app, /return c\.json\(\{[\s\S]{0,1200}hobbies:/, "用户可见的 knowing 回包不能带爱好");
+});
+
+test("伙伴语音设置分成表达方式与全局朗读模型", () => {
+  assert.match(settings, /id="voice-model-host"/, "通用设置要有朗读模型配置入口");
+  assert.match(settings, /id="voice-model-test"/, "通用设置要有模型连通测试");
+  assert.match(settings, /id="voice-model-test-note"/, "模型测试要有单独的结果提示");
+  assert.match(settings, /试听这位伙伴的声音/, "伙伴联系页要有针对当前音色的试听");
+  assert.match(settings, /voicePresets = data\.voicePresets/, "朗读模板要从后端读取");
+  assert.match(settings, /已保存的朗读模型/, "朗读设置要能选择已保存的条目");
+  assert.match(settings, /＋ 新建一条朗读模型/, "朗读设置要能新建条目");
+  assert.match(settings, /voice-model-presets/, "新建时要给出开箱模板按钮");
+  assert.match(settings, /custom-\$\{Date\.now\(\)/, "新建条目要拿得到自己的编号");
+  assert.match(settings, /list\.addEventListener\("change", async/, "切换已保存朗读模型要等保存回包再重画表单");
+  assert.match(settings, /保存这条朗读模型/, "新建态和编辑态的保存按钮要分开");
+  assert.match(settings, /voiceFormReader/, "测试模型连接要能读还没保存的草稿");
+  assert.match(settings, /keyBadge\.className = "field-state saved"/, "存过 Key 要明确标出来");
+  assert.match(settings, /keyBadge\.className = "field-state missing"/, "没填 Key 也要明确标出来");
+  assert.match(settingsCss, /input\[type="password"\]/, "API Key 输入框要跟其它字段同一套样式");
+  assert.match(settingsCss, /\.field-state\.saved/, "状态胶囊要有自己的配色");
+  assert.match(settingsCss, /\.voice-model-presets button/, "模板按钮要有自己的轻量样式，不能是原生按钮");
+  assert.match(settings, /remove\.className = "remove-link"/, "删除按钮跟随设置页已有的轻量危险样式");
+  assert.doesNotMatch(settings, /选择已配置朗读模型|voiceModelCatalog|hana-\$\{/, "分享版不再从 Hana 目录拉朗读模型");
+  assert.match(app, /voicePresets: VOICE_PRESETS/, "后端回包要给朗读模板");
+  assert.doesNotMatch(app, /listConfiguredVoices/, "后端不再拉 Hana 朗读目录");
+  assert.doesNotMatch(app, /GLOBAL_SETTING_KEYS[\s\S]{0,400}?"voiceModel"/, "全局设置不再单独收 voiceModel");
+  assert.match(settings, /const pickedVoice = voiceChoices\.some/, "试听要使用当前模型下的合法音色");
+  assert.match(settings, /这条朗读模型还没给 ta 选过声音/, "没给这条模型选过音色时要说明白");
+  assert.match(settings, /body: JSON\.stringify\(\{ voiceId: voiceId, modelConfig: globalSettings\.voiceModel/, "试听请求要带当前合法音色");
+});
+
+test("语音消息采用播放胶囊，转文字独立成普通气泡", () => {
+  assert.match(panel, /main\.className = "voice-main"/);
+  assert.match(panel, /wave\.className = "voice-wave"/);
+  assert.match(panel, /transcriptLine\.className = "msg-line voice-transcript-line"/);
+  assert.match(panel, /messageLine\.insertBefore\(transcript, messageLine\.querySelector\("\.msg-time"\)\)/);
+  assert.match(panel, /rendered\.col\.appendChild\(transcriptLine\)/);
+  assert.match(panel, /function formatVoiceDuration/);
+  assert.match(panel, /voice-unplayed-dot/);
+  assert.match(panel, /playedAt/);
+  assert.match(panel, /voice\/[\s\S]*\/played/);
+  assert.match(panel, /el\.chat\.style\.setProperty\("--voice-bg", theme\.background\)/);
+  assert.match(panelCss, /background: var\(--voice-bg, var\(--primary-ink\)\)/);
+  assert.match(panelCss, /\.voice-play:hover \{[^}]*background: var\(--voice-bg/);
+  assert.match(panelCss, /\.voice-play \{[\s\S]*border-radius: 50%/);
+  assert.match(panelCss, /\.voice-wave \{/);
+  assert.match(panelCss, /\.voice-transcript-line \{ margin-top: 6px; \}/);
+  assert.doesNotMatch(panel, /main\.append\(play, wave, duration, transcript\)/, "转文字按钮不能继续塞进语音胶囊");
 });
 
 test("茶话会用户名称有明确保存按钮，清空后可恢复跟随 Hana", () => {
@@ -454,7 +501,7 @@ test("起跑线：自动量那边的痕迹，也能自己定从哪儿算，只�
   assert.match(app, /seedStale\(knowing\.relationSeed, seedLastTry\)/, "该重量的就重量一份（量不出东西也有节流）");
   assert.doesNotMatch(app, /session:list/, "量会话那条路 v2 应用走不通，别写");
   assert.match(app, /note: relationshipNote\(effectiveRelationship\(knowing\), knowing\.relationSeed\)/, "回复那一句也要带上起跑线");
-  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, topic, hobby, memoryText, relationNote, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, stickerText, userRhythmText: userRhythm \}\)/, "ta 主动冒出来的消息也要带上兴趣、临时搜索素材、当前时间、未回应语境、醒来回声、最近场景、共享情境、表情包和生活节拍");
+  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, topic, hobby, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, stickerText, userRhythmText: userRhythm \}\)/, "ta 主动冒出来的消息也要带上相处理解、兴趣、临时搜索素材、当前时间、未回应语境、醒来回声、最近场景、共享情境、表情包和生活节拍");
   assert.match(app, /const now = new Date\(\);[\s\S]{0,180}?currentTimeText/, "主动消息在搜索完成后再取当前时间");
   assert.match(app, /主动联系不能等用户先说话才有兴趣/);
   assert.match(app, /const personaText = renderPersona\(persona/);
@@ -537,10 +584,11 @@ test("提醒只走输入框上方的横幅：不再声明输入栏那一格，�
   assert.doesNotMatch(app, /ctx\.inputStatus/, "应用不该再碰输入栏工具条");
   assert.match(
     app,
-    /function acknowledgeBatch[\s\S]{0,400}?dismissBanner\(banner\.sessionPath\)/,
+    /function acknowledgeBatch[\s\S]{0,500}?banner\?\.sessionPath \|\| eventSessionPath[\s\S]{0,180}?dismissBanner\(sessionPath\)/,
     "点了「知道了」或手动关，要把条子真摘下来；只翻篇不摘，看着就像点不动",
   );
   assert.match(app, /sessionPath,[\s\S]{0,90}?bannerId: BANNER_ID/, "横幅还是挂在会话上、跟着人走");
+  assert.match(app, /handleBannerBusEvent\(event, sessionPath\)/, "横幅事件要把宿主回传的会话路径交给关闭逻辑");
 });
 
 test("好友列表名字下面只放最后一句：没聊过的那位就空着，不拿人格设定垫", () => {
@@ -596,7 +644,7 @@ test("戳一下不马上接、也不摆「正在回复」的姿态", () => {
 
 test("醒来还是睡着都是ta自己的事，不看她打不打开窗口", () => {
   assert.match(app, /import \{ DOZE_SLOWDOWN, mergeDueAt, planReply \} from "\.\/lib\/reply\.js";/);
-  assert.match(app, /sleep: directReplyToProactive \? null : settings\.sleep/, "直接回复主动消息时沿用醒着的场景");
+  assert.match(app, /const sleepValue = directReplyToProactive \? null : settings\.sleep/, "直接回复主动消息时沿用醒着的场景");
   assert.match(app, /const directReplyToProactive = isDirectReplyToProactive\(threadBeforeMessage\.messages\)/, "主动消息后的回复不再重复算作被吵醒");
   assert.match(
     app,
@@ -606,7 +654,7 @@ test("醒来还是睡着都是ta自己的事，不看她打不打开窗口", () 
   assert.match(app, /const watching = body\?\.watching === true/);
   assert.match(
     app,
-    /const live = plan\.mode === "hand" \|\| plan\.mode === "dozing"/,
+    /const live = plan\.mode === "hand" \|\| \(plan\.mode === "dozing" && plan\.wakeDecision !== "deferred"\)/,
     "面对面和打盹都演实时那套——打盹只是演得慢",
   );
   assert.match(
@@ -615,7 +663,7 @@ test("醒来还是睡着都是ta自己的事，不看她打不打开窗口", () 
     "递出去不演的那些（手机不在手）才只记一个时刻；skip 那套已经删了",
   );
   assert.doesNotMatch(app, /plan\.skip/, "不再有「掷骰子决定理不理」这回事");
-  assert.match(app, /function deliverScheduledReply\(agentId(?:, generation[^)]*)?\)[\s\S]{0,1800}?announceArrival/, "到点落库后要喊她一声");
+  assert.match(app, /function deliverScheduledReply\(agentId(?:, generation[^)]*)?\)[\s\S]{0,2800}?announceArrival/, "到点落库后要喊她一声");
   assert.match(app, /if \(plan\.mode === "hand"\) \{/, "已读延迟只有醒着那条还按老节奏算");
   assert.doesNotMatch(
     app,
@@ -768,16 +816,21 @@ test("左边展板能收能展：窄了先自己收着，她的选择记住", ()
   assert.match(panel, /const SHOW_UNREAD_BADGES = true/, "好友列表未读红点跟着未读数显示");
   assert.match(panel, /if \(el\.railDot\) el\.railDot\.hidden = !\(total > 0\)/, "收起把手上的未读红点跟着总未读数显示");
   assert.match(panel, /const FOLD_KEY = "chahuahui\.listCollapsed"/);
+  assert.match(panel, /const FOLD_PAGE_KEY = `\$\{FOLD_KEY\}\.page`/, "主页和嵌入位置要分开记住收起状态");
+  assert.match(panel, /function detectSurfaceMode\(\)/, "要根据宿主挂载环境判断布局");
+  assert.match(panel, /envelope\?\.height\?\.mode === "flexible"/, "主页优先按宿主页面尺寸识别");
+  assert.match(panel, /envelope\?\.height\?\.mode === "fixed"/, "独立卡片回退到嵌入式展板规则");
   assert.match(panel, /window\.innerWidth < FOLD_AUTO_WIDTH/, "没选过时窗口窄就先收着");
   assert.match(panel, /el\.shell\.classList\.toggle\("list-collapsed", fold\)/);
   assert.match(panel, /el\.unfold\.hidden = !fold/);
-  assert.match(panel, /localStorage\.setItem\(FOLD_KEY/, "她的选择要记住");
+  assert.match(panel, /localStorage\.setItem\(foldStorageKey\(\)/, "她的选择要记住");
   assert.match(panel, /el\.fold\.addEventListener\("click", \(\) => foldByHand\(true\)\)/);
   assert.match(panel, /el\.unfold\.addEventListener\("click", \(\) => foldByHand\(false\)\)/);
   assert.match(panel, /伙伴展板收起来了/, "收着的时候空状态别还写着「左边点一位伙伴」");
   assert.match(panel, /window\.addEventListener\("resize"/, "窗口宽窄一变就要重新判，不能只在开场判一次");
-  assert.match(panel, /if \(nowAuto !== foldAutoLast\)[\s\S]{0,80}?foldManual = null/, "跨过档位就把手动那笔让开");
+  assert.match(panel, /if \(nowAuto !== foldAutoLast\)[\s\S]{0,180}?if \(!isPrimaryPage\(\)\) foldManual = null/, "嵌入模式跨过档位就把手动那笔让开");
   assert.match(panel, /function foldAfterPick\(\)/, "窄窗下选完伙伴要把浮层展板收回去");
+  assert.match(panel, /!isPrimaryPage\(\) && isNarrow\(\)/, "独立主页选完伙伴不自动收起左侧展板");
   assert.match(panel, /foldAfterPick\(\);/, "openPartner 里得真的调用它");
 
   const css = fs.readFileSync(new URL("../ui/assets/panel.css", import.meta.url), "utf8");
@@ -800,6 +853,53 @@ test("左边展板能收能展：窄了先自己收着，她的选择记住", ()
   assert.match(css, /\.rail-dot \{[\s\S]{0,160}?background: var\(--blossom\)/, "小点用那朵花的粉");
 });
 
+test("关系破例只在真实成功提交点落账，并使用稳定幂等键", () => {
+  assert.match(app, /id: `sleep\.wake\|\$\{triggerMessageId\}`/);
+  assert.match(app, /id: `voice\.frequency\|\$\{stored\.id\}`/);
+  assert.match(app, /id: `sticker\.permission\|\$\{stored\.id\}`/);
+  assert.match(app, /id: `reply\.advice-style\|\$\{stored\.id\}`/);
+  assert.match(app, /if \(decision\.layer === "exception"\)/, "普通语音不能记成破例");
+  assert.match(app, /if \(pending\?\.wakeDecision !== "exception" \|\| pending\?\.wakeOutcome !== "committed"\) return null/);
+  assert.match(app, /if \(composed\.stickerException\)/, "普通图库表情不能记成关系破例");
+  assert.match(app, /observeAdviceStyle\(text, "comfort-first"\)\.observed/, "文本行为必须观察真实输出，不能只凭提示词落账");
+  assert.match(app, /wakeDecision: sleepPolicy\.wakeDecision\?\.decision \?\? sleepPolicy\.wakeDecision/, "睡眠策略对象必须把真实 decision 交给回复排期");
+});
+
+test("相处理解放进现有记忆页，纠错失败会保留聊天、预览和确认按钮", () => {
+  assert.match(settings, /我们相处出来的理解/);
+  assert.match(settings, /只在你和 \$\{partner\.name\} 之间/);
+  assert.match(settings, /所有伙伴都这样理解/);
+  assert.match(settings, /没写进去：[\s\S]*?上面的聊天和建议都还在，可以重试/);
+  assert.match(settings, /apply\.disabled = false;\s*apply\.textContent = "确认修改"/);
+  assert.doesNotMatch(settings, /exception 次数|emerging|settled 阈值|confidence/);
+});
+
+test("旧 facts 迁移在启动后异步运行，完成后才进入主动巡检", () => {
+  assert.match(app, /async function migrateLegacyFactsOnce\(\)[\s\S]*?partners = await listAllPartners\(\)/, "隐藏伙伴也要迁移，不能等再次重启");
+  assert.match(app, /ensureLegacyFactsMigration\(\)\.catch\(\(\) => \{\}\)\.finally/);
+  assert.match(app, /async function runProactiveTick\(options = \{\}\) \{\s*await ensureLegacyFactsMigration\(\)/, "定时与手动主动巡检都必须先过迁移硬屏障");
+  assert.match(app, /async function runAwaitingTick\(\) \{\s*await ensureLegacyFactsMigration\(\)/, "等回音也不能抢在迁移前发送");
+  assert.match(app, /existingGuides: \[\.\.\.userBook\.guides, \.\.\.book\.guides\]/, "迁移要同时检查 user-wide 与伙伴级同源 guide");
+});
+
+test("等回音也过主动硬门并在真实发送后记配额，暂存意图被拦时显式留住", () => {
+  const awaitingAt = app.indexOf("async function runAwaitingTickInternal");
+  const awaitingEnd = app.indexOf("async function deliverNudge", awaitingAt);
+  const awaitingBody = app.slice(awaitingAt, awaitingEnd);
+  assert.match(awaitingBody, /gateCheck\(\{[\s\S]*?relationalPolicy: contactPolicy/);
+  const deliverAt = app.indexOf("async function deliverNudge");
+  const deliverEnd = app.indexOf("function recordWatch", deliverAt);
+  const deliverBody = app.slice(deliverAt, deliverEnd);
+  assert.match(deliverBody, /noteAwaitingSent/);
+  assert.match(deliverBody, /noteSent\(/);
+  assert.match(app, /function withGlobalAutonomousLane/);
+  assert.match(app, /withAutonomousLane\(agentId, \(\) => withGlobalAutonomousLane/);
+  assert.match(app, /const finalGate = autonomousGateNow\(agentId, "proactive"\)[\s\S]{0,1200}?noteSent\(/, "proactive 必须在全局锁内二次过门并记账");
+  assert.match(awaitingBody, /withGlobalAutonomousLane[\s\S]{0,700}?autonomousGateNow\(agentId, "awaiting"\)/, "awaiting 必须在全局锁内二次过门");
+  assert.match(app, /staged: \[pending\.intent, \.\.\.pending\.rest\]/, "gate 拦住时旧暂存意图要显式写回");
+  assert.match(app, /sent\.gateBlocked && readyTopic[\s\S]{0,300}?stageIntent\(/, "临门被拦时，本轮新挑出的正式话题也要放进暂存抽屉");
+});
+
 test("被吵醒那一段：先有脾气再回正事，脾气还是ta自己的", () => {
   assert.match(app, /function wakeBlockFor\(agentId, now = new Date\(\)\)/, "被吵醒那段要现算：排期时在睡、写的时候可能已经醒了");
   assert.match(app, /dozingNow\(now, settings\.sleep\)/);
@@ -810,7 +910,7 @@ test("被吵醒那一段：先有脾气再回正事，脾气还是ta自己的", 
   assert.match(app, /含糊确认是谁在叫、带起床气抱怨、先问时间或发生了什么、嘴硬说自己已经醒了，或短暂撒娇/, "唤醒反应要给伙伴留出性格差异");
   assert.match(app, /回完接着睡/, "不用装精神");
   assert.match(app, /count >= 3/, "同一觉里被吵醒多次，脾气要升级");
-  assert.match(app, /wakeNight: night/);
+  assert.match(app, /wakeNight,/);
   assert.match(app, /wakeCount:/);
   // 她那边也演得慢：睡着时整段节奏往后拖
   assert.match(app, /if \(turn\.mode === "dozing"\) rhythm\.speed = /);
@@ -876,7 +976,7 @@ test("连续发送时不再被回复动画占住发送门", () => {
 
 test("表情包没发出来，日志里分得清是「没想甩」还是「想甩没对上」", () => {
   assert.match(app, /marker: composed\.marker \|\| null/, "诊断要记下ta这回自己想甩的词");
-  assert.match(app, /return \{ bubbles, sentSticker: Boolean\(stickerBubble\), stickerId, marker: mark\.keyword \|\| "" \}/);
+  assert.match(app, /return \{ bubbles, sentSticker: Boolean\(stickerBubble\), stickerId, stickerException, marker: mark\.keyword \|\| "" \}/);
 });
 
 test("聊天窗头部那个头像是反复用的节点：换到没头像的伙伴不能挂着上一位的脸", () => {
