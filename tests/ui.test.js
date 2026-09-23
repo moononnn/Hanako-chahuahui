@@ -65,6 +65,7 @@ test("回复只有一条路能画：正在演的那轮归演出，剩下的归�
   assert.match(panel, /async function playLiveTurn\(agentId, viewSeq, started, tickEl\)/);
   assert.match(panel, /const state = await api\("GET", `turns\/\$\{encodeURIComponent\(started\.turnId\)\}`\)/);
   assert.match(panel, /await sleep\(Math\.max\(120, Number\(item\.gapMs\) \|\| 700\)\)/);
+  assert.match(panel, /renderMessage\(payload\.message, \{[\s\S]*?assistantPieces: \[item\.text\][\s\S]*?bindAssistantActions: index === payload\.items\.length - 1/);
   assert.match(panel, /const liveSkipRepliedTo = new Set\(\)/);
   assert.match(panel, /liveSkipRepliedTo\.has\(m\.repliedTo\)\) continue;/);
   assert.match(panel, /liveSkipRepliedTo\.delete\(repliedTo\)/);

@@ -1862,10 +1862,16 @@
           if (payload.replyMessageId) seenIds.add(payload.replyMessageId);
           return;
         }
-        for (const item of payload.items || []) {
+        for (let index = 0; index < (payload.items || []).length; index += 1) {
+          const item = payload.items[index];
           await sleep(Math.max(120, Number(item.gapMs) || 700));
           if (!alive()) return;
-          bubble("assistant", item.text, null, new Date().toISOString());
+          // 实时演出也必须走统一消息渲染入口，否则新气泡没有右键投喂绑定。
+          renderMessage(payload.message, {
+            allowSeen: index > 0,
+            assistantPieces: [item.text],
+            bindAssistantActions: index === payload.items.length - 1,
+          });
           // 三个点始终站在最新那条下面，不能跑到新消息头上去
           el.stream.appendChild(dots);
         }
