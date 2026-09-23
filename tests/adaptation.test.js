@@ -31,7 +31,7 @@ const guide = (extra = {}) => ({
 });
 
 test("结构化 reconciler 协议能从 JSON 围栏和外围文字中取回", () => {
-  const spec = buildGuideReconcileSpec({ message: "我喜欢你多发一点语音", existingGuides: [guide()], userName: "玥儿", partnerName: "小花" });
+  const spec = buildGuideReconcileSpec({ message: "我喜欢你多发一点语音", existingGuides: [guide()], userName: "用户", partnerName: "伙伴" });
   assert.match(spec.systemPrompt, /operation 只能是 add、update、revoke、temporary、none/);
   const payload = JSON.stringify({ operation: "add", meaning: "多发一点语音", kind: "preference", claims: [{ target: "voice.frequency", effect: "prefer", value: "more" }] });
   const parsed = parseGuideReconcileResult("好的：\\n```json\\n" + payload + "\\n```", { sourceMessageId: "m-pref", message: "我喜欢你多发一点语音", now });

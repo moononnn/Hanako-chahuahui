@@ -256,12 +256,44 @@ html, body {
 }
 .friend:hover { background: var(--sunken); }
 .friend.active { background: var(--accent-soft); }
+.friend[draggable="true"] { cursor: grab; touch-action: none; }
+.friend.dragging {
+  position: relative;
+  z-index: 3;
+  cursor: grabbing;
+  background: var(--paper);
+  box-shadow: 0 12px 26px rgba(74, 70, 64, .18);
+  transform: scale(1.025) rotate(1deg);
+  transition: transform .16s ease, box-shadow .16s ease, background .16s ease;
+}
+.friend.drag-over {
+  position: relative;
+  background: var(--accent-soft);
+}
+.friend.drag-over::before,
+.friend.drag-over::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  height: 3px;
+  border-radius: 99px;
+  background: var(--primary);
+  box-shadow: 0 1px 4px rgba(93, 174, 142, .25);
+}
+.friend.drag-over::before { top: -2px; }
+.friend.drag-over::after { bottom: -2px; }
+.friend-list .friend:not(.dragging) { transition: transform .18s ease, background .15s ease; }
+@media (prefers-reduced-motion: reduce) {
+  .friend.dragging, .friend-list .friend:not(.dragging) { transition: none; }
+}
 .friend.active .name { color: var(--primary-ink); font-weight: 600; }
 .friend .avatar {
   flex: none;
   width: 36px; height: 36px;
   border-radius: var(--r-sm);
-  overflow: hidden;
+  overflow: visible;
+  position: relative;
   background: #cfe8dc;
   color: var(--primary-ink);
   display: grid; place-items: center;
@@ -272,6 +304,7 @@ html, body {
   width: 100%; height: 100%;
   object-fit: cover;
   display: block;
+  border-radius: inherit;
 }
 /* 上面那个 display:block 会盖掉浏览器默认的 [hidden]：图一旦挂上去，
    光把它标成 hidden 是没用的。换到没头像的伙伴身上时得真关掉，别挂着上一位的脸。 */
@@ -279,6 +312,62 @@ html, body {
 .chat-av .im[hidden],
 .msg-av .im[hidden] { display: none; }
 .friend .who { min-width: 0; flex: 1 1 auto; }
+.friend .name-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.friend .name-row .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.friend .state-row { display: flex; min-height: 20px; align-items: center; }
+.state-badge,
+.chat-state-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid var(--badge-line, #b9dccb);
+  border-radius: 999px;
+  color: var(--badge-ink, #39785f);
+  background: var(--badge-bg, #e5f3eb);
+  font-size: 10.5px;
+  line-height: 20px;
+  padding: 0 8px 0 6px;
+  font-weight: 650;
+}
+.state-badge[hidden],
+.chat-state-badge[hidden],
+.state-pin[hidden] { display: none; }
+.state-mark { flex: none; width: 14px; height: 14px; display: grid; place-items: center; }
+.state-mark svg, .state-pin svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.state-badge--online, .state-pin--online { --badge-bg: #e1f3e8; --badge-line: #9bd2b3; --badge-ink: #33785a; }
+.state-badge--busy, .state-pin--busy { --badge-bg: #fff0d8; --badge-line: #e7bd78; --badge-ink: #98651f; }
+.state-badge--new, .state-pin--new { --badge-bg: #fde7ee; --badge-line: #e8a9bd; --badge-ink: #a65370; }
+.state-badge--recent, .state-pin--recent { --badge-bg: #e6f1fb; --badge-line: #a9cce8; --badge-ink: #3d6f98; }
+.state-badge--away, .state-pin--away { --badge-bg: #f5eadf; --badge-line: #dfc2a6; --badge-ink: #8d6542; }
+.state-badge--idle, .state-pin--idle { --badge-bg: #edf0f3; --badge-line: #c6cdd4; --badge-ink: #66727d; }
+.state-badge--resting, .state-pin--resting { --badge-bg: #fff1df; --badge-line: #e8c394; --badge-ink: #95622e; }
+.state-badge--sleeping, .state-pin--sleeping { --badge-bg: #e9e7f8; --badge-line: #bbb5e4; --badge-ink: #655d98; }
+.state-badge--waking, .state-pin--waking { --badge-bg: #fff2c9; --badge-line: #e5c871; --badge-ink: #8b6b1f; }
+.state-badge--awaiting, .state-pin--awaiting { --badge-bg: #fde7ee; --badge-line: #e8a9bd; --badge-ink: #a65370; }
+.state-badge--quiet, .state-pin--quiet { --badge-bg: #e3f2f0; --badge-line: #9dceca; --badge-ink: #347875; }
+.state-badge--custom, .state-pin--custom { --badge-bg: #f0e8f7; --badge-line: #cbb1dc; --badge-ink: #76518b; }
+.state-pin {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  z-index: 2;
+  width: 17px;
+  height: 17px;
+  display: grid;
+  place-items: center;
+  border: 2px solid var(--paper);
+  border-radius: 50%;
+  color: var(--badge-ink, #39785f);
+  background: var(--badge-bg, #e5f3eb);
+  font: 800 8px/1 system-ui, sans-serif;
+  letter-spacing: -.05em;
+  box-shadow: 0 1px 4px rgba(54, 91, 76, .18);
+}
 .friend .badge {
   flex: none;
   min-width: 18px;
@@ -298,7 +387,8 @@ html, body {
   flex: none;
   width: 32px; height: 32px;
   border-radius: var(--r-sm);
-  overflow: hidden;
+  overflow: visible;
+  position: relative;
   background: #cfe8dc;
   color: var(--primary-ink);
   display: grid; place-items: center;
@@ -360,6 +450,7 @@ html, body {
   z-index: 3;
 }
 .chat-head .title { font-size: 14.5px; font-weight: 600; color: var(--primary-ink); letter-spacing: .04em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-state-badge { max-width: 160px; line-height: 22px; font-size: 11px; }
 .chat-head .spacer { flex: 1 1 auto; }
 .head-tool {
   flex: none; width: 30px; height: 30px; padding: 6px; border: 0; border-radius: var(--r-sm);
@@ -416,6 +507,13 @@ html, body {
   gap: 8px;
   position: relative;
 }
+.stream.bottom-feedback {
+  transform: translateY(calc(var(--bottom-pull, 0px) * -1));
+  transition: transform 120ms ease-out;
+}
+.stream:not(.bottom-feedback) {
+  transition: transform 180ms cubic-bezier(.22, .8, .28, 1);
+}
 .jump-bottom {
   position: absolute;
   z-index: 4;
@@ -436,6 +534,9 @@ html, body {
 .jump-bottom:active { transform: scale(.94); }
 .jump-bottom svg { display: block; width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .jump-bottom[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .stream.bottom-feedback, .stream:not(.bottom-feedback) { transition: none; }
+}
 /* ── 房间的背景（她给这位伙伴铺的那张）──
    图铺在整个聊天窗上，一路顶到边缘：头顶的伙伴栏和脚下的输入框是两条半透明的
    磨砂玻璃，透上来的是同一张图，不再有「三块板拼起来」的缝。
@@ -752,9 +853,10 @@ html, body {
 .message-feed {
   display: inline-flex;
   align-items: center;
+  gap: 5px;
   min-height: 21px;
   margin-top: 5px;
-  padding: 1px 7px 2px;
+  padding: 2px 7px 3px;
   border: 1px solid var(--line-soft);
   border-radius: 999px;
   background: rgba(255, 253, 248, .86);
@@ -762,6 +864,21 @@ html, body {
   font-size: 15px;
   line-height: 1;
   animation: feed-settle .18s ease-out;
+}
+.message-feed-item { display: inline-flex; align-items: center; gap: 2px; }
+.message-feed-emoji { line-height: 1; }
+.message-feed-count {
+  display: inline-grid;
+  min-width: 15px;
+  height: 15px;
+  place-items: center;
+  padding: 0 3px;
+  border-radius: 999px;
+  color: var(--mint-deep);
+  background: var(--mint-soft);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
 }
 .message-feed[hidden] { display: none; }
 /* 被点起来的那条：气泡轻轻欠一下身，动作看着是从它身上出来的 */

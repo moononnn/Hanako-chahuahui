@@ -54,8 +54,10 @@
         <span class="chat-av" id="chat-avatar" title="双击戳一下" hidden>
           <span class="ph">?</span>
           <img class="im" alt="" hidden>
+          <span class="state-pin" hidden></span>
         </span>
         <span class="title" id="chat-title">挑个人说话</span>
+        <span class="chat-state-badge" id="chat-state-badge" hidden></span>
         <span class="spacer"></span>
         <button class="head-tool" id="btn-appearance" type="button" title="聊天背景" aria-label="打开聊天背景" disabled>
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 15.5 13.8 5.7a2.1 2.1 0 0 1 3 3L7 18.5H4v-3Z"/><path d="m11.8 7.7 2.5 2.5M5.5 4.5v3M4 6h3M15.5 13.5v3M14 15h3"/></svg>
@@ -244,7 +246,9 @@
       imageLightboxClose: document.getElementById("image-lightbox-close"),
       imageLightboxImage: document.getElementById("image-lightbox-image"),
       chatAvatar: document.getElementById("chat-avatar"),
+      chatAvatarStatePin: document.querySelector("#chat-avatar .state-pin"),
       title: document.getElementById("chat-title"),
+      chatStateBadge: document.getElementById("chat-state-badge"),
       settingsButton: document.getElementById("btn-settings"),
       favoritesButton: document.getElementById("btn-favorites"),
       favoritesView: document.getElementById("favorites-view"),
@@ -301,6 +305,11 @@
     let partners = [];
     let current = null;
     let lastPartnerId = null;
+    let draggedPartnerId = "";
+    let draggedPartnerNode = null;
+    let dragOriginIds = [];
+    let dragCommitted = false;
+    let suppressPartnerClick = false;
     let busy = false;
     // 请求被后端拒绝或失败时先把原话寄存在对应伙伴名下，切回来还能接着发。
     const pendingDrafts = new Map();
@@ -1242,6 +1251,7 @@
       }, 3200);
     }
     let autoScrollAllowed = true;
+    let bottomFeedbackTimer = null;
     const SCROLL_BOTTOM_GAP = 24;
 
     function isAtBottom() {
@@ -1262,6 +1272,26 @@
       updateJumpBottom();
     }
 
+    function playBottomFeedback(deltaY) {
+      const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      if (reduceMotion) return;
+      const maxPull = Math.max(1, Math.round(el.stream.clientHeight / 3));
+      const pull = Math.min(maxPull, Number(el.stream.dataset.bottomPull || 0) + Math.max(4, Math.abs(deltaY) * 0.55));
+      el.stream.dataset.bottomPull = String(pull);
+      el.stream.style.setProperty("--bottom-pull", `${pull}px`);
+      el.stream.classList.add("bottom-feedback");
+      clearTimeout(bottomFeedbackTimer);
+      bottomFeedbackTimer = setTimeout(() => {
+        el.stream.classList.remove("bottom-feedback");
+        el.stream.style.removeProperty("--bottom-pull");
+        delete el.stream.dataset.bottomPull;
+        bottomFeedbackTimer = null;
+      }, 140);
+    }
+
+    el.stream.addEventListener("wheel", (event) => {
+      if (event.deltaY > 0 && isAtBottom()) playBottomFeedback(event.deltaY);
+    }, { passive: true });
     el.stream.addEventListener("scroll", () => {
       autoScrollAllowed = isAtBottom();
       updateJumpBottom();
@@ -1442,6 +1472,22 @@
     const ACTION_BAR_GAP = 8;
     const ACTION_BAR_MARGIN = 8;
     const FEED_EMOJIS = ["☕", "🍵", "🍭", "🧋", "🍪", "🍰", "🍓", "🍫"];
+    function messageFeedItems(value) {
+      const source = value && typeof value === "object" ? value : {};
+      const rawItems = Array.isArray(source.items) ? source.items : (source.emoji ? [{ emoji: source.emoji, count: 1 }] : []);
+      const items = [];
+      for (const raw of rawItems) {
+        const emoji = String(raw?.emoji || "").trim();
+        if (!emoji) continue;
+        const existing = items.find((item) => item.emoji === emoji);
+        if (existing) existing.count += Math.max(1, Number(raw?.count) || 1);
+        else items.push({ emoji, count: Math.max(1, Number(raw?.count) || 1) });
+      }
+      return items;
+    }
+    function formatMessageFeed(value) {
+      return messageFeedItems(value).map((item) => `${item.emoji}${item.count > 1 ? `×${item.count}` : ""}`).join(" ");
+    }
     const messageFeedMenu = document.createElement("div");
     messageFeedMenu.className = "message-feed-menu";
     messageFeedMenu.hidden = true;
@@ -1470,21 +1516,43 @@
     }
     function renderMessageFeed(col, message) {
       if (!col || message?.role !== "assistant") return;
+      col.querySelector(".message-feed")?.remove();
       const feed = document.createElement("div");
       feed.className = "message-feed";
-      feed.hidden = !message.feed?.emoji;
-      feed.textContent = message.feed?.emoji || "";
-      feed.setAttribute("aria-label", message.feed?.emoji ? `已投喂${message.feed.emoji}` : "");
+      const items = messageFeedItems(message.feed);
+      const feedText = formatMessageFeed(message.feed);
+      feed.hidden = !feedText;
+      feed.setAttribute("aria-label", feedText ? `已投喂${feedText}，数量按份计算` : "");
+      for (const item of items) {
+        const unit = document.createElement("span");
+        unit.className = "message-feed-item";
+        const emoji = document.createElement("span");
+        emoji.className = "message-feed-emoji";
+        emoji.textContent = item.emoji;
+        unit.appendChild(emoji);
+        if (item.count > 1) {
+          const count = document.createElement("span");
+          count.className = "message-feed-count";
+          count.textContent = `${item.count}份`;
+          count.title = `这条消息收到 ${item.count} 份投喂`;
+          unit.appendChild(count);
+        }
+        feed.appendChild(unit);
+      }
       col.appendChild(feed);
     }
     async function feedMessageOn(agentId, messageId, emoji, viewSeq = threadViewSeq) {
+      const row = feedRow;
+      const selectedMessage = feedMessage;
+      closeMessageFeed();
       try {
-        await api("POST", `thread/${encodeURIComponent(agentId)}/feed/${encodeURIComponent(messageId)}`, { emoji });
-        closeMessageFeed();
-        await reloadCurrentThread(agentId, viewSeq);
+        const data = await api("POST", `thread/${encodeURIComponent(agentId)}/feed/${encodeURIComponent(messageId)}`, { emoji });
+        if (row && selectedMessage && data.message?.feed) {
+          selectedMessage.feed = data.message.feed;
+          renderMessageFeed(row.querySelector(".msg-col"), selectedMessage);
+        }
         if (current === agentId && viewSeq === threadViewSeq) setStatus(`已投喂 ${emoji}`);
       } catch (error) {
-        closeMessageFeed();
         if (current === agentId && viewSeq === threadViewSeq) setStatus(error.message || "这次投喂没放上");
       }
     }
@@ -1553,7 +1621,7 @@
         button.type = "button";
         button.textContent = emoji;
         button.title = `投喂${emoji}`;
-        button.className = message.feed?.emoji === emoji ? "is-selected" : "";
+        button.className = messageFeedItems(message.feed).some((item) => item.emoji === emoji) ? "is-selected" : "";
         button.addEventListener("click", () => void feedMessageOn(agentId, message.id, emoji));
         emojiRow.appendChild(button);
       }
@@ -2155,19 +2223,113 @@
     // 未读数来自同一轮 partners 轮询；聊天入口已经能直接打开并阅读消息，恢复视觉提醒。
     const SHOW_UNREAD_BADGES = true;
 
+    const BADGE_VISUALS = {
+      online: { tone: "online", icon: "online" },
+      busy: { tone: "busy", icon: "busy" },
+      new: { tone: "new", icon: "new" },
+      recent: { tone: "recent", icon: "recent" },
+      away: { tone: "away", icon: "away" },
+      idle: { tone: "idle", icon: "idle" },
+      resting: { tone: "resting", icon: "resting" },
+      sleeping: { tone: "sleeping", icon: "sleeping" },
+      waking: { tone: "waking", icon: "waking" },
+      awaiting: { tone: "awaiting", icon: "awaiting" },
+      quiet: { tone: "quiet", icon: "quiet" },
+      custom: { tone: "custom", icon: "custom" },
+    };
+
+    const BADGE_ICON_PATHS = {
+      online: ["M12 4v2M12 18v2M4 12h2M18 12h2M6.3 6.3l1.4 1.4M16.3 16.3l1.4 1.4M17.7 6.3l-1.4 1.4M7.7 16.3l-1.4 1.4", "M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0"],
+      busy: ["M4.5 8h15v9h-15z", "M8 8V5.5h8V8", "M4.5 11.5h15"],
+      new: ["M4 6.5h16v11H4z", "m4.5 7 7.5 6 7.5-6", "M17.5 4.5v3M16 6h3"],
+      recent: ["M12 5a7 7 0 1 0 7 7", "M12 8v4l2.5 1.5", "M16 4.5h3v3"],
+      away: ["M18.5 4.5C11 5 6 8.5 5.5 15.5c4.5 1 9.5-1.5 13-7.5", "M5.5 15.5c2-2.5 4.5-4.5 7.5-6"],
+      idle: ["M5 7.5h10v5.5a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z", "M15 9h1.5a2.5 2.5 0 0 1 0 5H15", "M8 19h8"],
+      resting: ["M5 8h10v5a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z", "M15 10h1.5a2 2 0 0 1 0 4H15", "M8 19h8"],
+      sleeping: ["M18.5 14.5A6.5 6.5 0 1 1 10 5.5a5.5 5.5 0 0 0 8.5 9", "M16.5 6.5h2l-2 2h2"],
+      waking: ["M6 15a6 6 0 0 1 12 0", "M12 4v3M5.5 7.5l2 2M18.5 7.5l-2 2", "M4 17h16"],
+      awaiting: ["M4.5 6.5h15v9h-9l-4 3v-3h-2z", "M9 11h.01M12 11h.01M15 11h.01"],
+      quiet: ["M12 19s-7-4.2-7-9a3.5 3.5 0 0 1 6-2.5A3.5 3.5 0 0 1 19 10c0 4.8-7 9-7 9z"],
+      custom: ["m12 3 1.4 5.6L19 10l-5.6 1.4L12 17l-1.4-5.6L5 10l5.6-1.4z", "M19 16v4M17 18h4"],
+    };
+
+    function badgeVisual(badge) {
+      return BADGE_VISUALS[badge?.type === "custom" ? "custom" : badge?.id] || BADGE_VISUALS.custom;
+    }
+
+    function makeBadgeIcon(icon) {
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("viewBox", "0 0 24 24");
+      svg.setAttribute("aria-hidden", "true");
+      for (const d of BADGE_ICON_PATHS[icon] || BADGE_ICON_PATHS.custom) {
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", d);
+        svg.appendChild(path);
+      }
+      return svg;
+    }
+
+    function paintStatePin(node, badge) {
+      if (!node) return;
+      const label = String(badge?.title || badge?.label || "").trim();
+      const visual = badgeVisual(badge);
+      node.hidden = !label;
+      node.replaceChildren();
+      if (label) node.appendChild(makeBadgeIcon(visual.icon));
+      node.className = `state-pin state-pin--${visual.tone}`;
+      node.title = label ? `当前状态：${label}` : "";
+      node.setAttribute("aria-label", label ? `当前状态：${label}` : "当前状态未知");
+    }
+
+    function paintStateBadge(node, badge) {
+      if (!node) return;
+      const label = String(badge?.title || badge?.label || "").trim();
+      const visual = badgeVisual(badge);
+      node.hidden = !label;
+      node.className = `state-badge state-badge--${visual.tone}`;
+      node.replaceChildren();
+      if (label) {
+        const mark = document.createElement("span");
+        mark.className = "state-mark";
+        mark.setAttribute("aria-hidden", "true");
+        mark.appendChild(makeBadgeIcon(visual.icon));
+        const text = document.createElement("span");
+        text.textContent = label;
+        node.append(mark, text);
+      }
+      node.title = String(badge?.description || "").trim() || (label ? `当前状态：${label}` : "");
+      node.setAttribute("aria-label", label ? `当前状态：${label}` : "当前状态未知");
+    }
+
+    async function savePartnerOrder() {
+      try {
+        await api("POST", "partner-order", { ids: partners.map((partner) => partner.id) });
+        setStatus("伙伴顺序已保存");
+      } catch (error) {
+        setStatus(`顺序没保存：${error.message}`);
+        await loadPartners();
+      }
+    }
+
     function renderFriends() {
       el.friends.innerHTML = "";
       for (const p of partners) {
         const li = document.createElement("li");
         li.className = `friend${current === p.id ? " active" : ""}`;
+        li.draggable = true;
+        li.dataset.partnerId = p.id;
+        li.title = "拖动调整伙伴顺序";
         li.innerHTML = `
-          <div class="avatar"><span class="ph"></span><img class="im" alt="" hidden></div>
+          <div class="avatar"><span class="ph"></span><img class="im" alt="" hidden><span class="state-pin" hidden></span></div>
           <div class="who">
-            <div class="name"></div>
+            <div class="name-row"><div class="name"></div></div>
+            <div class="state-row"><span class="state-badge" hidden></span></div>
             <div class="hint"></div>
           </div>
           <span class="badge" hidden></span>`;
         li.querySelector(".name").textContent = p.name;
+        paintStateBadge(li.querySelector(".state-badge"), p.badge);
+        paintStatePin(li.querySelector(".state-pin"), p.badge);
         void paintAvatar(li.querySelector(".avatar"), p.id, p.name);
         // 名字下面只放最后一句：没聊过的伙伴就空着，不拿人格设定当占位
         const preview = String(p.lastMessage?.text ?? "").replace(/\s+/g, " ").trim();
@@ -2181,7 +2343,67 @@
         li.setAttribute("role", "button");
         li.tabIndex = 0;
         li.setAttribute("aria-label", `${p.name}${badge.hidden ? "" : `，${badge.textContent} 条没看`}`);
-        const openThis = () => openPartner(p.id);
+        const openThis = () => {
+          if (suppressPartnerClick) { suppressPartnerClick = false; return; }
+          openPartner(p.id);
+        };
+        li.addEventListener("dragstart", (event) => {
+          draggedPartnerId = p.id;
+          draggedPartnerNode = li;
+          dragOriginIds = partners.map((partner) => partner.id);
+          dragCommitted = false;
+          li.classList.add("dragging");
+          li.style.opacity = "0.04";
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", p.id);
+          const ghost = li.cloneNode(true);
+          const width = li.getBoundingClientRect().width;
+          ghost.style.cssText = `position: fixed; left: -10000px; top: 0; width: ${width}px; opacity: 1; background: var(--paper); box-shadow: 0 12px 26px rgba(74,70,64,.18); transform: rotate(1deg); pointer-events: none;`;
+          document.body.appendChild(ghost);
+          event.dataTransfer.setDragImage(ghost, Math.max(12, event.offsetX), Math.max(12, event.offsetY));
+          setTimeout(() => ghost.remove(), 0);
+        });
+        li.addEventListener("dragover", (event) => {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+          if (!draggedPartnerId || draggedPartnerId === p.id || !draggedPartnerNode) return;
+          document.querySelectorAll(".friend.drag-over").forEach((node) => node.classList.remove("drag-over"));
+          li.classList.add("drag-over");
+          const before = event.clientY < li.getBoundingClientRect().top + li.offsetHeight / 2;
+          const from = partners.findIndex((partner) => partner.id === draggedPartnerId);
+          const target = partners.findIndex((partner) => partner.id === p.id);
+          if (from < 0 || target < 0 || from === target) return;
+          const [moved] = partners.splice(from, 1);
+          const next = partners.findIndex((partner) => partner.id === p.id);
+          const insertAt = before ? next : next + 1;
+          partners.splice(insertAt, 0, moved);
+          if (before) el.friends.insertBefore(draggedPartnerNode, li);
+          else el.friends.insertBefore(draggedPartnerNode, li.nextSibling);
+        });
+        li.addEventListener("dragleave", (event) => {
+          if (!li.contains(event.relatedTarget)) li.classList.remove("drag-over");
+        });
+        li.addEventListener("drop", async (event) => {
+          event.preventDefault();
+          dragCommitted = true;
+          suppressPartnerClick = true;
+          document.querySelectorAll(".friend.drag-over").forEach((node) => node.classList.remove("drag-over"));
+          renderFriends();
+          await savePartnerOrder();
+        });
+        li.addEventListener("dragend", () => {
+          if (!dragCommitted && dragOriginIds.length) {
+            const byId = new Map(partners.map((partner) => [partner.id, partner]));
+            partners = dragOriginIds.map((id) => byId.get(id)).filter(Boolean);
+            renderFriends();
+          }
+          draggedPartnerId = "";
+          draggedPartnerNode = null;
+          dragOriginIds = [];
+          dragCommitted = false;
+          li.style.opacity = "";
+          li.classList.remove("dragging", "drag-over");
+        });
         li.addEventListener("click", openThis);
         li.addEventListener("keydown", (event) => {
           if (event.key === "Enter" || event.key === " ") {
@@ -2201,6 +2423,8 @@
       seenIds = new Set();
       voiceStates.clear();
       el.title.textContent = "选一位伙伴";
+      paintStateBadge(el.chatStateBadge, null);
+      paintStatePin(el.chatAvatarStatePin, null);
       el.chatAvatar.hidden = true;
       el.input.disabled = true;
       el.send.disabled = true;
@@ -2220,6 +2444,11 @@
       if (loadSeq !== partnersLoadSeq) return;
       partners = data.partners || [];
       lastPartnerId = data.lastPartnerId || null;
+      if (current) {
+        const activePartner = partners.find((p) => p.id === current);
+        paintStateBadge(el.chatStateBadge, activePartner?.badge);
+        paintStatePin(el.chatAvatarStatePin, activePartner?.badge);
+      }
       // 外观开关跟着轮询走：她在设置里改完，最迟一轮就生效
       showMessageAvatars = Boolean(data.messageAvatars);
       messageRefineEnabled = Boolean(data.messageRefine);
@@ -2780,6 +3009,8 @@
       foldAfterPick();
       const partner = partners.find((p) => p.id === agentId);
       el.title.textContent = partner?.name || agentId;
+      paintStateBadge(el.chatStateBadge, partner?.badge);
+      paintStatePin(el.chatAvatarStatePin, partner?.badge);
       el.chatAvatar.hidden = false;
       void paintAvatar(el.chatAvatar, agentId, partner?.name || agentId);
       el.input.disabled = false;

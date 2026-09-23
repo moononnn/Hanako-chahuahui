@@ -56,8 +56,8 @@ test("有问句或未完语气时，哈哈仍交给模型判断", () => {
 test("聊天上下文会带入投喂，但不把它当成普通用户消息", () => {
   const rows = threadToMessages([
     { role: "assistant", text: "我刚想到一个小动作", at: "2026-09-15T15:22:00.000Z", feed: { emoji: "☕" } },
-  ], 24, { userName: "玥儿" });
-  assert.match(rows[0].content[0].text, /玥儿给这条消息投喂了☕/);
+  ], 24, { userName: "用户" });
+  assert.match(rows[0].content[0].text, /用户给这条消息投喂了☕/);
   assert.match(rows[0].content[0].text, /不代表她想继续展开/);
   assert.equal(rows.length, 1);
   assert.equal(rows[0].role, "assistant");
@@ -66,8 +66,8 @@ test("聊天上下文会带入投喂，但不把它当成普通用户消息", ()
 test("用户引用伙伴消息时，引用原文进入模型上下文", () => {
   const rows = threadToMessages([
     { role: "user", text: "你还记得这个吗", quote: { messageId: "a-1", text: "那句具体的话" } },
-  ], 24, { userName: "玥儿" });
-  assert.match(rows[0].content, /玥儿引用了你之前的一条消息：那句具体的话/);
+  ], 24, { userName: "用户" });
+  assert.match(rows[0].content, /用户引用了你之前的一条消息：那句具体的话/);
   assert.match(rows[0].content, /你还记得这个吗/);
 });
 
@@ -87,6 +87,16 @@ test("普通聊天提示词要求接住后自然带出新钩子", () => {
   assert.match(CHAT_HOUSE_STYLE, /带出一点你自己的东西/);
   assert.match(CHAT_HOUSE_STYLE, /不必每轮换题，也不必每轮提问/);
   assert.match(CHAT_HOUSE_STYLE, /倾诉、告别/);
+});
+
+test("普通聊天提示词要求先说清楚再生活化", () => {
+  assert.match(CHAT_HOUSE_STYLE, /表达清晰和话题连贯/);
+  assert.match(CHAT_HOUSE_STYLE, /当前最主要的一个话头/);
+  assert.match(CHAT_HOUSE_STYLE, /一次只表达一个核心意思/);
+  assert.match(CHAT_HOUSE_STYLE, /没有铺垫就不要突然引入/);
+  assert.match(CHAT_HOUSE_STYLE, /生活化不等于堆动作、比喻和漂亮话/);
+  assert.match(CHAT_HOUSE_STYLE, /普通人会直接说的表达/);
+  assert.match(CHAT_HOUSE_STYLE, /第一次看到这段话的人/);
 });
 
 test("亲密正向互动：收到夸奖时先有自己的反应，不写成礼貌翻译", () => {
