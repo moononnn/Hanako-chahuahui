@@ -285,7 +285,7 @@ function describeError(error) {
  * **发布副本构建时把它改成 false**，把这一整面关掉——这些入口能触发模型调用和后台写盘，
  * 不该暴露给只是装着玩的人（数据与流程上看，它们对普通使用者也毫无意义）。
  */
-const DEV_TOOLS = true;
+const DEV_TOOLS = false;
 
 export function apply(ctx) {
   const diagnostics = createDiagnostics(ctx.dataDir);
