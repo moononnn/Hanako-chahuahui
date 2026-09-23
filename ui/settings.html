@@ -278,6 +278,17 @@
     </div>
   </div>
 
+  <div class="modal-layer" id="reset-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="reset-title">
+      <div class="modal-head"><h2 id="reset-title">重新开始</h2><button class="icon-button" data-close-modal="reset-modal" aria-label="关闭">×</button></div>
+      <div class="modal-body">
+        <p id="reset-copy"></p>
+        <div class="safe-note">会删除聊天记录、记忆、关系进度、话题和主动联系痕迹；性格分析、性格历史和基础设置会保留。这个动作不能撤回。</div>
+      </div>
+      <div class="modal-foot"><button class="danger-button" id="confirm-reset">确认清除</button></div>
+    </div>
+  </div>
+
   <div class="modal-layer" id="removed-modal" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="removed-title">
       <div class="modal-head"><h2 id="removed-title">已移出的伙伴</h2><button class="icon-button" data-close-modal="removed-modal" aria-label="关闭">×</button></div>
@@ -343,6 +354,7 @@
     let voiceFormReader = null;
     let currentId = null;
     let pendingRemoveId = null;
+    let pendingResetId = null;
     let partnerRequestSeq = 0;
     let currentDetailTab = "contact";
     let personDraftTimer = null;
@@ -2071,6 +2083,22 @@
       }
       detailPanels.personality.appendChild(personCard);
 
+      const resetCard = detailCard("重新开始", "保留 ta 现在的性格、性格分析和基础设置，清掉聊天记录，以及从相处里长出来的记忆、关系和话题。这个动作不能撤回。");
+      const resetActions = document.createElement("div");
+      resetActions.className = "detail-actions";
+      const resetButton = document.createElement("button");
+      resetButton.type = "button";
+      resetButton.className = "danger-button";
+      resetButton.textContent = "清除聊天和记忆";
+      resetButton.addEventListener("click", () => {
+        pendingResetId = agentId;
+        document.getElementById("reset-copy").textContent = `要让「${partner.name}」重新开始吗？`;
+        openModal("reset-modal");
+      });
+      resetActions.appendChild(resetButton);
+      resetCard.appendChild(resetActions);
+      detailPanels.memory.appendChild(resetCard);
+
       const adaptationCard = detailCard("我们相处出来的理解", "这里只放会改变相处方式的理解。写偏了可以一起改，也可以让 ta 忘掉；不会碰 Hana 的人格和全局记忆。");
       const adaptationItems = Array.isArray(adaptation.items) ? adaptation.items : [];
       if (!adaptationItems.length) {
@@ -2604,6 +2632,26 @@
       dressSelects(root);
       switchDetail(detailTab);
     }
+
+    document.getElementById("confirm-reset").addEventListener("click", async () => {
+      const agentId = pendingResetId;
+      const partner = partners.find((p) => p.id === agentId);
+      if (!agentId || !partner) return;
+      const button = document.getElementById("confirm-reset");
+      button.disabled = true;
+      button.textContent = "正在清除…";
+      try {
+        await api("POST", `memory/${encodeURIComponent(agentId)}/reset`);
+        pendingResetId = null;
+        closeModal("reset-modal", false);
+        say(`${partner.name} 已经清空，可以重新认识了`, "ok");
+        await openPartner(agentId, "memory");
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = "确认清除";
+        say(`没清干净：${error.message}`, "err");
+      }
+    });
 
     document.getElementById("confirm-remove").addEventListener("click", async () => {
       const agentId = pendingRemoveId;

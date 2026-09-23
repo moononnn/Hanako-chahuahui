@@ -264,6 +264,7 @@ let USER_NAME = "对方";
 const USER_NAME_FALLBACK = "对方";
 /** 头像图片的读取范围：伙伴的、她自己的 */
 const AVATAR_TTL_MS = 5 * 60 * 1000;
+const FEED_EMOJIS = Object.freeze(["☕", "🍵", "🍭", "🧋", "🍪", "🍰", "🍓", "🍫"]);
 
 function describeError(error) {
   if (error == null) return { message: "null/undefined error" };
@@ -449,14 +450,16 @@ export function apply(ctx) {
     return { ...voice, voiceId: profileVoice || voice.voiceId };
   }
 
-  async function maybeGenerateVoice(agentId, stored, text) {
+  /** 先决定并合成；成功前不往聊天记录里落伙伴消息，避免文字先闪出来。 */
+  async function prepareVoice(agentId, text, { currentTurnId = null, triggerMessageId = null, kind = "reply" } = {}) {
     const globalSettings = store.getGlobalSettings();
-    const partnerSettings = { ...store.getPartnerSettings(agentId), voice: effectivePartnerVoice(store.getPartnerSettings(agentId), globalSettings) };
+    const rawPartnerSettings = store.getPartnerSettings(agentId);
+    const partnerSettings = { ...rawPartnerSettings, voice: effectivePartnerVoice(rawPartnerSettings, globalSettings) };
     const runtime = store.getProactiveState(agentId);
     const knowing = store.getKnowing(agentId);
     const partnerAdaptation = store.getPartnerAdaptation(agentId);
     const userAdaptation = store.getUserAdaptation();
-    const voiceContext = { kind: "reply", currentTurnId: stored.repliedTo ?? "", lifeDay: dayKey(new Date()) };
+    const voiceContext = { kind, currentTurnId: currentTurnId ?? "", lifeDay: dayKey(new Date()) };
     const voicePolicy = resolveVoicePolicy({
       tier: partnerSettings.voice?.tier,
       relationship: effectiveRelationship(knowing),
@@ -477,13 +480,13 @@ export function apply(ctx) {
       return { ok: false, reason: decision.reason };
     }
 
-    const generationKey = `${agentId}|${stored.id}`;
     const generationToken = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    const generationKey = `${agentId}|${generationToken}`;
     const voiceEvidence = adaptationEvidence(agentId, voicePolicy.guideIds);
     const generation = {
       agentId,
-      resultMessageId: stored.id,
-      triggerMessageId: stored.repliedTo ?? null,
+      resultMessageId: null,
+      triggerMessageId,
       generationToken,
       guideIds: voiceEvidence.guideIds,
       sourceMessageIds: voiceEvidence.sourceMessageIds,
@@ -491,29 +494,29 @@ export function apply(ctx) {
       context: voiceContext,
     };
     voiceGenerations.set(generationKey, generation);
-    store.patchMessage(agentId, stored.id, {
-      voice: { status: "pending", text: decision.text, voiceId: decision.voiceId, layer: decision.layer ?? "normal", generationToken, createdAt: new Date().toISOString() },
-    });
     try {
       const generated = await synthesizeVoice(ctx, {
         text: decision.text,
         voiceId: decision.voiceId,
         modelConfig: globalSettings.voiceModel,
       });
-      const file = voiceFile(agentId, stored.id, generated.format);
-      if (!file) throw new Error("语音文件路径不合法");
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, generated.audio);
       const thread = store.getThread(agentId);
-      const current = thread.messages.find((row) => row.id === stored.id);
-      const trigger = generation.triggerMessageId ? thread.messages.find((row) => row.id === generation.triggerMessageId) : null;
+      const trigger = generation.triggerMessageId
+        ? thread.messages.find((row) => row.id === generation.triggerMessageId)
+        : null;
       const activeGeneration = voiceGenerations.get(generationKey);
+      const currentGlobalSettings = store.getGlobalSettings();
+      const currentRawPartnerSettings = store.getPartnerSettings(agentId);
+      const currentPartnerSettings = {
+        ...currentRawPartnerSettings,
+        voice: effectivePartnerVoice(currentRawPartnerSettings, currentGlobalSettings),
+      };
       const currentGuides = [
         ...store.getUserAdaptation().guides,
         ...store.getPartnerAdaptation(agentId).guides,
       ];
       const currentPolicy = resolveVoicePolicy({
-        tier: partnerSettings.voice?.tier,
+        tier: currentPartnerSettings.voice?.tier,
         relationship: effectiveRelationship(store.getKnowing(agentId)),
         personality: store.getKnowing(agentId).personality,
         guides: currentGuides,
@@ -521,34 +524,107 @@ export function apply(ctx) {
         runtime: { ...store.getProactiveState(agentId), ...adaptationFeedbackRuntime(agentId) },
       });
       const guideStillActive = JSON.stringify(generation.claimFingerprint) === JSON.stringify(currentPolicy.claimFingerprint ?? []);
-      if (!current || current.recalled || current.voice?.text !== decision.text || current.voice?.generationToken !== generationToken
-        || activeGeneration?.generationToken !== generationToken || trigger?.recalled || !guideStillActive) {
-        try { fs.unlinkSync(file); } catch { /* 临时音频已不存在就算了 */ }
+      if (!activeGeneration || activeGeneration.generationToken !== generationToken) {
+        releaseVoiceGeneration({ generationKey, generation });
+        return { ok: false, reason: "cancelled" };
+      }
+      if ((generation.triggerMessageId && !trigger) || trigger?.recalled) {
+        releaseVoiceGeneration({ generationKey, generation });
+        return { ok: false, reason: "cancelled" };
+      }
+      if (!guideStillActive) {
+        releaseVoiceGeneration({ generationKey, generation });
         return { ok: false, reason: "stale" };
       }
-      store.patchMessage(agentId, stored.id, {
+      return {
+        ok: true,
+        generationKey,
+        generation,
+        decision,
+        generated,
         voice: {
           status: "ready",
           text: decision.text,
           voiceId: decision.voiceId,
           format: generated.format,
           durationMs: Number.isFinite(generated.durationMs) ? generated.durationMs : null,
-          playedAt: current.voice?.playedAt ?? null,
-          createdAt: current.voice?.createdAt ?? new Date().toISOString(),
+          playedAt: null,
+          createdAt: new Date().toISOString(),
         },
-      });
-      store.setProactiveState(agentId, nextVoiceRuntime(store.getProactiveState(agentId), decision));
-      if (decision.layer === "exception") {
-        const evidence = adaptationEvidence(agentId, generation.guideIds);
+      };
+    } catch (error) {
+      const message = String(error?.message ?? error).slice(0, 180);
+      releaseVoiceGeneration({ generationKey, generation });
+      return {
+        ok: false,
+        reason: "synthesis",
+        error: error?.message ?? String(error),
+        failure: { status: "failed", text: decision.text, voiceId: decision.voiceId, error: message },
+      };
+    }
+  }
+
+  function releaseVoiceGeneration(prepared) {
+    if (!prepared?.generationKey || !prepared.generation) return;
+    const active = voiceGenerations.get(prepared.generationKey);
+    if (active?.generationToken === prepared.generation.generationToken) voiceGenerations.delete(prepared.generationKey);
+  }
+
+  /** 消息和音频一起完成后才提交语音额度；合成失败只留下文字回退。 */
+  function appendPartnerMessage(agentId, message, prepared = null, replaceMessageId = null) {
+    const entry = { ...message };
+    if (prepared?.ok) entry.voice = prepared.voice;
+    else if (prepared?.reason === "synthesis") entry.voice = prepared.failure;
+    else if (replaceMessageId) entry.voice = null;
+
+    let stored;
+    try {
+      stored = replaceMessageId
+        ? store.patchMessage(agentId, replaceMessageId, entry)
+        : store.appendMessage(agentId, entry);
+    } catch (error) {
+      releaseVoiceGeneration(prepared);
+      throw error;
+    }
+    if (!stored) {
+      releaseVoiceGeneration(prepared);
+      return null;
+    }
+    if (!prepared?.ok) return stored;
+
+    prepared.generation.resultMessageId = stored.id;
+    const file = voiceFile(agentId, stored.id, prepared.generated.format);
+    try {
+      if (!file) throw new Error("语音文件路径不合法");
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, prepared.generated.audio);
+    } catch (error) {
+      try { if (file) fs.unlinkSync(file); } catch { /* 半张音频清不掉也不挡文字回退 */ }
+      const failed = {
+        status: "failed",
+        text: prepared.decision.text,
+        voiceId: prepared.decision.voiceId,
+        error: String(error?.message ?? error).slice(0, 180),
+      };
+      const fallback = store.patchMessage(agentId, stored.id, { voice: failed }) ?? { ...stored, voice: failed };
+      diagnostics({ event: "voice.failed", agentId, messageId: stored.id, error: failed.error });
+      releaseVoiceGeneration(prepared);
+      return fallback;
+    }
+
+    try {
+      store.setProactiveState(agentId, nextVoiceRuntime(store.getProactiveState(agentId), prepared.decision));
+      if (prepared.decision.layer === "exception") {
+        const evidence = adaptationEvidence(agentId, prepared.generation.guideIds);
         store.commitException(agentId, {
           id: `voice.frequency|${stored.id}`,
           behavior: "voice.frequency",
           description: "这次超出日常语音额度，多发了一条语音",
-          normalRule: `日常语音档位 ${decision.tier}`,
+          normalRule: `日常语音档位 ${prepared.decision.tier}`,
           chosenAction: "额外发送语音",
           guideIds: evidence.guideIds,
           sourceMessageIds: evidence.sourceMessageIds,
-          triggerMessageId: generation.triggerMessageId,
+          triggerMessageId: prepared.generation.triggerMessageId,
           resultMessageId: stored.id,
           outcome: "committed",
           committedAt: new Date().toISOString(),
@@ -556,19 +632,13 @@ export function apply(ctx) {
           consolidated: false,
         }, evidence.guides);
       }
-      diagnostics({ event: "voice.ready", agentId, messageId: stored.id, chars: decision.text.length, layer: decision.layer ?? "normal", model: generated.model });
-      return { ok: true };
     } catch (error) {
-      if (voiceGenerations.get(generationKey)?.generationToken === generationToken) {
-        store.patchMessage(agentId, stored.id, {
-          voice: { status: "failed", text: decision.text, voiceId: decision.voiceId, error: String(error?.message ?? error).slice(0, 180) },
-        });
-        diagnostics({ event: "voice.failed", agentId, messageId: stored.id, error: String(error?.message ?? error).slice(0, 180) });
-      }
-      return { ok: false, reason: "synthesis", error: error?.message ?? String(error) };
-    } finally {
-      if (voiceGenerations.get(generationKey)?.generationToken === generationToken) voiceGenerations.delete(generationKey);
+      // 消息和音频已经成功送出，账本故障不能让外层误判成整轮失败并重复回复。
+      diagnostics({ event: "voice.commit.failed", agentId, messageId: stored.id, error: describeError(error) });
     }
+    diagnostics({ event: "voice.ready", agentId, messageId: stored.id, chars: prepared.decision.text.length, layer: prepared.decision.layer ?? "normal", model: prepared.generated.model });
+    releaseVoiceGeneration(prepared);
+    return stored;
   }
 
   let appDir = process.cwd();
@@ -1530,7 +1600,16 @@ export function apply(ctx) {
     const bubbles = composed.bubbles;
     if (bubbles.length === 0) return { ok: false, reason: marker.keyword ? "sticker-unavailable" : "no-bubbles" };
 
-    const stored = store.appendMessage(agentId, {
+    let preparedVoice = await prepareVoice(agentId, text, { kind: "proactive" });
+    if (preparedVoice.reason === "cancelled") {
+      diagnostics({ event: "proactive.cancelled", agentId });
+      return { ok: false, reason: "stale" };
+    }
+    if (preparedVoice.reason === "stale") {
+      diagnostics({ event: "voice.stale-fallback", agentId, kind: "proactive" });
+      preparedVoice = null;
+    }
+    const stored = appendPartnerMessage(agentId, {
       role: "assistant",
       text: visibleTextOf(bubbles),
       bubbles,
@@ -1541,11 +1620,9 @@ export function apply(ctx) {
       interestId: hobby?.id ?? null,
       interestName: hobby?.name ?? null,
       interestObject: hobby?.object ?? null,
-    });
-    if (stored) {
-      recordPartnerStickerUsage(agentId, bubbles, stored.at);
-      void maybeGenerateVoice(agentId, stored, text);
-    }
+    }, preparedVoice);
+    if (!stored) return { ok: false, reason: "message-missing" };
+    recordPartnerStickerUsage(agentId, bubbles, stored.at);
     if (topic) {
       // 记下这次聊的是哪一面：下次回来时拿它提醒模型换个延伸，而不是把话题封掉
       store.saveTopicBook(
@@ -1732,17 +1809,28 @@ export function apply(ctx) {
       diagnostics({ event: "awaiting.empty", agentId, raw: String(raw ?? "").slice(0, 80) });
       return { action: "empty", nudges };
     }
-    const stored = store.appendMessage(agentId, {
+    let preparedVoice = await prepareVoice(agentId, bubbles.join("\n"), { kind: "awaiting" });
+    if (preparedVoice.reason === "cancelled") {
+      settle(nudges, { done: true });
+      diagnostics({ event: "awaiting.cancelled", agentId });
+      return { action: "stale", nudges };
+    }
+    if (preparedVoice.reason === "stale") {
+      diagnostics({ event: "voice.stale-fallback", agentId, kind: "awaiting" });
+      preparedVoice = null;
+    }
+    const stored = appendPartnerMessage(agentId, {
       role: "assistant",
       text: bubbles.join("\n"),
       bubbles,
       nudge: true,
-    });
-    if (stored) {
-      recordPartnerStickerUsage(agentId, bubbles, stored.at);
-      noteAwaitingSent(new Date(stored.at ?? new Date()));
-      void maybeGenerateVoice(agentId, stored, bubbles.join("\n"));
+    }, preparedVoice);
+    if (!stored) {
+      settle(nudges, { done: true });
+      return { action: "error", nudges };
     }
+    recordPartnerStickerUsage(agentId, bubbles, stored.at);
+    noteAwaitingSent(new Date(stored.at ?? new Date()));
     settle(nudges);
     diagnostics({ event: "awaiting.nudge", agentId, stage: plan.stage, temperament: plan.temperament, bubbles: bubbles.length, waitedMs: plan.waitedMs ?? 0 });
     void announceArrival(agentId, partner.name);
@@ -2904,6 +2992,22 @@ export function apply(ctx) {
     }
 
     if (isCurrent && !isCurrent()) return { ok: false, reason: "stale", generationMs };
+    let preparedVoice = await prepareVoice(agentId, cleanedText, {
+      kind: "reply",
+      currentTurnId: currentMessageId || replyTargetId || repliedTo || "",
+      triggerMessageId: replyTargetId,
+    });
+    if (preparedVoice.reason === "cancelled") return { ok: false, reason: "stale", generationMs };
+    if (preparedVoice.reason === "stale") {
+      if (isCurrent && !isCurrent()) return { ok: false, reason: "stale", generationMs };
+      // 关系账在合成期间变化时，保住这次文字回复；下一轮再按新账决定是否发语音。
+      diagnostics({ event: "voice.stale-fallback", agentId, triggerMessageId: replyTargetId });
+      preparedVoice = null;
+    }
+    if (isCurrent && !isCurrent()) {
+      releaseVoiceGeneration(preparedVoice);
+      return { ok: false, reason: "stale", generationMs };
+    }
     const reply = {
       role: "assistant",
       text: visibleTextOf(bubbles),
@@ -2911,10 +3015,9 @@ export function apply(ctx) {
       via: generated.via,
       reasoningChars: generated.reasoningChars ?? 0,
       repliedTo: replyTargetId,
+      ...(replaceMessageId ? { editedAt: new Date().toISOString() } : {}),
     };
-    const stored = replaceMessageId
-      ? store.patchMessage(agentId, replaceMessageId, { ...reply, editedAt: new Date().toISOString() })
-      : store.appendMessage(agentId, reply);
+    const stored = appendPartnerMessage(agentId, reply, preparedVoice, replaceMessageId);
     if (!stored) return { ok: false, reason: "message-missing", generationMs };
     recordPartnerStickerUsage(agentId, bubbles, stored.at);
     if (composed.stickerException) {
@@ -2937,11 +3040,11 @@ export function apply(ctx) {
       }, evidence.guides);
     }
     commitAdviceStyleException(agentId, stored, visibleTextOf(bubbles), replyTargetId, currentMessageId || replyTargetId || repliedTo || "");
-    // 先落完整文字，再后台生成一条整轮语音；失败仍保留原文字回复。
-    void maybeGenerateVoice(agentId, stored, cleanedText);
     return {
       ok: true,
       bubbles,
+      voice: stored.voice?.status === "ready" ? stored.voice : null,
+      message: stored,
       via: generated.via,
       messageId: stored.id,
       repliedTo: replyTargetId,
@@ -3001,12 +3104,14 @@ export function apply(ctx) {
       });
       turn.generationMs = made.generationMs;
       if (!made.ok) {
-        if (made.reason === "silent") {
+        if (made.reason === "silent" || made.reason === "stale") {
           turn.status = "ready";
           turn.bubbles = [];
           turn.silent = true;
-          store.clearPendingReplyIf(turn.agentId, turn.userMessageId);
-          scheduleQueuedReply(turn.agentId, made.repliedTo ?? turn.userMessageId);
+          if (made.reason === "silent") {
+            store.clearPendingReplyIf(turn.agentId, turn.userMessageId);
+            scheduleQueuedReply(turn.agentId, made.repliedTo ?? turn.userMessageId);
+          }
           scheduleTurnCleanup(turn);
           return;
         }
@@ -3025,19 +3130,24 @@ export function apply(ctx) {
         return;
       }
 
-      const rhythm = { ...DEFAULT_RHYTHM, ...(store.getPref(turn.agentId).rhythm ?? {}) };
-      // 睡着那会儿整段慢下来：醒着一句话三五秒，打盹要磨蹭一会儿
-      if (turn.mode === "dozing") rhythm.speed = (Number(rhythm.speed) || 1) * DOZE_SLOWDOWN;
-      const plan = planTurn(made.bubbles, { rhythm });
-      // 生成花掉的时间要从第一条的间隔里扣掉，否则会"打字打两遍"
-      const overrun = Math.max(0, turn.generationMs - plan.typingMs);
-      const items = plan.items.map((item, index) => ({
-        text: item.text,
-        gapMs: index === 0 ? Math.max(300, item.gapMs - overrun) : item.gapMs,
-      }));
-
-      turn.bubbles = items;
       turn.via = made.via;
+      turn.message = made.message ?? null;
+      turn.voice = made.voice?.status === "ready" ? made.voice : null;
+      if (turn.voice) {
+        // 语音已经在后台合成完毕，实时前端直接摆最终语音条，不再把文字演一遍。
+        turn.bubbles = [];
+      } else {
+        const rhythm = { ...DEFAULT_RHYTHM, ...(store.getPref(turn.agentId).rhythm ?? {}) };
+        // 睡着那会儿整段慢下来：醒着一句话三五秒，打盹要磨蹭一会儿
+        if (turn.mode === "dozing") rhythm.speed = (Number(rhythm.speed) || 1) * DOZE_SLOWDOWN;
+        const plan = planTurn(made.bubbles, { rhythm });
+        // 生成花掉的时间要从第一条的间隔里扣掉，否则会"打字打两遍"
+        const overrun = Math.max(0, turn.generationMs - plan.typingMs);
+        turn.bubbles = plan.items.map((item, index) => ({
+          text: item.text,
+          gapMs: index === 0 ? Math.max(300, item.gapMs - overrun) : item.gapMs,
+        }));
+      }
       turn.status = "ready";
       turn.replyMessageId = made.messageId;
       const pendingWake = store.getPendingReply(turn.agentId);
@@ -4514,12 +4624,104 @@ export function apply(ctx) {
         }
       });
 
+      app.post("/thread/:agentId/feed/:messageId", async (c) => {
+        const agentId = String(c.req.param("agentId") ?? "").trim();
+        const messageId = String(c.req.param("messageId") ?? "").trim();
+        let body = null;
+        try { body = await c.req.json(); } catch { body = null; }
+        const emoji = String(body?.emoji ?? "").trim();
+        if (!FEED_EMOJIS.includes(emoji)) {
+          return c.json({ ok: false, error: { message: "这个投喂还不在小菜单里" } }, 400);
+        }
+        const message = store.getThread(agentId).messages.find((row) => row.id === messageId);
+        if (!message || message.role !== "assistant" || message.recalled) {
+          return c.json({ ok: false, error: { message: "只能给伙伴还在的消息投喂" } }, 404);
+        }
+        const nextFeed = message.feed?.emoji === emoji ? null : { emoji, at: new Date().toISOString() };
+        const updated = store.patchMessage(agentId, messageId, { feed: nextFeed });
+        store.markRead(agentId, { throughId: messageId });
+        diagnostics({ event: "thread.feed", agentId, messageId, emoji: nextFeed?.emoji ?? null });
+        return c.json({ ok: true, message: updated, emoji: nextFeed?.emoji ?? null });
+      });
+
+      app.get("/favorites", (c) => {
+        return c.json({ ok: true, items: store.listFavorites() });
+      });
+
+      app.post("/thread/:agentId/favorite/:messageId", async (c) => {
+        const agentId = String(c.req.param("agentId") ?? "").trim();
+        const messageId = String(c.req.param("messageId") ?? "").trim();
+        const message = store.getThread(agentId).messages.find((row) => row.id === messageId);
+        if (!message || message.role !== "assistant" || message.recalled) {
+          return c.json({ ok: false, error: { message: "只能收藏伙伴还在的消息" } }, 404);
+        }
+        const existing = store.listFavorites().find((row) => row.agentId === agentId && row.messageId === messageId);
+        if (existing) {
+          store.removeFavorite(existing.id);
+          diagnostics({ event: "favorite.removed", agentId, messageId });
+          return c.json({ ok: true, favorite: false, id: existing.id });
+        }
+        const partners = await listPartners().catch(() => []);
+        const partner = partners.find((row) => row.id === agentId);
+        const saved = store.saveFavorite({
+          agentId,
+          partnerName: partner?.name ?? agentId,
+          messageId,
+          kind: message.voice ? "voice" : "text",
+          text: String(message.text ?? ""),
+          at: message.at ?? null,
+          voice: message.voice ? { ...message.voice } : null,
+        });
+        diagnostics({ event: "favorite.saved", agentId, messageId, kind: saved.kind });
+        return c.json({ ok: true, favorite: true, item: saved });
+      });
+
+      app.delete("/favorites/:favoriteId", (c) => {
+        const favoriteId = String(c.req.param("favoriteId") ?? "").trim();
+        if (!store.removeFavorite(favoriteId)) return c.json({ ok: false, error: { message: "这条收藏已经不在了" } }, 404);
+        diagnostics({ event: "favorite.removed", favoriteId });
+        return c.json({ ok: true });
+      });
+
+      app.get("/favorites/:favoriteId/voice", (c) => {
+        const favorite = store.getFavorite(c.req.param("favoriteId"));
+        if (!favorite || favorite.kind !== "voice" || !favorite.voice) {
+          return c.json({ ok: false, error: { message: "这条收藏不是语音" } }, 404);
+        }
+        const format = favorite.voice.format === "mp3" ? "mp3" : "wav";
+        const file = voiceFile(favorite.agentId, favorite.messageId, format);
+        if (!file || !fs.existsSync(file)) return c.json({ ok: false, error: { message: "这条收藏的语音文件不在了" } }, 404);
+        return c.body(fs.readFileSync(file), 200, {
+          "content-type": format === "mp3" ? "audio/mpeg" : "audio/wav",
+          "cache-control": "private, max-age=3600",
+        });
+      });
+
       app.post("/thread/:agentId/clear", (c) => {
         const agentId = c.req.param("agentId");
         threadGenerations.set(agentId, threadGeneration(agentId) + 1);
         cancelScheduledReply(agentId);
+        for (const [key, generation] of voiceGenerations) {
+          if (generation.agentId === agentId) voiceGenerations.delete(key);
+        }
         store.clearThread(agentId);
         diagnostics({ event: "thread.cleared", agentId });
+        return c.json({ ok: true });
+      });
+
+      app.post("/memory/:agentId/reset", (c) => {
+        const agentId = c.req.param("agentId");
+        threadGenerations.set(agentId, threadGeneration(agentId) + 1);
+        cancelScheduledReply(agentId);
+        cancelPendingActionReply(agentId);
+        for (const [key, generation] of voiceGenerations) {
+          if (generation.agentId === agentId) voiceGenerations.delete(key);
+        }
+        store.resetPartnerMemory(agentId);
+        try { fs.rmSync(path.join(voiceDir, agentId), { recursive: true, force: true }); } catch (error) {
+          diagnostics({ event: "partner.reset.voice-cleanup.failed", agentId, error: describeError(error) });
+        }
+        diagnostics({ event: "partner.reset", agentId });
         return c.json({ ok: true });
       });
 
@@ -4539,6 +4741,7 @@ export function apply(ctx) {
         const updated = store.patchMessage(agentId, messageId, {
           text,
           bubbles: [text],
+          voice: null,
           editedAt: new Date().toISOString(),
           userRefined: true,
         });
@@ -4709,6 +4912,10 @@ export function apply(ctx) {
         const agentId = String(body?.agentId ?? "").trim();
         const text = String(body?.text ?? "").trim();
         const stickerId = String(body?.stickerId ?? "").trim();
+        const rawQuote = body?.quote && typeof body.quote === "object" ? body.quote : null;
+        const quote = rawQuote && String(rawQuote.text ?? "").trim()
+          ? { messageId: String(rawQuote.messageId ?? "").trim(), text: String(rawQuote.text).trim().slice(0, 4000) }
+          : null;
         const imageInput = body?.image && typeof body.image === "object" ? body.image : null;
         // 回复是伙伴自己的慢节奏，不能占住她的发送门；正在处理时的新消息会并入下一轮。
         const isSticker = Boolean(stickerId);
@@ -4765,6 +4972,7 @@ export function apply(ctx) {
         const stored = store.appendMessage(agentId, {
           role: "user",
           text: messageText,
+          ...(quote ? { quote } : {}),
           ...(isSticker ? { kind: "sticker", bubbles: userBubbles } : {}),
           ...(attachment ? { attachment: { id: attachment.id, name: attachment.name, mimeType: attachment.mimeType, size: attachment.size }, visionNote } : {}),
         });
@@ -4910,6 +5118,7 @@ export function apply(ctx) {
           readAfterMs: turn.readAfterMs ?? 0,
           items: turn.bubbles ?? null,
           replyMessageId: turn.replyMessageId ?? null,
+          message: turn.message ?? null,
           via: turn.via ?? null,
           error: turn.error ?? null,
         });
@@ -5476,7 +5685,7 @@ export function apply(ctx) {
         return c.json({ ok: true, backgrounds: listBackgrounds(ctx.dataDir), current: store.getPartnerSettings(agentId).background });
       });
 
-      /** 清掉当前选择：图库里的文件保留，之后仍可切回来。 */
+      /** 清掉当前选择，或按确认结果删除共享图库里的文件。 */
       app.delete("/background/:agentId", (c) => {
         const agentId = bgAgentId(c);
         if (!agentId) return c.json({ ok: false, error: { message: "伙伴编号不合法" } }, 400);
@@ -5492,17 +5701,15 @@ export function apply(ctx) {
         if (!isBackgroundFile(file) || !readBackgroundBytes(ctx.dataDir, file)) {
           return c.json({ ok: false, error: { message: "这张背景已经不在图库里了" } }, 404);
         }
-        const usedElsewhere = Object.entries(store.allPartnerSettings())
-          .some(([id, pref]) => id !== agentId && pref.background?.file === file);
-        if (usedElsewhere) {
-          return c.json({ ok: false, error: { message: "这张背景还被其他伙伴使用，先换掉再删" } }, 409);
-        }
         if (!removeBackgroundFile(ctx.dataDir, file)) {
           return c.json({ ok: false, error: { message: "背景没删掉，请再试一次" } }, 500);
         }
-        if (current?.file === file) store.setPartnerSettings(agentId, { background: null });
-        diagnostics({ event: "background.remove", agentId, file });
-        return c.json({ ok: true, removed: file });
+        const affectedPartners = Object.entries(store.allPartnerSettings())
+          .filter(([, pref]) => pref.background?.file === file)
+          .map(([id]) => id);
+        for (const id of affectedPartners) store.setPartnerSettings(id, { background: null });
+        diagnostics({ event: "background.remove", agentId, file, affectedPartners: affectedPartners.length });
+        return c.json({ ok: true, removed: file, affectedPartners: affectedPartners.length });
       });
 
       // 茶话会自己的图库：表情包插件只负责提供一次导入来源，日常展示与发送都读这里。

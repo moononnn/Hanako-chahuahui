@@ -25,6 +25,7 @@ test("聊天流打开到底部、上翻后可一键回到底部", () => {
   assert.match(panel, /el\.jumpBottom\.addEventListener\("click"[\s\S]*?scrollDown\(true\)/, "点击后直接回到底部");
   assert.match(panel, /const stickToBottom = isAtBottom\(\)/, "增量消息先记住用户是否在底部");
   assert.match(panel, /autoScrollAllowed = stickToBottom/, "用户上翻时不被新消息拽回去");
+  assert.match(panel, /async function stickerBubble\([\s\S]*?img\.classList\.remove\("loading"\);\s*\/\/ 表情包是异步插入的：[\s\S]*?scrollDown\(\);/, "异步表情包加载后仍会补到底部定位");
   assert.match(panelCss, /\.jump-bottom \{[\s\S]*?position: absolute;[\s\S]*?border-radius: 50%;/, "按钮是聊天区里的轻量悬浮圆按钮");
 });
 
@@ -66,8 +67,26 @@ test("聊天头部不暴露人格读取来源", () => {
   assert.doesNotMatch(panelCss, /\.chat-head \.meta/, "移除对应的无意义占位样式");
 });
 
-test("消息操作统一为悬停入口：自己的消息可撤回，伙伴回复可选修整", () => {
-  assert.doesNotMatch(panel, /contextmenu/, "不再依赖右键才能发现撤回");
+test("消息操作与投喂入口分开：操作悬停，投喂右键", () => {
+  assert.match(panel, /event\.preventDefault\(\);[\s\S]{0,220}?openMessageFeed\(row, message, agentId, row\.__feedText\)/, "右键伙伴消息只打开投喂浮层");
+  assert.match(panel, /const FEED_EMOJIS = \["☕", "🍵", "🍭", "🧋", "🍪", "🍰", "🍓", "🍫"\]/);
+  assert.match(panel, /messageFeedMenu\.className = "message-feed-menu"/);
+  assert.match(panel, /messageFeedMenu\.append\(emojiRow, divider, actionRow\)/, "投喂在上、消息操作在下");
+  assert.match(panel, /menuActionButton\("复制"/);
+  assert.match(panel, /menuActionButton\("引用"/);
+  assert.match(panel, /menuActionButton\("收藏"/);
+  assert.match(panel, /thread\/\$\{encodeURIComponent\(agentId\)\}\/feed\/\$\{encodeURIComponent\(messageId\)\}/, "投喂走独立消息接口");
+  assert.match(panel, /thread\/\$\{encodeURIComponent\(agentId\)\}\/favorite\/\$\{encodeURIComponent\(messageId\)\}/, "收藏走独立消息接口");
+  assert.match(panel, /renderMessageFeed\(lastRow\.querySelector\("\.msg-col"\), m\)/, "投喂挂在原消息下面");
+  assert.match(panel, /pendingQuote: document\.getElementById\("pending-quote"\)/);
+  assert.match(panel, /function quoteMessage\(message, selectedText = ""\)/);
+  assert.match(panel, /pendingQuote = \{ messageId: message\.id, text \}/);
+  assert.doesNotMatch(panel, /el\.input\.value = existing \? `\$\{quote\}/, "引用不能把原文塞进输入框");
+  assert.match(panel, /bindMessageFeed\(rendered\.row, m, current, piece\)/, "每个伙伴气泡都要绑定具体引用文本");
+  assert.match(panel, /favorites-view/);
+  assert.match(panel, /GET", "favorites"/);
+  assert.match(app, /app\.get\("\/favorites"/);
+  assert.match(app, /app\.get\("\/favorites\/:favoriteId\/voice"/);
   assert.match(panel, /pointerenter/);
   assert.match(panel, /撤回消息/);
   assert.match(panel, /重新生成/);
@@ -151,7 +170,9 @@ test("设置接口只接受用户设置字段", () => {
 });
 
 test("输入提示：浮在输入框上方并自动收起，颜色跟背景适配但和发送按钮错开", () => {
-  assert.match(panel, /<div class="status-line" id="status" role="status" aria-live="polite"><\/div>\s*<div class="composer-row">/);
+  assert.match(panel, /<div class="status-line" id="status" role="status" aria-live="polite"><\/div>/);
+  assert.match(panel, /<div class="pending-quote" id="pending-quote" hidden>/);
+  assert.match(panel, /<div class="composer-row">/);
   assert.match(panel, /function setStatus\(text\) \{[\s\S]*?setTimeout\(\(\) => \{[\s\S]*?3200/);
   assert.match(panelCss, /\.status-line \{[\s\S]*?position: absolute;[\s\S]*?left: 50%;[\s\S]*?bottom: calc\(100% - 2px\);[\s\S]*?transform: translateX\(-50%\);/);
   assert.doesNotMatch(panelCss, /\.status-line::after/, "提示就是干净的气泡，不画弹出尖角");
@@ -344,6 +365,21 @@ test("语音消息采用播放胶囊，转文字独立成普通气泡", () => {
   assert.match(panelCss, /\.voice-wave \{/);
   assert.match(panelCss, /\.voice-transcript-line \{ margin-top: 6px; \}/);
   assert.doesNotMatch(panel, /main\.append\(play, wave, duration, transcript\)/, "转文字按钮不能继续塞进语音胶囊");
+});
+
+test("判定发语音时先在后台合成，实时回合直接摆最终语音条", () => {
+  assert.match(app, /async function prepareVoice\(/, "语音要有独立的后台准备阶段");
+  assert.match(app, /let preparedVoice = await prepareVoice\(agentId, cleanedText/, "普通回复要在落消息前准备语音");
+  assert.match(app, /let preparedVoice = await prepareVoice\(agentId, text, \{ kind: "proactive" \}\)/, "主动联系也要先准备语音");
+  assert.match(app, /let preparedVoice = await prepareVoice\(agentId, bubbles\.join\("\\n"\), \{ kind: "awaiting" \}\)/, "等回音也要先准备语音");
+  assert.match(app, /const stored = appendPartnerMessage\(agentId, reply, preparedVoice, replaceMessageId\)/, "消息和语音要走同一提交点");
+  assert.doesNotMatch(app, /void maybeGenerateVoice\(/, "不能再先落文字再异步补语音");
+  assert.match(app, /turn\.message = made\.message/, "实时回合要把最终消息带给前端");
+  assert.match(app, /app\.post\("\/thread\/:agentId\/clear"[\s\S]{0,500}voiceGenerations/, "清空聊天时要取消尚未落消息的语音合成");
+  assert.match(panel, /payload\.message\?\.voice\?\.status === "ready"/, "实时回合识别已准备好的语音消息");
+  assert.match(panel, /renderMessage\(payload\.message, \{ bindAssistantActions: true \}\)/, "实时回合直接渲染语音消息");
+  assert.match(app, /voice: null,\s*editedAt: new Date\(\)\.toISOString\(\),\s*userRefined: true/, "手动编辑文字时要清掉旧语音");
+  assert.match(app, /event: "voice\.commit\.failed"/, "语音已送出后账本异常不能触发整轮重试");
 });
 
 test("茶话会用户名称有明确保存按钮，清空后可恢复跟随 Hana", () => {
@@ -816,22 +852,18 @@ test("左边展板能收能展：窄了先自己收着，她的选择记住", ()
   assert.match(panel, /const SHOW_UNREAD_BADGES = true/, "好友列表未读红点跟着未读数显示");
   assert.match(panel, /if \(el\.railDot\) el\.railDot\.hidden = !\(total > 0\)/, "收起把手上的未读红点跟着总未读数显示");
   assert.match(panel, /const FOLD_KEY = "chahuahui\.listCollapsed"/);
-  assert.match(panel, /const FOLD_PAGE_KEY = `\$\{FOLD_KEY\}\.page`/, "主页和嵌入位置要分开记住收起状态");
-  assert.match(panel, /function detectSurfaceMode\(\)/, "要根据宿主挂载环境判断布局");
-  assert.match(panel, /envelope\?\.height\?\.mode === "flexible"/, "主页优先按宿主页面尺寸识别");
-  assert.match(panel, /envelope\?\.height\?\.mode === "fixed"/, "独立卡片回退到嵌入式展板规则");
   assert.match(panel, /window\.innerWidth < FOLD_AUTO_WIDTH/, "没选过时窗口窄就先收着");
+  assert.match(panel, /const autoFolds = \(\) => window\.innerWidth < FOLD_AUTO_WIDTH/, "只有窗口太窄时自动收起伙伴展板");
+  assert.doesNotMatch(panel, /surfaceKind|surfaceId|page-chat/, "不再依赖宿主无法提供的页面位置字段");
   assert.match(panel, /el\.shell\.classList\.toggle\("list-collapsed", fold\)/);
   assert.match(panel, /el\.unfold\.hidden = !fold/);
-  assert.match(panel, /localStorage\.setItem\(foldStorageKey\(\)/, "她的选择要记住");
+  assert.doesNotMatch(panel, /el\.fold\.hidden = isPrimaryPage\(\)/, "应用内展板始终保留自己的收起入口");  assert.match(panel, /localStorage\.setItem\(foldStorageKey\(\)/, "她的选择要记住");
   assert.match(panel, /el\.fold\.addEventListener\("click", \(\) => foldByHand\(true\)\)/);
   assert.match(panel, /el\.unfold\.addEventListener\("click", \(\) => foldByHand\(false\)\)/);
   assert.match(panel, /伙伴展板收起来了/, "收着的时候空状态别还写着「左边点一位伙伴」");
   assert.match(panel, /window\.addEventListener\("resize"/, "窗口宽窄一变就要重新判，不能只在开场判一次");
-  assert.match(panel, /if \(nowAuto !== foldAutoLast\)[\s\S]{0,180}?if \(!isPrimaryPage\(\)\) foldManual = null/, "嵌入模式跨过档位就把手动那笔让开");
-  assert.match(panel, /function foldAfterPick\(\)/, "窄窗下选完伙伴要把浮层展板收回去");
-  assert.match(panel, /!isPrimaryPage\(\) && isNarrow\(\)/, "独立主页选完伙伴不自动收起左侧展板");
-  assert.match(panel, /foldAfterPick\(\);/, "openPartner 里得真的调用它");
+  assert.match(panel, /if \(nowAuto !== foldAutoLast\)[\s\S]{0,140}?foldManual = null/, "跨过宽度档位就把手动那笔让开");  assert.match(panel, /function foldAfterPick\(\)/, "窄窗下选完伙伴要把浮层展板收回去");
+  assert.match(panel, /isNarrow\(\) && !el\.shell\.classList\.contains\("list-collapsed"\)/, "窄窗选完伙伴自动收回展板");  assert.match(panel, /foldAfterPick\(\);/, "openPartner 里得真的调用它");
 
   const css = fs.readFileSync(new URL("../ui/assets/panel.css", import.meta.url), "utf8");
   assert.match(css, /\.shell\.list-collapsed \.friends \{ display: none; \}/, "收起来展板要让位");
@@ -853,12 +885,20 @@ test("左边展板能收能展：窄了先自己收着，她的选择记住", ()
   assert.match(css, /\.rail-dot \{[\s\S]{0,160}?background: var\(--blossom\)/, "小点用那朵花的粉");
 });
 
+test("伙伴列表只保留茶话会自己的展板，不注册 Hana 左侧功能面板", () => {
+  const card = manifest.contributes.cards.find((row) => row.id === "panel");
+  assert.equal(card.functionPanel, undefined, "不再注册 Hana 左侧伙伴栏");
+  assert.equal(card.fpFullPanel, undefined, "不再声明完整功能面板");
+  assert.doesNotMatch(panel, /chahuahui\.navigation\.selected|bindNavigationSelection|publishNavigationSelection/, "不再保留跨文档伙伴切换同步");
+  assert.doesNotMatch(panelCss, /data-surface-mode="page"/, "任何挂载形态都保留茶话会自己的伙伴展板");
+});
+
 test("关系破例只在真实成功提交点落账，并使用稳定幂等键", () => {
   assert.match(app, /id: `sleep\.wake\|\$\{triggerMessageId\}`/);
   assert.match(app, /id: `voice\.frequency\|\$\{stored\.id\}`/);
   assert.match(app, /id: `sticker\.permission\|\$\{stored\.id\}`/);
   assert.match(app, /id: `reply\.advice-style\|\$\{stored\.id\}`/);
-  assert.match(app, /if \(decision\.layer === "exception"\)/, "普通语音不能记成破例");
+  assert.match(app, /if \(prepared\.decision\.layer === "exception"\)/, "普通语音不能记成破例");
   assert.match(app, /if \(pending\?\.wakeDecision !== "exception" \|\| pending\?\.wakeOutcome !== "committed"\) return null/);
   assert.match(app, /if \(composed\.stickerException\)/, "普通图库表情不能记成关系破例");
   assert.match(app, /observeAdviceStyle\(text, "comfort-first"\)\.observed/, "文本行为必须观察真实输出，不能只凭提示词落账");
@@ -1300,7 +1340,8 @@ test("每位伙伴一间房：设置页挑图，聊天窗按浓度铺上去", ()
   assert.match(app, /app\.post\("\/background\/:agentId"/);
   assert.match(app, /app\.delete\("\/background\/:agentId"/);
   assert.match(app, /removeBackgroundFile\(ctx\.dataDir, file\)/);
-  assert.match(app, /这张背景还被其他伙伴使用，先换掉再删/);
+  assert.match(app, /affectedPartners/);
+  assert.doesNotMatch(app, /这张背景还被其他伙伴使用，先换掉再删/);
   assert.match(app, /app\.get\("\/backgrounds\/:agentId"/);
   assert.match(app, /background: store\.getPartnerSettings\(row\.id\)\.background/, "背景元数据跟着轮询下发：设置页换完图，聊天窗自己跟上");
   assert.match(app, /const bytes = base64\s*\n\s*\? Buffer\.from\(base64, "base64"\)/, "图直接收字节；本地路径那条留着备用");
@@ -1330,8 +1371,10 @@ test("每位伙伴一间房：设置页挑图，聊天窗按浓度铺上去", ()
   assert.doesNotMatch(panel, /更多茶话会设置/);
   assert.match(panel, /id="appearance-gallery"/);
   assert.match(panel, /className = "appearance-remove"/);
-  assert.match(panel, /再点一次，才会从背景图库里删除这张图/);
-  assert.match(panel, /background\/\$\{encodeURIComponent\(agentId\)\}\?file=\$\{encodeURIComponent\(item\.file\)\}&remove=1/);
+  assert.match(panel, /background-delete-layer/);
+  assert.match(panel, /确认删除/);
+  assert.doesNotMatch(panel, /再点一次，才会从背景图库里删除这张图/);
+  assert.match(panel, /background\/\$\{encodeURIComponent\(pending\.agentId\)\}\?file=\$\{encodeURIComponent\(pending\.file\)\}&remove=1/);
   assert.match(panel, /id="appearance-opacity"/);
   assert.match(panel, /if \(el\.appearancePopover\.hidden\) return;[\s\S]*?if \(!inPopover && !inButton\) closeAppearance\(\)/, "点聊天背景面板外要自动收起");
   assert.match(panel, /if \(event\.key !== "Escape"\) return;[\s\S]*?closeAppearance\(\)/, "Escape 也能收起聊天背景");

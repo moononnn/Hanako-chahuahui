@@ -17,6 +17,17 @@ function freshStore() {
   return { store: createStore(dir), dir };
 }
 
+test("收藏能保存文字和语音快照，重启后可翻看并独立取消", () => {
+  const { store, dir } = freshStore();
+  const text = store.saveFavorite({ agentId: "nova", partnerName: "小花", messageId: "m-text", kind: "text", text: "先把这句留下", at: "2026-09-23T05:00:00.000Z" });
+  const voice = store.saveFavorite({ agentId: "nova", partnerName: "小花", messageId: "m-voice", kind: "voice", text: "一小段语音", at: "2026-09-23T05:01:00.000Z", voice: { format: "wav", status: "ready" } });
+  const reopened = createStore(dir);
+  assert.deepEqual(reopened.listFavorites().map((row) => row.messageId), ["m-voice", "m-text"]);
+  assert.equal(reopened.getFavorite(voice.id).voice.format, "wav");
+  assert.equal(reopened.removeFavorite(text.id), true);
+  assert.equal(createStore(dir).getFavorite(text.id), null);
+});
+
 test("旧档位 id 存的音色会跟到迁移后的朗读模型条目上", () => {
   const { store } = freshStore();
   store.setPartnerSettings("hanako", { voice: { enabled: true, voiceId: "female-shaonv", voiceByProfile: { minimax: "Chinese (Mandarin)_Warm_Girl" } } });
@@ -69,6 +80,41 @@ test("清聊天不清记忆", () => {
   store.clearThread("nova");
   assert.equal(store.getThread("nova").messages.length, 0);
   assert.equal(store.readMemory("nova").ledger.length, 1);
+});
+
+test("重新开始只保留性格，不保留聊天与相处记忆", () => {
+  const { store } = freshStore();
+  const personality = applyPersonalityPreset("clear");
+  store.saveKnowing("nova", {
+    ...store.getKnowing("nova"),
+    personality,
+    relationship: {
+      ...createRelationship(),
+      familiarity: { turns: 8, activeDays: 3, firstSeenAt: "2026-09-20T10:00:00.000Z", lastInteractionAt: "2026-09-22T10:00:00.000Z", lastActiveDay: "2026-09-22" },
+    },
+    hobbies: [{ name: "旧爱好", origin: "grown", sourceIds: ["m1"] }],
+  });
+  store.appendMessage("nova", { role: "user", text: "旧聊天" });
+  store.writeMemory("nova", { profile: { text: "旧档案" }, facts: [{ fact: "旧事实", source: "m1" }], ledger: [{ day: "2026-09-22", text: "旧日账" }], archive: [{ id: "a1", text: "旧摘要" }] });
+  store.saveTopicBook("nova", { topics: [{ id: "t1", title: "旧话题" }] });
+  store.savePartnerAdaptation("nova", { guides: [{ id: "g1", meaning: "旧理解" }] });
+  store.saveSelfWatch("nova", { notes: [{ reason: "no-topic" }] });
+  store.setPendingReply("nova", { messageId: "old" });
+  store.setProactiveState("nova", { lastSentAt: "2026-09-22T10:00:00.000Z", staged: [{ topicId: "t1" }] });
+
+  store.resetPartnerMemory("nova");
+
+  const knowing = store.getKnowing("nova");
+  assert.deepEqual(knowing.personality.surface.tags, ["清醒"]);
+  assert.equal(knowing.relationship.familiarity.turns, 0);
+  assert.equal(knowing.hobbies.length, 0);
+  assert.equal(store.getThread("nova").messages.length, 0);
+  assert.equal(store.getPendingReply("nova"), null);
+  assert.deepEqual(store.readMemory("nova"), { profile: { text: "", updatedAt: null, source: null, quarantine: null }, facts: [], ledger: [], archive: [] });
+  assert.equal(store.getTopicBook("nova").topics.length, 0);
+  assert.equal(store.getPartnerAdaptation("nova").guides.length, 0);
+  assert.equal(store.getSelfWatch("nova").notes.length, 0);
+  assert.equal(store.getProactiveState("nova").staged.length, 0);
 });
 
 test("重要事实带来源和时间落盘，重复事实不重复写", () => {
