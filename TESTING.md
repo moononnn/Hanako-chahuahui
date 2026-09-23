@@ -1,8 +1,8 @@
 # TESTING · 茶话会
 
-当前版本与测试状态以 `manifest.json` 为准；最近一次全量：**847 条通过**，UI 专项 **102 条通过**（2026-09-23，v0.7.385）。页面脚本、SDK 和关键文件语法检查通过。
+当前版本与测试状态以 `manifest.json` 为准；最近一次全量：**847 条通过**，UI 专项 **102 条通过**（2026-09-23，v0.7.386）。页面脚本、SDK 和关键文件语法检查通过。
 
-本轮（v0.7.385，精确引用）：引用只显示在输入框上方，不再把原文写入输入框；复制与引用使用右键点中的具体气泡；发送时将引用作为 metadata 进入伙伴上下文。全量 847 条通过，`node --check index.js` 通过。
+上一轮（v0.7.385，精确引用）：引用只显示在输入框上方，不再把原文写入输入框；复制与引用使用右键点中的具体气泡；发送时将引用作为 metadata 进入伙伴上下文。全量 847 条通过，`node --check index.js` 通过。
 
 上一轮（v0.7.384，右键事件兜底）：为投喂右键增加 contextmenu 与右键抬起双路径，并保留聊天流委托，避免 Hana webview 吞掉单一路径事件。全量 846 条通过，`node --check index.js` 通过。
 
@@ -131,7 +131,6 @@
 ## 怎么跑
 
 ```sh
-cd app/chahuahui
 node --test tests/voice.test.js tests/actions.test.js tests/analyze.test.js tests/avatar.test.js tests/awaiting.test.js tests/background-adaptive.test.js tests/background.test.js tests/clock.test.js tests/compose.test.js tests/daybook.test.js tests/days.test.js tests/facts.test.js tests/growth.test.js tests/host-user.test.js tests/knowing.test.js tests/load.test.js tests/memory.test.js tests/model.test.js tests/notify.test.js tests/palette.test.js tests/partner-id.test.js tests/pass.test.js tests/persona-review.test.js tests/persona-standard.test.js tests/persona.test.js tests/phone.test.js tests/poke.test.js tests/proactive.test.js tests/prompt.test.js tests/recall.test.js tests/recognition.test.js tests/relationship.test.js tests/reply.test.js tests/rhythm.test.js tests/selfwatch.test.js tests/sleep.test.js tests/split.test.js tests/sticker-library.test.js tests/stickers.test.js tests/store-durability.test.js tests/store.test.js tests/summarize.test.js tests/topic-search.test.js tests/topics.test.js tests/ui.test.js tests/vision.test.js tests/workfeed.test.js
 ```
 
@@ -208,7 +207,7 @@ node --test tests/voice.test.js tests/actions.test.js tests/analyze.test.js test
 | `tests/ui.test.js`（第五块） | **被吵醒那一段**：唤醒块要现算（排期时在睡、写的时候可能已醒）、先有脾气再回正事、明说不写成「抱歉在睡觉」那种客套、同一觉里被弄醒多次脾气要升级、睡着时整段节奏往后拖、作息彻底不上页面（连展示组件也不留） |
 | `tests/store.test.js`（补充） | **ta看到过她的话要盖 readAt**：刚发出去都是未读、盖一次全部盖上、再盖不重复计、她读ta的话是另一本账（readThroughId）不混 |
 | `tests/sleep.test.js`（补充） | **睡多久按伙伴摊开**：一人一档（5~7 小时，偏向 5~6.5 那一段，日常再浮动 ±0.75）、同一个人每次都一样、八位伙伴至少用出四种且最短最长差 ≥1.5 小时；数据代次（`shape`）不是当代的一律算"没定过"（老形状与 0.7.19 那版的 6.5 小时都要重定） |
-| `tests/actions.test.js`（补充） | **顺口应一句不许写成客服问候**：提示词里明写"不要写成客服那种问候"、把「在忙什么呢」当反例点名、不再教ta写那句问候、人格从"只作参考"改成"这就是你说话的样子" |：刚发出去都是未读、盖一次全部盖上、再盖不重复计、她读ta的话是另一本账（readThroughId）不混 |
+| `tests/actions.test.js`（补充） | **顺口应一句不许写成客服问候**：提示词里明写"不要写成客服那种问候"、把「在忙什么呢」当反例点名、不再教ta写那句问候、人格从"只作参考"改成"这就是你说话的样子" |
 | `tests/ui.test.js`（第六块） | **未读突出、已读收起**：后端落了 readAt 才算已读（刷新也在）、老记录没 readAt 但被回过就补成已读、后一句还搁着不跟着前一句算已读、回一个戳也算接住；送出去那一刻先摆樱花色未读小字和圆点，读到后收起；后端那两处落盘（turn.read / reply.read）要在 |
 | `tests/ui.test.js`（第七块） | **气泡看得出是两张纸**：两边都是实线边 + 淡影（伙伴那条不再用虚线、不再白底贴米白）、自己那边还是薄荷、正在输入那三个点跟伙伴气泡同一样式 |
 | `tests/ui.test.js`（第八块） | **她一口气说了好几条**：撤掉那句没意义的顺口应（已有实在话要回时不再另排）、一口气好几条就立即过一遍话题本（不靠攒够十条那个阀）、提示词里允许只接一两个话头；**skip 那套彻底删了**（不再有"掷骰子决定理不理"） | **气泡看得出是两张纸**：两边都是实线边 + 淡影（伙伴那条不再用虚线、不再白底贴米白）、自己那边还是薄荷、正在输入那三个点跟伙伴气泡同一样式 |
@@ -250,7 +249,7 @@ node --test tests/persona-standard.test.js tests/persona-review.test.js
 测试必须全绿；另外跑一次静态校验：
 
 ```sh
-node <HANA_ROOT>/scripts/validate-app.mjs --dir app/chahuahui --json
+node <HANA_ROOT>/scripts/validate-app.mjs --dir . --json
 ```
 
 （`--smoke` 在 Windows 上当前会因宿主脚本的路径转 URL 缺陷失败，不影响静态校验。）
