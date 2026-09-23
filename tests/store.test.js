@@ -46,6 +46,14 @@ test("茶话会本地角色只存自己的账本，重开仍能读到", () => {
   assert.equal(reopened.localPartner(partner.id).description, "只在茶话会里出现的角色");
 });
 
+test("伙伴手动排序会落盘，重开后仍按原顺序读回", () => {
+  const { store, dir } = freshStore();
+  assert.deepEqual(store.partnerOrder(), []);
+  assert.deepEqual(store.setPartnerOrder(["nova", "hanako", "nova", ""]), ["nova", "hanako"]);
+  const reopened = createStore(dir);
+  assert.deepEqual(reopened.partnerOrder(), ["nova", "hanako"]);
+});
+
 test("追加消息能读回来，且带 id 和时间", () => {
   const { store } = freshStore();
   const entry = store.appendMessage("nova", { role: "user", text: "在吗" });

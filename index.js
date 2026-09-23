@@ -49,6 +49,7 @@ import {
 } from "./lib/memory.js";
 import { dailySpec, isProfileIdentitySafe, profileSpec, runSummary, segmentSpec } from "./lib/summarize.js";
 import { buildWorkfeedText, normalizeWorkEvent } from "./lib/workfeed.js";
+import { addFeed } from "./lib/feed.js";
 import { buildFactSpec, parseFactsResult } from "./lib/facts.js";
 import { migrateLegacyFacts } from "./lib/fact-migration.js";
 import { applyAdaptationCorrection, buildAdaptationCorrectionSpec, listAdaptationForUser, parseAdaptationCorrection, revokeAdaptationGuide } from "./lib/adaptation-correction.js";
@@ -121,6 +122,7 @@ import {
   removeStickerGroup,
 } from "./lib/sticker-library.js";
 import { canAnswerPoke } from "./lib/poke.js";
+import { BADGE_GUIDE, badgeText, fallbackBadge, normalizeBadge, parseBadgeMarker } from "./lib/badges.js";
 import { effectiveVisionConfig, imageBytesMatchMime, isStrictBase64, normalizeVisionConfig } from "./lib/vision.js";
 import {
   RECOGNITION_QUESTIONS,
@@ -224,6 +226,7 @@ import {
   nudgeSpec,
   parseNudgeChoice,
   planNudge,
+  isAwaitingThread,
   temperamentOf,
 } from "./lib/awaiting.js";
 import {
@@ -897,7 +900,16 @@ export function apply(ctx) {
         isCurrent: Boolean(row.isCurrent),
         isLocal: false,
       }));
-    return [...hanaPartners, ...store.listLocalPartners()];
+    const orderedRows = [...hanaPartners, ...store.listLocalPartners()];
+    const rank = new Map(store.partnerOrder().map((id, index) => [id, index]));
+    return orderedRows
+      .map((row, index) => ({ row, index }))
+      .sort((a, b) => {
+        const ar = rank.has(a.row.id) ? rank.get(a.row.id) : Number.MAX_SAFE_INTEGER;
+        const br = rank.has(b.row.id) ? rank.get(b.row.id) : Number.MAX_SAFE_INTEGER;
+        return ar - br || a.index - b.index;
+      })
+      .map(({ row }) => row);
   }
 
   async function listPartners() {
@@ -1547,7 +1559,7 @@ export function apply(ctx) {
 
     let raw = "";
     try {
-      raw = await askVoice(withNamePlate(spec.systemPrompt, partnerName), spec.userText, 300, agentId, "proactive");
+      raw = await askVoice(withNamePlate(`${spec.systemPrompt}\n\n${BADGE_GUIDE}`, partnerName), spec.userText, 300, agentId, "proactive");
     } catch (error) {
       diagnostics({ event: "proactive.failed", agentId, error: describeError(error) });
       return { ok: false, reason: "threw" };
@@ -1560,10 +1572,15 @@ export function apply(ctx) {
       diagnostics({ event: "proactive.silent", agentId, reason: "read-followup" });
       return { ok: false, reason: "silent" };
     }
-    const marker = parseStickerMarker(raw);
+    const badgeMarker = parseBadgeMarker(raw);
+    if (badgeMarker.badge) store.setPartnerSettings(agentId, { badge: badgeMarker.badge });
+    const badgeLessRaw = badgeMarker.found
+      ? [badgeMarker.before, badgeMarker.after].filter(Boolean).join("\n")
+      : raw;
+    const marker = parseStickerMarker(badgeLessRaw);
     const markerlessRaw = marker.keyword
       ? [marker.before, marker.after].filter(Boolean).join("\n")
-      : raw;
+      : badgeLessRaw;
     const text = cleanVoice(markerlessRaw, "voice");
     if (!isUsableVoice(text) && !marker.keyword) {
       diagnostics({ event: "proactive.empty", agentId, rawHead: String(raw ?? "").slice(0, 160) });
@@ -2941,11 +2958,16 @@ export function apply(ctx) {
     // ta决定这回安静收尾：看到了（已读已经盖过），但不发伙伴消息。
     // 这是正常的回应结果，不是生成失败，也不能触发五分钟重试。
     const rawGeneratedText = String(generated.text ?? "");
-    const marker = parseStickerMarker(rawGeneratedText);
+    const badgeMarker = parseBadgeMarker(rawGeneratedText);
+    if (badgeMarker.badge) store.setPartnerSettings(agentId, { badge: badgeMarker.badge });
+    const badgeLessRaw = badgeMarker.found
+      ? [badgeMarker.before, badgeMarker.after].filter(Boolean).join("\n")
+      : rawGeneratedText;
+    const marker = parseStickerMarker(badgeLessRaw);
     // 清洗会去掉表情标记，但分条器还需要它来挑图；先取出关键词，清洗正文后再放回规范写法。
     const markerlessRaw = marker.keyword
       ? [marker.before, marker.after].filter(Boolean).join("\n")
-      : rawGeneratedText;
+      : badgeLessRaw;
     const cleanedText = cleanVoice(markerlessRaw, "voice");
     if (isNoReply(cleanedText)) {
       diagnostics({ event: "reply.silent", agentId, generationMs });
@@ -4461,10 +4483,22 @@ export function apply(ctx) {
             const thread = store.getThread(row.id);
             const last = thread.messages[thread.messages.length - 1] ?? null;
             const settings = store.getPartnerSettings(row.id);
+            const sleepNow = dozingNow(new Date(), settings.sleep);
+            const unread = store.unreadCount(row.id);
+            const badge = normalizeBadge(settings.badge) ?? fallbackBadge({
+              sleeping: Boolean(sleepNow.dozing),
+              awaiting: isAwaitingThread(thread.messages, settings.awaiting),
+              busy: Boolean(store.getPendingReply(row.id)),
+              unread,
+              lastMessage: last,
+              holdingPhone: settings.phone?.holding !== false,
+            });
             const vision = effectiveVisionConfig(store.getGlobalSettings().vision, settings.vision);
             return {
               ...row,
-              unread: store.unreadCount(row.id),
+              unread,
+              badge,
+              badgeText: badgeText(badge),
               // 背景元数据跟着轮询下发：她在设置页换完图，聊天窗最迟一轮就自己跟上
               background: store.getPartnerSettings(row.id).background,
               imageCapability: {
@@ -4637,11 +4671,11 @@ export function apply(ctx) {
         if (!message || message.role !== "assistant" || message.recalled) {
           return c.json({ ok: false, error: { message: "只能给伙伴还在的消息投喂" } }, 404);
         }
-        const nextFeed = message.feed?.emoji === emoji ? null : { emoji, at: new Date().toISOString() };
+        const nextFeed = addFeed(message.feed, emoji);
         const updated = store.patchMessage(agentId, messageId, { feed: nextFeed });
         store.markRead(agentId, { throughId: messageId });
-        diagnostics({ event: "thread.feed", agentId, messageId, emoji: nextFeed?.emoji ?? null });
-        return c.json({ ok: true, message: updated, emoji: nextFeed?.emoji ?? null });
+        diagnostics({ event: "thread.feed", agentId, messageId, emoji, count: nextFeed.items.find((row) => row.emoji === emoji)?.count ?? 1 });
+        return c.json({ ok: true, message: updated, feed: nextFeed });
       });
 
       app.get("/favorites", (c) => {
@@ -5163,6 +5197,18 @@ export function apply(ctx) {
         } catch (error) {
           return c.json({ ok: false, error: describeError(error) }, 500);
         }
+      });
+
+      app.post("/partner-order", async (c) => {
+        let body;
+        try { body = await c.req.json(); } catch { return c.json({ ok: false, error: { message: "排序数据读不出来" } }, 400); }
+        const ids = Array.isArray(body?.ids) ? body.ids.map((id) => String(id ?? "").trim()).filter(Boolean) : [];
+        if (!ids.length || ids.length > 500 || new Set(ids).size !== ids.length || ids.some((id) => !isValidPartnerId(id))) {
+          return c.json({ ok: false, error: { message: "伙伴顺序不合法" } }, 400);
+        }
+        const known = new Set((await listAllPartners()).map((row) => row.id));
+        if (ids.some((id) => !known.has(id))) return c.json({ ok: false, error: { message: "列表里有不存在的伙伴" } }, 400);
+        return c.json({ ok: true, partnerOrder: store.setPartnerOrder(ids) });
       });
 
       app.post("/settings/partner/:agentId/hide", (c) => {

@@ -8,6 +8,7 @@ import {
   awaitingSince,
   awaitingStage,
   hasOpenThread,
+  isAwaitingThread,
   nudgeDelay,
   nudgeSpec,
   parseNudgeChoice,
@@ -117,6 +118,23 @@ test("只有留下开放话头的回复，才算在等她回", () => {
     0,
     "只有动作互动时不把ta当成在等一句话",
   );
+});
+
+test("状态徽章只认当前线程，不认旧的等待排期", () => {
+  const at = new Date(1_700_000_000_000).toISOString();
+  assert.equal(isAwaitingThread([
+    { role: "user", text: "在吗", at },
+    { role: "assistant", text: "在，回头还想接着说吗？", at },
+  ], { nextCheckAt: Date.now() + 60_000 }), true);
+  assert.equal(isAwaitingThread([
+    { role: "user", text: "在吗", at },
+    { role: "assistant", text: "在，先去忙你的吧。", at },
+  ], { nextCheckAt: Date.now() + 60_000 }), false);
+  assert.equal(isAwaitingThread([], { nudges: 2, nextCheckAt: Date.now() + 60_000 }), false);
+  assert.equal(isAwaitingThread([
+    { role: "user", text: "在吗", at },
+    { role: "assistant", text: "在，你还想接着说吗？", at },
+  ], { done: true, nextCheckAt: Date.now() + 60_000 }), false);
 });
 
 test("生产里的 ISO 时间戳也能进入等回音", () => {

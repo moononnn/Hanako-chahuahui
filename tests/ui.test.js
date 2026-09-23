@@ -5,8 +5,27 @@ import assert from "node:assert/strict";
 import { DEFAULT_GLOBAL_GATE, GATE_MAX_CHOICES } from "../lib/proactive.js";
 
 const panel = fs.readFileSync(new URL("../ui/panel.html", import.meta.url), "utf8");
+const navigation = fs.readFileSync(new URL("../ui/navigation.html", import.meta.url), "utf8");
 const settings = fs.readFileSync(new URL("../ui/settings.html", import.meta.url), "utf8");
 const app = fs.readFileSync(new URL("../index.js", import.meta.url), "utf8");
+
+test("伙伴列表支持拖动排序，并通过后端持久化", () => {
+  assert.match(app, /app\.post\("\/partner-order"/);
+  assert.match(app, /store\.setPartnerOrder\(ids\)/);
+  assert.match(app, /const rank = new Map\(store\.partnerOrder\(\)/);
+  assert.match(panel, /li\.draggable = true/);
+  assert.match(panel, /api\("POST", "partner-order", \{ ids: partners\.map/);
+  assert.match(panel, /addEventListener\("drop", async/);
+  assert.match(panel, /setDragImage\(ghost/);
+  assert.match(panel, /li\.style\.opacity = "0\.04"/);
+  assert.match(panel, /dragOriginIds/);
+  assert.match(panel, /insertBefore\(draggedPartnerNode/);
+  assert.match(navigation, /item\.draggable = true/);
+  assert.match(navigation, /api\("partner-order", "POST", \{ ids: partners\.map/);
+  assert.match(navigation, /setDragImage\(ghost/);
+  assert.match(navigation, /item\.style\.opacity = "0\.04"/);
+  assert.match(navigation, /insertBefore\(draggedPartnerNode/);
+});
 
 test("表情包先放进待发送区，与文字共用一条发送链", () => {
   assert.match(panel, /function selectSticker\(row\) \{[\s\S]*?pendingSticker =/);
@@ -23,6 +42,11 @@ test("聊天流打开到底部、上翻后可一键回到底部", () => {
   assert.match(panel, /function isAtBottom\(\)/, "要能判断当前是否已经在底部");
   assert.match(panel, /const shouldShow = el\.stream\.scrollHeight > el\.stream\.clientHeight && !isAtBottom\(\)/, "只在确实离开底部时显示按钮");
   assert.match(panel, /el\.jumpBottom\.addEventListener\("click"[\s\S]*?scrollDown\(true\)/, "点击后直接回到底部");
+  assert.match(panel, /el\.stream\.addEventListener\("wheel"[\s\S]*?event\.deltaY > 0 && isAtBottom\(\)[\s\S]*?playBottomFeedback\(event\.deltaY\)/, "到底后继续向下滚轮要触发反馈");
+  assert.match(panel, /const maxPull = Math\.max\(1, Math\.round\(el\.stream\.clientHeight \/ 3\)\)/, "底部拉伸上限跟随聊天区域高度的三分之一");
+  assert.match(panel, /Math\.min\(maxPull[\s\S]*?bottomPull/, "连续向下滚轮会累积底部拉伸且有上限");
+  assert.match(panelCss, /\.stream\.bottom-feedback \{[\s\S]*?transform: translateY\(calc\(var\(--bottom-pull, 0px\) \* -1\)\)/, "到底反馈会随滚轮拉伸聊天流");
+  assert.match(panelCss, /\.stream\.bottom-feedback, \.stream:not\(\.bottom-feedback\) \{ transition: none; \}/, "减少动态效果时不强行拉伸");
   assert.match(panel, /const stickToBottom = isAtBottom\(\)/, "增量消息先记住用户是否在底部");
   assert.match(panel, /autoScrollAllowed = stickToBottom/, "用户上翻时不被新消息拽回去");
   assert.match(panel, /async function stickerBubble\([\s\S]*?img\.classList\.remove\("loading"\);\s*\/\/ 表情包是异步插入的：[\s\S]*?scrollDown\(\);/, "异步表情包加载后仍会补到底部定位");

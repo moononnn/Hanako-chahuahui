@@ -1,6 +1,14 @@
 # TESTING · 茶话会
 
-当前版本与测试状态以 `manifest.json` 为准；最近一次全量：**847 条通过**，UI 专项 **102 条通过**（2026-09-23，v0.7.386）。页面脚本、SDK 和关键文件语法检查通过。
+当前版本与测试状态以 `manifest.json` 为准；最近一次全量：**858 条通过**（2026-09-23，v0.7.404）。覆盖今日全部改动；页面脚本、SDK 和关键文件语法检查通过。
+
+本轮（v0.7.404，投喂、排序、状态与交互体验收束）：完成消息投喂累加、伙伴拖动排序、状态徽章、右键消息菜单、背景与布局修复，并收紧主动消息和普通聊天表达；全量 858 条通过，`node --check index.js` 通过。
+
+本轮（v0.7.390，等回音误判修复与主体性边界）：空 awaiting 不再显示为等回音；茶话会设计必读新增去用户中心化原则，伙伴保有自己的兴趣、节奏、判断和话题来源；新增对应回归测试。
+
+上一轮（v0.7.389，状态徽章视觉层级）：参考 QQ 将状态叠到头像右下角，列表中把徽章移到名字下方并加入状态色与符号，聊天头部同步增强对比度；UI 回归通过。
+
+上一轮（v0.7.388，伙伴自主状态徽章）：新增 `tests/badges.test.js`，覆盖常见状态白名单、自定义徽章归一化、隐藏标记剥离和真实运行状态只读兜底；UI 回归覆盖徽章不提供用户编辑入口。
 
 上一轮（v0.7.385，精确引用）：引用只显示在输入框上方，不再把原文写入输入框；复制与引用使用右键点中的具体气泡；发送时将引用作为 metadata 进入伙伴上下文。全量 847 条通过，`node --check index.js` 通过。
 
@@ -131,7 +139,7 @@
 ## 怎么跑
 
 ```sh
-node --test tests/voice.test.js tests/actions.test.js tests/analyze.test.js tests/avatar.test.js tests/awaiting.test.js tests/background-adaptive.test.js tests/background.test.js tests/clock.test.js tests/compose.test.js tests/daybook.test.js tests/days.test.js tests/facts.test.js tests/growth.test.js tests/host-user.test.js tests/knowing.test.js tests/load.test.js tests/memory.test.js tests/model.test.js tests/notify.test.js tests/palette.test.js tests/partner-id.test.js tests/pass.test.js tests/persona-review.test.js tests/persona-standard.test.js tests/persona.test.js tests/phone.test.js tests/poke.test.js tests/proactive.test.js tests/prompt.test.js tests/recall.test.js tests/recognition.test.js tests/relationship.test.js tests/reply.test.js tests/rhythm.test.js tests/selfwatch.test.js tests/sleep.test.js tests/split.test.js tests/sticker-library.test.js tests/stickers.test.js tests/store-durability.test.js tests/store.test.js tests/summarize.test.js tests/topic-search.test.js tests/topics.test.js tests/ui.test.js tests/vision.test.js tests/workfeed.test.js
+node --test tests/badges.test.js tests/voice.test.js tests/actions.test.js tests/analyze.test.js tests/avatar.test.js tests/awaiting.test.js tests/background-adaptive.test.js tests/background.test.js tests/clock.test.js tests/compose.test.js tests/daybook.test.js tests/days.test.js tests/facts.test.js tests/growth.test.js tests/host-user.test.js tests/knowing.test.js tests/load.test.js tests/memory.test.js tests/model.test.js tests/notify.test.js tests/palette.test.js tests/partner-id.test.js tests/pass.test.js tests/persona-review.test.js tests/persona-standard.test.js tests/persona.test.js tests/phone.test.js tests/poke.test.js tests/proactive.test.js tests/prompt.test.js tests/recall.test.js tests/recognition.test.js tests/relationship.test.js tests/reply.test.js tests/rhythm.test.js tests/selfwatch.test.js tests/sleep.test.js tests/split.test.js tests/sticker-library.test.js tests/stickers.test.js tests/store-durability.test.js tests/store.test.js tests/summarize.test.js tests/topic-search.test.js tests/topics.test.js tests/ui.test.js tests/vision.test.js tests/workfeed.test.js
 ```
 
 零额外依赖，用 Node 内置 `node:test`。

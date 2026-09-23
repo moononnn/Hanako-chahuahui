@@ -37,6 +37,15 @@
     .partner { width: 100%; display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 0; border-radius: 12px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background .15s ease; }
     .partner:hover { background: var(--sunken); }
     .partner.active { background: var(--accent-soft); }
+    .list li[draggable="true"] { cursor: grab; touch-action: none; }
+    .list li.dragging { position: relative; z-index: 3; cursor: grabbing; }
+    .list li.dragging .partner { background: var(--paper); box-shadow: 0 12px 26px rgba(74, 70, 64, .18); transform: scale(1.025) rotate(1deg); transition: transform .16s ease, box-shadow .16s ease, background .16s ease; }
+    .list li.drag-over { position: relative; }
+    .list li.drag-over::before, .list li.drag-over::after { content: ""; position: absolute; left: 10px; right: 10px; height: 3px; border-radius: 99px; background: var(--primary); box-shadow: 0 1px 4px rgba(93, 174, 142, .25); }
+    .list li.drag-over::before { top: -2px; }
+    .list li.drag-over::after { bottom: -2px; }
+    .list li:not(.dragging) { transition: transform .18s ease; }
+    @media (prefers-reduced-motion: reduce) { .list li.dragging .partner, .list li:not(.dragging) { transition: none; } }
     .partner.active .name { color: var(--primary-ink); font-weight: 650; }
     .avatar { flex: none; width: 36px; height: 36px; overflow: hidden; display: grid; place-items: center; border-radius: 9px; background: #cfe8dc; color: var(--primary-ink); font-size: 16px; font-weight: 700; }
     .avatar img { width: 100%; height: 100%; display: block; object-fit: cover; }
@@ -72,14 +81,24 @@
     let partners = [];
     let selectedId = "";
     let loadSeq = 0;
+    let draggedPartnerId = "";
+    let draggedPartnerNode = null;
+    let dragOriginIds = [];
+    let dragCommitted = false;
+    let suppressPartnerClick = false;
 
     function unwrap(result) {
       return result && Object.prototype.hasOwnProperty.call(result, "value") ? result.value : result;
     }
 
-    async function api(path) {
+    async function api(path, method = "GET", body = null) {
+      const init = { method };
+      if (body) {
+        init.headers = { "content-type": "application/json" };
+        init.body = JSON.stringify(body);
+      }
       const res = await Promise.race([
-        hana.api.fetch(path, { method: "GET" }),
+        hana.api.fetch(path, init),
         new Promise((_, reject) => setTimeout(() => reject(new Error("等得太久了，稍后再试一次")), 8000)),
       ]);
       const text = await res.text();
@@ -117,6 +136,9 @@
       list.replaceChildren();
       for (const partner of partners) {
         const item = document.createElement("li");
+        item.draggable = true;
+        item.dataset.partnerId = partner.id;
+        item.title = "拖动调整伙伴顺序";
         const button = document.createElement("button");
         const unread = Math.max(0, Number(partner.unread) || 0);
         button.type = "button";
@@ -147,6 +169,7 @@
           button.appendChild(badge);
         }
         button.addEventListener("click", async () => {
+          if (suppressPartnerClick) { suppressPartnerClick = false; return; }
           selectedId = partner.id;
           render();
           try {
@@ -155,6 +178,70 @@
             status.hidden = false;
             status.textContent = `没能打开：${error?.message || error}`;
           }
+        });
+        item.addEventListener("dragstart", (event) => {
+          draggedPartnerId = partner.id;
+          draggedPartnerNode = item;
+          dragOriginIds = partners.map((row) => row.id);
+          dragCommitted = false;
+          item.classList.add("dragging");
+          item.style.opacity = "0.04";
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", partner.id);
+          const ghost = item.cloneNode(true);
+          const width = item.getBoundingClientRect().width;
+          ghost.style.cssText = `position: fixed; left: -10000px; top: 0; width: ${width}px; opacity: 1; pointer-events: none;`;
+          document.body.appendChild(ghost);
+          event.dataTransfer.setDragImage(ghost, Math.max(12, event.offsetX), Math.max(12, event.offsetY));
+          setTimeout(() => ghost.remove(), 0);
+        });
+        item.addEventListener("dragover", (event) => {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+          if (!draggedPartnerId || draggedPartnerId === partner.id || !draggedPartnerNode) return;
+          list.querySelectorAll(".drag-over").forEach((node) => node.classList.remove("drag-over"));
+          item.classList.add("drag-over");
+          const before = event.clientY < item.getBoundingClientRect().top + item.offsetHeight / 2;
+          const from = partners.findIndex((row) => row.id === draggedPartnerId);
+          const target = partners.findIndex((row) => row.id === partner.id);
+          if (from < 0 || target < 0 || from === target) return;
+          const [moved] = partners.splice(from, 1);
+          const next = partners.findIndex((row) => row.id === partner.id);
+          partners.splice(before ? next : next + 1, 0, moved);
+          if (before) list.insertBefore(draggedPartnerNode, item);
+          else list.insertBefore(draggedPartnerNode, item.nextSibling);
+        });
+        item.addEventListener("dragleave", (event) => {
+          if (!item.contains(event.relatedTarget)) item.classList.remove("drag-over");
+        });
+        item.addEventListener("drop", async (event) => {
+          event.preventDefault();
+          dragCommitted = true;
+          suppressPartnerClick = true;
+          list.querySelectorAll(".drag-over").forEach((node) => node.classList.remove("drag-over"));
+          render();
+          try {
+            await api("partner-order", "POST", { ids: partners.map((row) => row.id) });
+            summary.textContent = "伙伴顺序已保存";
+            setTimeout(() => { if (partners.length) summary.textContent = `${partners.length} 位伙伴`; }, 1800);
+          } catch (error) {
+            status.hidden = false;
+            status.textContent = `顺序没保存：${error?.message || error}`;
+            void loadPartners();
+          }
+        });
+        item.addEventListener("dragend", () => {
+          if (!dragCommitted && dragOriginIds.length) {
+            const byId = new Map(partners.map((row) => [row.id, row]));
+            partners = dragOriginIds.map((id) => byId.get(id)).filter(Boolean);
+            render();
+          }
+          draggedPartnerId = "";
+          draggedPartnerNode = null;
+          dragOriginIds = [];
+          dragCommitted = false;
+          item.style.opacity = "";
+          item.classList.remove("dragging", "drag-over");
         });
         item.appendChild(button);
         list.appendChild(item);

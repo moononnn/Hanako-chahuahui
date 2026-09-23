@@ -19,6 +19,14 @@ test("渠道塞在末尾的广告尾巴剥掉，正常聊天里的加号不动",
   assert.equal(looksLikeAdTail("哈哈+天天中彩票"), true);
   assert.equal(looksLikeAdTail("哈哈+奶茶"), false);
   assert.equal(looksLikeAdTail("前面说完了"), false);
+  // 第二种形态：句末标点后直接粘（实机撞到 `……不安全的地方。大发时时彩`）
+  assert.equal(cleanVoice("我不会把你推到不安全的地方。大发时时彩"), "我不会把你推到不安全的地方。");
+  assert.equal(cleanVoice("晚安啦。六合彩"), "晚安啦。");
+  assert.equal(looksLikeAdTail("我不会把你推到不安全的地方。大发时时彩"), true);
+  // 正常聊天里「句末标点 + 短句」一律不动
+  assert.equal(cleanVoice("今天好累。想早点睡"), "今天好累。想早点睡");
+  assert.equal(cleanVoice("行。明天见"), "行。明天见");
+  assert.equal(cleanVoice("他说。我们走吧"), "他说。我们走吧");
 });
 
 test("主动消息提示词会带入相处理解", () => {
