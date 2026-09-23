@@ -2,7 +2,7 @@
 
 > 主对话框里你们面对面谈正事，这里回房间聊八卦。
 
-**当前版本：** v0.7.407
+**当前版本：** v0.7.408
 **当前版本最近一次自动测试结果：** 858 条通过（2026-09-23）
 
 hanako那边很棒！不过，因为hana agent的能力太多，所以我经常会让小花帮我做各种事情，但是。。。我觉得缺少一个能让她闲下来，和她闲聊的地方，所以我做了这个应用。感觉像是给小花配了一个手机，忙里偷闲的时候找她聊聊天，不扯什么正经事，就是随口闲聊。她也会主动找点她觉得有意思的话题来找你聊~
@@ -151,8 +151,8 @@ dataDir/stickers/                                表情图库图片
 ```sh
 node --check index.js
 node <HANA_ROOT>/scripts/validate-app.mjs --dir . --json   # 得在应用目录里执行
-# 测试（零依赖，用 Node 内置 node:test；命令见 TESTING.md；测试文件随源码一起在仓库里，
-# 发布用的 zip 为了轻量不带它们）
+# 测试（零依赖，用 Node 内置 node:test；完整命令见项目仓库的 TESTING.md：
+# https://github.com/moononnn/Hanako-chahuahui/blob/main/TESTING.md；发布 zip 为了轻量不带测试文件）
 ```
 
 目录结构（这里是主干，其余模块从略）：
