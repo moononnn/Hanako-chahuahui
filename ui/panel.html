@@ -63,6 +63,9 @@
         <button class="head-tool" id="btn-settings" type="button" title="茶话会设置" aria-label="打开茶话会设置">
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8.2 2.8h3.6l.5 2a5.9 5.9 0 0 1 1.2.7l1.9-.8 1.8 3.1-1.5 1.4a6.7 6.7 0 0 1 0 1.5l1.5 1.4-1.8 3.1-1.9-.8a5.9 5.9 0 0 1-1.2.7l-.5 2H8.2l-.5-2a5.9 5.9 0 0 1-1.2-.7l-1.9.8-1.8-3.1 1.5-1.4a6.7 6.7 0 0 1 0-1.5L2.8 7.8l1.8-3.1 1.9.8a5.9 5.9 0 0 1 1.2-.7l.5-2Z"/><circle cx="10" cy="10" r="2.2"/></svg>
         </button>
+        <button class="head-tool" id="btn-favorites" type="button" title="查看收藏" aria-label="查看收藏">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.2 3.4h9.6v13.2L10 13.5l-4.8 3.1V3.4Z"/></svg>
+        </button>
       </div>
       <div class="appearance-popover" id="appearance-popover" hidden>
         <div class="appearance-head"><strong>聊天背景</strong><button class="appearance-close" id="appearance-close" type="button" aria-label="关闭">×</button></div>
@@ -70,6 +73,13 @@
         <div class="appearance-gallery" id="appearance-gallery"></div>
         <div class="appearance-actions"><button class="soft-tool" id="appearance-pick" type="button">上传背景</button><button class="text-tool" id="appearance-clear" type="button">清除当前背景</button><input id="appearance-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></div>
         <label class="appearance-opacity"><span>背景明暗</span><input id="appearance-opacity" type="range" min="0" max="100" step="1"><b id="appearance-opacity-value">52%</b></label>
+      </div>
+      <div class="background-delete-layer" id="background-delete-layer" hidden>
+        <div class="background-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="background-delete-title">
+          <div class="background-delete-head"><strong id="background-delete-title">删除这张背景？</strong><button class="appearance-close" id="background-delete-close" type="button" aria-label="取消">×</button></div>
+          <p>删除后，正在使用这张图的伙伴会一并清除背景设置，图片也会从图库移除。</p>
+          <div class="background-delete-actions"><button class="text-tool" id="background-delete-cancel" type="button">取消</button><button class="danger-tool" id="background-delete-confirm" type="button">确认删除</button></div>
+        </div>
       </div>
       <div class="stream" id="stream">
         <div class="empty" id="empty-tip">左边点一位伙伴，就能开始聊了<span class="empty-hint">还没有伙伴？点右上角齿轮，去『伙伴管理』建一个茶话会角色</span></div>
@@ -144,6 +154,10 @@
           <button class="pending-image-remove" id="pending-sticker-remove" type="button" title="取消这张表情包" aria-label="取消这张表情包">×</button>
         </div>
         <div class="status-line" id="status" role="status" aria-live="polite"></div>
+        <div class="pending-quote" id="pending-quote" hidden>
+          <div><strong>引用这条消息</strong><span id="pending-quote-text"></span></div>
+          <button type="button" id="pending-quote-clear" aria-label="取消引用">×</button>
+        </div>
         <div class="composer-row">
           <button class="emoji-btn image-btn" id="btn-image" type="button" title="添加图片" aria-label="添加图片" disabled>
             <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.2" y="3.5" width="13.6" height="13" rx="2"></rect><circle cx="7.2" cy="7.5" r="1.2"></circle><path d="m4.8 14.2 3.4-3.4 2.4 2.2 1.8-1.7 2.8 2.9M14.8 3.2v4.2M12.7 5.3h4.2"></path></svg>
@@ -163,6 +177,14 @@
     <div class="settings-view" id="settings-view" hidden>
       <iframe id="settings-frame" title="茶话会设置" loading="lazy"></iframe>
     </div>
+    <section class="favorites-view" id="favorites-view" hidden aria-label="收藏">
+      <div class="favorites-head">
+        <button class="favorites-back" id="favorites-back" type="button">← 返回聊天</button>
+        <h2>收藏</h2>
+        <span></span>
+      </div>
+      <div class="favorites-list" id="favorites-list"></div>
+    </section>
   </div>
 
   <div class="image-lightbox" id="image-lightbox" hidden role="dialog" aria-modal="true" aria-label="查看图片">
@@ -215,12 +237,19 @@
       pendingStickerState: document.getElementById("pending-sticker-state"),
       pendingStickerName: document.getElementById("pending-sticker-name"),
       pendingStickerRemove: document.getElementById("pending-sticker-remove"),
+      pendingQuote: document.getElementById("pending-quote"),
+      pendingQuoteText: document.getElementById("pending-quote-text"),
+      pendingQuoteClear: document.getElementById("pending-quote-clear"),
       imageLightbox: document.getElementById("image-lightbox"),
       imageLightboxClose: document.getElementById("image-lightbox-close"),
       imageLightboxImage: document.getElementById("image-lightbox-image"),
       chatAvatar: document.getElementById("chat-avatar"),
       title: document.getElementById("chat-title"),
       settingsButton: document.getElementById("btn-settings"),
+      favoritesButton: document.getElementById("btn-favorites"),
+      favoritesView: document.getElementById("favorites-view"),
+      favoritesBack: document.getElementById("favorites-back"),
+      favoritesList: document.getElementById("favorites-list"),
       appearanceButton: document.getElementById("btn-appearance"),
       settingsView: document.getElementById("settings-view"),
       settingsFrame: document.getElementById("settings-frame"),
@@ -231,6 +260,10 @@
       appearancePick: document.getElementById("appearance-pick"),
       appearanceClear: document.getElementById("appearance-clear"),
       appearanceFile: document.getElementById("appearance-file"),
+      backgroundDeleteLayer: document.getElementById("background-delete-layer"),
+      backgroundDeleteClose: document.getElementById("background-delete-close"),
+      backgroundDeleteCancel: document.getElementById("background-delete-cancel"),
+      backgroundDeleteConfirm: document.getElementById("background-delete-confirm"),
       appearanceOpacity: document.getElementById("appearance-opacity"),
       appearanceOpacityValue: document.getElementById("appearance-opacity-value"),
       status: document.getElementById("status"),
@@ -276,6 +309,7 @@
     let pendingImage = null;
     let imageChoiceSeq = 0;
     let pendingSticker = null;
+    let pendingQuote = null;
     let openPartnerSeq = 0;
     let partnersLoadSeq = 0;
     /** 已经画过的消息 id，用来增量补新消息（戳一下之后要等ta回应） */
@@ -303,8 +337,7 @@
     let appearanceGalleryUrls = [];
     let appearanceOpacityTimer = null;
     let statusTimer = null;
-    let armedBackgroundFile = "";
-    let armedBackgroundTimer = null;
+    let pendingBackgroundDelete = null;
 
     /**
      * 左边那块伙伴展板收不收。
@@ -315,21 +348,17 @@
      * 手动那笔只在她当时那一档宽度里算数，跨过档位就还给自动，不然一次点击会按着窄窗不让收。
      */
     const FOLD_KEY = "chahuahui.listCollapsed";
-    const FOLD_PAGE_KEY = `${FOLD_KEY}.page`;
     const FOLD_AUTO_WIDTH = 820;
     /** 窄到这个份上展板就浮到聊天区上（跟 CSS 里那条断点对齐），选完伙伴自己收 */
     const NARROW_WIDTH = 600;
-    /** page / embedded / unknown；unknown 只表示宿主信号还没到，不是第三种布局 */
-    let surfaceMode = "unknown";
     /** 她手动点的收/展；null = 没点过，跟着当前布局的自动规则走 */
     let foldManual = null;
     /** 上一回的自动判断，用来认出「跨档了」 */
     let foldAutoLast = null;
 
-    const isPrimaryPage = () => surfaceMode === "page";
-    const autoFolds = () => isPrimaryPage() ? false : window.innerWidth < FOLD_AUTO_WIDTH;
+    const autoFolds = () => window.innerWidth < FOLD_AUTO_WIDTH;
     const isNarrow = () => window.innerWidth < NARROW_WIDTH;
-    const foldStorageKey = () => isPrimaryPage() ? FOLD_PAGE_KEY : FOLD_KEY;
+    const foldStorageKey = () => FOLD_KEY;
 
     function readFoldPreference() {
       let stored = null;
@@ -352,24 +381,7 @@
       }
     }
 
-    /** 宿主 v2 页面是 flexible 高度；独立卡片是 fixed 高度。旧宿主没有这项时返回 null。 */
-    function detectSurfaceMode() {
-      const context = hana.surface?.getContext?.() || null;
-      if (context?.slot === "function-panel") return "embedded";
-      const envelope = hana.envelope?.getSnapshot?.() || null;
-      if (envelope?.height?.mode === "flexible") return "page";
-      if (envelope?.height?.mode === "fixed") return "embedded";
-      return null;
-    }
 
-    function setSurfaceMode(next) {
-      if (!next || next === surfaceMode) return;
-      surfaceMode = next;
-      el.shell.dataset.surfaceMode = surfaceMode;
-      readFoldPreference();
-      foldAutoLast = autoFolds();
-      syncFold();
-    }
 
     /** 该收还是该展：她手动点过就认她的，没点过看当前布局规则 */
     function foldWanted() {
@@ -383,17 +395,13 @@
     readFoldPreference();
     foldAutoLast = autoFolds();
     syncFold();
-    setSurfaceMode(detectSurfaceMode());
-    hana.envelope?.subscribe?.(() => setSurfaceMode(detectSurfaceMode()));
-    hana.surface?.onContextChanged?.(() => setSurfaceMode(detectSurfaceMode()));
 
     // 窗口宽窄一変就重新判；跨过档位就把手动那笔让开，回到自动
     window.addEventListener("resize", () => {
       const nowAuto = autoFolds();
       if (nowAuto !== foldAutoLast) {
         foldAutoLast = nowAuto;
-        // 独立主页不因窄宽变化抹掉用户选择；嵌入模式保持原来的自动档位行为。
-        if (!isPrimaryPage()) foldManual = null;
+        foldManual = null;
       }
       if (foldWanted() !== el.shell.classList.contains("list-collapsed")) syncFold();
     });
@@ -403,9 +411,9 @@
       applyFolded(value);
     }
 
-    // 窄窗下展板是盖在聊天区上的浮层；嵌入模式选完人收回，独立主页保留在左边。
+    // 窄窗下展板是盖在聊天区上的浮层，选完伙伴后收回。
     function foldAfterPick() {
-      if (!isPrimaryPage() && isNarrow() && !el.shell.classList.contains("list-collapsed")) {
+      if (isNarrow() && !el.shell.classList.contains("list-collapsed")) {
         applyFolded(true, { persist: false });
       }
     }
@@ -1161,6 +1169,8 @@
       }
       img.src = url;
       img.classList.remove("loading");
+      // 表情包是异步插入的：初次打开若原本贴着底部，图片撑高后再补一次定位；上翻时 scrollDown 会保持原位。
+      scrollDown();
     }
 
     /**
@@ -1269,6 +1279,11 @@
       el.input.classList.toggle("is-multiline", el.input.value.includes("\n"));
       el.input.style.height = "0px";
       el.input.style.height = `${el.input.scrollHeight}px`;
+    }
+    function clearPendingQuote() {
+      pendingQuote = null;
+      el.pendingQuote.hidden = true;
+      el.pendingQuoteText.textContent = "";
     }
 
     /**
@@ -1426,6 +1441,152 @@
     let actionCloseTimer = null;
     const ACTION_BAR_GAP = 8;
     const ACTION_BAR_MARGIN = 8;
+    const FEED_EMOJIS = ["☕", "🍵", "🍭", "🧋", "🍪", "🍰", "🍓", "🍫"];
+    const messageFeedMenu = document.createElement("div");
+    messageFeedMenu.className = "message-feed-menu";
+    messageFeedMenu.hidden = true;
+    messageFeedMenu.setAttribute("aria-label", "投喂");
+    document.body.appendChild(messageFeedMenu);
+    let feedRow = null;
+    let feedMessage = null;
+
+    function closeMessageFeed() {
+      messageFeedMenu.hidden = true;
+      feedRow?.classList.remove("feed-open");
+      feedRow = null;
+      feedMessage = null;
+    }
+    function placeMessageFeed(row) {
+      const anchor = row.querySelector(".bubble") || row;
+      const rect = anchor.getBoundingClientRect();
+      const box = messageFeedMenu.getBoundingClientRect();
+      const left = Math.max(ACTION_BAR_MARGIN, Math.min(rect.left, window.innerWidth - box.width - ACTION_BAR_MARGIN));
+      let top = rect.bottom + ACTION_BAR_GAP;
+      const below = top + box.height <= window.innerHeight - ACTION_BAR_MARGIN;
+      if (!below) top = rect.top - box.height - ACTION_BAR_GAP;
+      messageFeedMenu.classList.toggle("below", below);
+      messageFeedMenu.style.left = `${Math.round(left)}px`;
+      messageFeedMenu.style.top = `${Math.round(Math.max(ACTION_BAR_MARGIN, Math.min(top, window.innerHeight - box.height - ACTION_BAR_MARGIN)))}px`;
+    }
+    function renderMessageFeed(col, message) {
+      if (!col || message?.role !== "assistant") return;
+      const feed = document.createElement("div");
+      feed.className = "message-feed";
+      feed.hidden = !message.feed?.emoji;
+      feed.textContent = message.feed?.emoji || "";
+      feed.setAttribute("aria-label", message.feed?.emoji ? `已投喂${message.feed.emoji}` : "");
+      col.appendChild(feed);
+    }
+    async function feedMessageOn(agentId, messageId, emoji, viewSeq = threadViewSeq) {
+      try {
+        await api("POST", `thread/${encodeURIComponent(agentId)}/feed/${encodeURIComponent(messageId)}`, { emoji });
+        closeMessageFeed();
+        await reloadCurrentThread(agentId, viewSeq);
+        if (current === agentId && viewSeq === threadViewSeq) setStatus(`已投喂 ${emoji}`);
+      } catch (error) {
+        closeMessageFeed();
+        if (current === agentId && viewSeq === threadViewSeq) setStatus(error.message || "这次投喂没放上");
+      }
+    }
+    function messageCopyText(message, selectedText = "") {
+      const text = String(selectedText || message?.text || "").trim();
+      return text || (message?.voice ? "[语音]" : "");
+    }
+    async function copyMessage(message, selectedText = "") {
+      const text = messageCopyText(message, selectedText);
+      if (!text) return setStatus("这条消息没有可复制的文字");
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text);
+        } else {
+          const helper = document.createElement("textarea");
+          helper.value = text;
+          helper.style.position = "fixed";
+          helper.style.opacity = "0";
+          document.body.appendChild(helper);
+          helper.select();
+          if (!document.execCommand("copy")) throw new Error("copy-failed");
+          helper.remove();
+        }
+        closeMessageFeed();
+        setStatus("复制好了");
+      } catch { setStatus("剪贴板没接住，再试一下"); }
+    }
+    function quoteMessage(message, selectedText = "") {
+      const text = messageCopyText(message, selectedText);
+      if (!text || !current) return;
+      pendingQuote = { messageId: message.id, text };
+      el.pendingQuoteText.textContent = text.replace(/\s+/g, " ").slice(0, 180);
+      el.pendingQuote.hidden = false;
+      closeMessageFeed();
+      el.input.focus();
+    }
+    async function toggleFavorite(agentId, messageId, viewSeq = threadViewSeq) {
+      try {
+        const data = await api("POST", `thread/${encodeURIComponent(agentId)}/favorite/${encodeURIComponent(messageId)}`);
+        closeMessageFeed();
+        setStatus(data.favorite ? "收藏好了" : "已取消收藏");
+      } catch (error) {
+        closeMessageFeed();
+        if (current === agentId && viewSeq === threadViewSeq) setStatus(error.message || "这条消息没收藏上");
+      }
+    }
+    function menuActionButton(label, handler) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "message-menu-action";
+      button.textContent = label;
+      button.addEventListener("click", handler);
+      return button;
+    }
+    function openMessageFeed(row, message, agentId = current, selectedText = "") {
+      if (!row || !message?.id || message.role !== "assistant" || !agentId) return;
+      closeMessageActions();
+      closeMessageFeed();
+      feedRow = row;
+      feedMessage = message;
+      messageFeedMenu.replaceChildren();
+      const emojiRow = document.createElement("div");
+      emojiRow.className = "message-feed-emojis";
+      for (const emoji of FEED_EMOJIS) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = emoji;
+        button.title = `投喂${emoji}`;
+        button.className = message.feed?.emoji === emoji ? "is-selected" : "";
+        button.addEventListener("click", () => void feedMessageOn(agentId, message.id, emoji));
+        emojiRow.appendChild(button);
+      }
+      const divider = document.createElement("span");
+      divider.className = "message-feed-divider";
+      const actionRow = document.createElement("div");
+      actionRow.className = "message-feed-actions";
+      actionRow.append(
+        menuActionButton("复制", () => void copyMessage(message, selectedText)),
+        menuActionButton("引用", () => quoteMessage(message, selectedText)),
+        menuActionButton("收藏", () => void toggleFavorite(agentId, message.id)),
+      );
+      messageFeedMenu.append(emojiRow, divider, actionRow);
+      row.classList.add("feed-open");
+      messageFeedMenu.hidden = false;
+      messageFeedMenu.style.left = "-9999px";
+      placeMessageFeed(row);
+    }
+    function bindMessageFeed(row, message, agentId = current, selectedText = "") {
+      if (!row || !message?.id || message.role !== "assistant" || row.dataset.feedBound === "1") return;
+      row.dataset.feedBound = "1";
+      row.dataset.messageId = message.id;
+      row.__feedMessage = message;
+      row.__feedText = selectedText;
+      const open = (event) => {
+        if (event.button !== undefined && event.button !== 2) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openMessageFeed(row, message, agentId, row.__feedText);
+      };
+      row.addEventListener("contextmenu", open);
+      row.addEventListener("pointerup", open);
+    }
 
     function scheduleCloseActions() {
       clearTimeout(actionCloseTimer);
@@ -1558,9 +1719,30 @@
     }
     messageActions.addEventListener("pointerenter", keepActions);
     messageActions.addEventListener("pointerleave", scheduleCloseActions);
-    document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeMessageActions(); });
-    el.stream.addEventListener("scroll", closeMessageActions, { passive: true });
-    window.addEventListener("resize", closeMessageActions);
+    document.addEventListener("pointerdown", (event) => {
+      if (!messageFeedMenu.hidden && !messageFeedMenu.contains(event.target)) closeMessageFeed();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        closeMessageActions();
+        closeMessageFeed();
+      }
+    });
+    el.stream.addEventListener("contextmenu", (event) => {
+      if (event.defaultPrevented) return;
+      const row = event.target.closest?.(".row.ta");
+      if (!row?.__feedMessage) return;
+      event.preventDefault();
+      openMessageFeed(row, row.__feedMessage, current, row.__feedText);
+    });
+    el.stream.addEventListener("scroll", () => {
+      closeMessageActions();
+      closeMessageFeed();
+    }, { passive: true });
+    window.addEventListener("resize", () => {
+      closeMessageActions();
+      closeMessageFeed();
+    });
 
     function typingIndicator() {
       const row = document.createElement("div");
@@ -1606,6 +1788,12 @@
           await sleep(500);
         }
         if (!payload) return;
+        if (payload.message?.voice?.status === "ready") {
+          dots?.remove();
+          renderMessage(payload.message, { bindAssistantActions: true });
+          if (payload.replyMessageId) seenIds.add(payload.replyMessageId);
+          return;
+        }
         for (const item of payload.items || []) {
           await sleep(Math.max(120, Number(item.gapMs) || 700));
           if (!alive()) return;
@@ -1747,6 +1935,8 @@
         transcript.disabled = true;
       }
       if (opts.bindAssistantActions !== false) bindMessageActions(rendered.row, m);
+      bindMessageFeed(rendered.row, m, current, messageCopyText(m));
+      renderMessageFeed(rendered.col, m);
       return rendered.row;
     }
 
@@ -1822,9 +2012,14 @@
         const filtered = rawList.filter((piece) => !isBareStickerMarker(piece));
         const list = filtered.length ? filtered : rawList;
         let lastRow = null;
-        for (const piece of list) lastRow = bubble("assistant", piece, null, m.at).row;
+        for (const piece of list) {
+          const rendered = bubble("assistant", piece, null, m.at);
+          lastRow = rendered.row;
+          bindMessageFeed(rendered.row, m, current, piece);
+        }
         if (lastRow && opts.bindAssistantActions !== false
           && (m.role !== "assistant" || isLatestAssistantMessage(m))) bindMessageActions(lastRow, m);
+        if (lastRow) renderMessageFeed(lastRow.querySelector(".msg-col"), m);
       }
       return true;
     }
@@ -2158,6 +2353,10 @@
       el.send.style.removeProperty("--send-bg");
       el.send.style.removeProperty("--send-fg");
       el.send.style.removeProperty("--send-border");
+      el.jumpBottom.style.removeProperty("--jump-bg");
+      el.jumpBottom.style.removeProperty("--jump-fg");
+      el.jumpBottom.style.removeProperty("--jump-border");
+      el.jumpBottom.style.removeProperty("--jump-hover-bg");
       el.chat.style.removeProperty("--voice-bg");
       el.chat.style.removeProperty("--voice-fg");
       el.chat.style.removeProperty("--voice-border");
@@ -2186,6 +2385,10 @@
       el.send.style.setProperty("--send-bg", theme.background);
       el.send.style.setProperty("--send-fg", theme.foreground);
       el.send.style.setProperty("--send-border", theme.border);
+      el.jumpBottom.style.setProperty("--jump-bg", theme.background);
+      el.jumpBottom.style.setProperty("--jump-fg", theme.foreground);
+      el.jumpBottom.style.setProperty("--jump-border", theme.border);
+      el.jumpBottom.style.setProperty("--jump-hover-bg", theme.noticeBackground);
       el.chat.style.setProperty("--voice-bg", theme.background);
       el.chat.style.setProperty("--voice-fg", theme.foreground);
       el.chat.style.setProperty("--voice-border", theme.border);
@@ -2257,25 +2460,9 @@
           remove.className = "appearance-remove";
           remove.textContent = "删";
           remove.title = "从背景图库删除这张图";
-          remove.addEventListener("click", async (event) => {
+          remove.addEventListener("click", (event) => {
             event.stopPropagation();
-            if (armedBackgroundFile !== item.file) {
-              armedBackgroundFile = item.file;
-              remove.textContent = "再删";
-              setStatus("再点一次，才会从背景图库里删除这张图");
-              clearTimeout(armedBackgroundTimer);
-              armedBackgroundTimer = setTimeout(() => { armedBackgroundFile = ""; remove.textContent = "删"; }, 3000);
-              return;
-            }
-            remove.disabled = true;
-            try {
-              await api("DELETE", `background/${encodeURIComponent(agentId)}?file=${encodeURIComponent(item.file)}&remove=1`);
-              if (current !== agentId || loadSeq !== appearanceLoadSeq) return;
-              if (currentBg?.file === item.file) await syncChatBackground(agentId, null);
-              await loadAppearance(agentId);
-              setStatus("背景图删掉了");
-            } catch (error) { setStatus(`背景图删不掉：${error.message}`); }
-            finally { remove.disabled = false; }
+            openBackgroundDelete(agentId, item.file, loadSeq);
           });
           tile.append(button, remove);
           el.appearanceGallery.appendChild(tile);
@@ -2311,6 +2498,35 @@
       } catch { /* 预览取不到时保留空状态 */ }
     }
 
+    function closeBackgroundDelete() {
+      pendingBackgroundDelete = null;
+      el.backgroundDeleteLayer.hidden = true;
+      el.backgroundDeleteConfirm.disabled = false;
+    }
+
+    function openBackgroundDelete(agentId, file, loadSeq) {
+      pendingBackgroundDelete = { agentId, file, loadSeq };
+      el.backgroundDeleteLayer.hidden = false;
+      el.backgroundDeleteConfirm.focus();
+    }
+
+    async function confirmBackgroundDelete() {
+      const pending = pendingBackgroundDelete;
+      if (!pending) return;
+      el.backgroundDeleteConfirm.disabled = true;
+      try {
+        const result = await api("DELETE", `background/${encodeURIComponent(pending.agentId)}?file=${encodeURIComponent(pending.file)}&remove=1`);
+        closeBackgroundDelete();
+        if (current !== pending.agentId || pending.loadSeq !== appearanceLoadSeq) return;
+        if (appearanceBackground?.file === pending.file) await syncChatBackground(pending.agentId, null);
+        await loadAppearance(pending.agentId);
+        setStatus(result.affectedPartners > 1 ? `背景图删掉了，已清除 ${result.affectedPartners} 位伙伴的背景设置` : "背景图删掉了");
+      } catch (error) {
+        el.backgroundDeleteConfirm.disabled = false;
+        setStatus(`背景图删不掉：${error.message}`);
+      }
+    }
+
     async function openAppearance() {
       if (!current) return;
       el.appearancePopover.hidden = false;
@@ -2326,6 +2542,91 @@
       el.settingsFrame.src = `settings.html?embedded=1&t=${Date.now()}`;
       el.settingsView.hidden = false;
     }
+    function favoriteTime(at) {
+      const text = bubbleTimeText(at);
+      return text || "以前";
+    }
+    async function removeFavoriteItem(id) {
+      try {
+        await api("DELETE", `favorites/${encodeURIComponent(id)}`);
+        await renderFavorites();
+        setStatus("已取消收藏");
+      } catch (error) { setStatus(error.message || "这条收藏没取消掉"); }
+    }
+    async function renderFavorites() {
+      el.favoritesList.replaceChildren();
+      try {
+        const data = await api("GET", "favorites");
+        const items = Array.isArray(data.items) ? data.items : [];
+        if (!items.length) {
+          const empty = document.createElement("div");
+          empty.className = "favorites-empty";
+          empty.textContent = "还没有收藏，右键伙伴的消息，留下想保存的那一条";
+          el.favoritesList.appendChild(empty);
+          return;
+        }
+        for (const item of items) {
+          const card = document.createElement("article");
+          card.className = "favorite-item";
+          const head = document.createElement("div");
+          head.className = "favorite-item-head";
+          const who = document.createElement("strong");
+          who.textContent = item.partnerName || item.agentId;
+          const when = document.createElement("time");
+          when.textContent = favoriteTime(item.at || item.createdAt);
+          head.append(who, when);
+          const body = document.createElement("div");
+          body.className = "favorite-item-body";
+          if (item.kind === "voice") {
+            const play = document.createElement("button");
+            play.type = "button";
+            play.className = "favorite-play";
+            play.textContent = "▶ 播放语音";
+            play.addEventListener("click", async () => {
+              play.disabled = true;
+              try {
+                const response = await hana.api.fetch(`favorites/${encodeURIComponent(item.id)}/voice`);
+                if (!response.ok) throw new Error("语音文件不在了");
+                const audio = new Audio(URL.createObjectURL(await response.blob()));
+                await audio.play();
+                audio.addEventListener("ended", () => URL.revokeObjectURL(audio.src), { once: true });
+              } catch (error) { setStatus(error.message || "这条语音播不出来"); }
+              finally { play.disabled = false; }
+            });
+            body.appendChild(play);
+            if (item.text) {
+              const transcript = document.createElement("span");
+              transcript.className = "favorite-transcript";
+              transcript.textContent = item.text;
+              body.appendChild(transcript);
+            }
+          } else {
+            body.textContent = item.text || "（空消息）";
+          }
+          const foot = document.createElement("div");
+          foot.className = "favorite-item-foot";
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "favorite-remove";
+          remove.textContent = "取消收藏";
+          remove.addEventListener("click", () => void removeFavoriteItem(item.id));
+          foot.appendChild(remove);
+          card.append(head, body, foot);
+          el.favoritesList.appendChild(card);
+        }
+      } catch (error) {
+        const failed = document.createElement("div");
+        failed.className = "favorites-empty";
+        failed.textContent = error.message || "收藏没读出来";
+        el.favoritesList.appendChild(failed);
+      }
+    }
+    function openFavoritesView() {
+      el.settingsView.hidden = true;
+      el.favoritesView.hidden = false;
+      void renderFavorites();
+    }
+    function closeFavoritesView() { el.favoritesView.hidden = true; }
     window.addEventListener("message", (event) => {
       if (event.source !== el.settingsFrame.contentWindow) return;
       if (event.data?.type === "chahuahui:close-settings") {
@@ -2363,8 +2664,14 @@
       }
     });
     el.settingsButton.addEventListener("click", openSettingsView);
+    el.favoritesButton.addEventListener("click", openFavoritesView);
+    el.favoritesBack.addEventListener("click", closeFavoritesView);
     el.appearanceButton.addEventListener("click", () => void openAppearance());
     el.appearanceClose.addEventListener("click", closeAppearance);
+    el.backgroundDeleteClose.addEventListener("click", closeBackgroundDelete);
+    el.backgroundDeleteCancel.addEventListener("click", closeBackgroundDelete);
+    el.backgroundDeleteConfirm.addEventListener("click", () => void confirmBackgroundDelete());
+    el.backgroundDeleteLayer.addEventListener("click", (event) => { if (event.target === el.backgroundDeleteLayer) closeBackgroundDelete(); });
     el.appearancePick.addEventListener("click", () => el.appearanceFile.click());
     el.appearanceFile.addEventListener("change", async () => {
       const file = el.appearanceFile.files?.[0];
@@ -2453,6 +2760,7 @@
       inputOwner = agentId;
       inputRevision += 1;
       el.input.value = "";
+      clearPendingQuote();
       autosizeInput();
       const openSeq = ++openPartnerSeq;
       ++threadViewSeq;
@@ -2664,6 +2972,7 @@
       const text = el.input.value.trim();
       const image = pendingImage;
       const sticker = pendingSticker;
+      const quote = pendingQuote ? { messageId: pendingQuote.messageId, text: pendingQuote.text } : null;
       if (!text && !image && !sticker) return;
       const inputVersion = inputRevision;
       let accepted = false;
@@ -2699,10 +3008,12 @@
           text,
           ...(image ? { image: { name: image.name, mimeType: image.mimeType, data: image.data } } : {}),
           ...(sticker ? { stickerId: sticker.id } : {}),
+          ...(quote ? { quote } : {}),
           // 她在不在看只是告诉后端「要不要演实时那套」；对方手机在不在手里跟这个无关
           watching: document.visibilityState === "visible",
         });
         accepted = true;
+        clearPendingQuote();
         // 成功回包只清理本次仍挂在待发送区的那张图；若期间换过图，保留新图。
         if (pendingImage === image) clearPendingImage();
         if (pendingSticker === sticker) clearPendingSticker();
@@ -2751,6 +3062,10 @@
     }
 
     el.send.addEventListener("click", send);
+    el.pendingQuoteClear.addEventListener("click", () => {
+      clearPendingQuote();
+      setStatus("已取消引用");
+    });
     function clearImagePickFeedback() {
       el.imageButton.classList.remove("is-busy");
       el.imageButton.removeAttribute("aria-busy");

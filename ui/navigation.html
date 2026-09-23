@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>茶话会伙伴</title>
+  <style>
+    :root {
+      --bg: #f7f4ec;
+      --paper: #fffdf9;
+      --sunken: #f1ece1;
+      --line: #e7dfd0;
+      --primary: #5dae8e;
+      --primary-ink: #2f6b52;
+      --accent-soft: #eef7f2;
+      --blossom: #e89bb0;
+      --ink: #43403a;
+      --ink-soft: #767066;
+      --ink-faint: #b3ac9e;
+    }
+    * { box-sizing: border-box; }
+    *::-webkit-scrollbar { width: 8px; height: 8px; }
+    *::-webkit-scrollbar-track { background: transparent; }
+    *::-webkit-scrollbar-thumb { background: #c9dfd3; border: 2px solid var(--bg); border-radius: 99px; }
+    *::-webkit-scrollbar-thumb:hover { background: var(--primary); }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink); }
+    body { font: 14px/1.6 "LXGW WenKai", "霞鹜文楷", "Noto Sans SC", system-ui, sans-serif; }
+    .panel { height: 100%; display: flex; flex-direction: column; min-width: 0; }
+    .head { flex: none; padding: 18px 14px 12px; border-bottom: 1px solid var(--line); }
+    .title { display: flex; align-items: center; gap: 8px; color: var(--primary-ink); }
+    .title svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    h1 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: .08em; }
+    .summary { margin-top: 3px; color: var(--ink-faint); font-size: 11.5px; }
+    .status { margin: 10px 14px 0; padding: 8px 10px; color: var(--ink-soft); background: var(--paper); border: 1px solid var(--line); border-radius: 12px; }
+    .status[hidden] { display: none; }
+    .list { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin: 0; padding: 8px; list-style: none; }
+    .partner { width: 100%; display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 0; border-radius: 12px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background .15s ease; }
+    .partner:hover { background: var(--sunken); }
+    .partner.active { background: var(--accent-soft); }
+    .partner.active .name { color: var(--primary-ink); font-weight: 650; }
+    .avatar { flex: none; width: 36px; height: 36px; overflow: hidden; display: grid; place-items: center; border-radius: 9px; background: #cfe8dc; color: var(--primary-ink); font-size: 16px; font-weight: 700; }
+    .avatar img { width: 100%; height: 100%; display: block; object-fit: cover; }
+    .copy { flex: 1 1 auto; min-width: 0; }
+    .name, .preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .name { color: var(--ink); line-height: 1.35; }
+    .preview { min-height: 18px; margin-top: 2px; color: var(--ink-faint); font-size: 11.5px; }
+    .badge { flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--blossom); color: #fff; font: 11px/18px system-ui, sans-serif; text-align: center; box-shadow: 0 1px 3px rgba(232,155,176,.35); }
+    .empty { padding: 28px 14px; color: var(--ink-faint); text-align: center; }
+  </style>
+</head>
+<body>
+  <main class="panel">
+    <header class="head">
+      <div class="title">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9.5h11l-1.3 6.9a2 2 0 0 1-1.97 1.6H8.27a2 2 0 0 1-1.97-1.6L5 9.5Z"/><path d="M16 11h1.4a2.4 2.4 0 0 1 0 4.8h-2.2"/><path d="M9.3 6.8c0-.9.7-1.4.7-2.3M12.3 6.8c0-.9.7-1.4.7-2.3"/></svg>
+        <h1>茶话会</h1>
+      </div>
+      <div class="summary" id="summary">正在看看谁在屋里…</div>
+    </header>
+    <div class="status" id="status" hidden></div>
+    <ul class="list" id="partners" aria-label="伙伴列表"></ul>
+  </main>
+
+  <script type="module">
+    import { hana } from "./assets/sdk.js";
+
+    const SELECTION_KEY = "chahuahui.navigation.selected";
+    const list = document.getElementById("partners");
+    const summary = document.getElementById("summary");
+    const status = document.getElementById("status");
+    const avatarUrls = new Map();
+    let partners = [];
+    let selectedId = "";
+    let loadSeq = 0;
+
+    function unwrap(result) {
+      return result && Object.prototype.hasOwnProperty.call(result, "value") ? result.value : result;
+    }
+
+    async function api(path) {
+      const res = await Promise.race([
+        hana.api.fetch(path, { method: "GET" }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("等得太久了，稍后再试一次")), 8000)),
+      ]);
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch { data = { ok: false, raw: text.slice(0, 200) }; }
+      if (!res.ok || data.ok === false) throw new Error(data?.error?.message || data?.raw || `HTTP ${res.status}`);
+      return data;
+    }
+
+    async function avatarUrl(agentId) {
+      if (avatarUrls.has(agentId)) return avatarUrls.get(agentId);
+      let url = "";
+      try {
+        const res = await hana.api.fetch(`avatar/${encodeURIComponent(agentId)}`, { method: "GET" });
+        if (res.ok) {
+          const blob = await res.blob();
+          if (blob.size) url = URL.createObjectURL(blob);
+        }
+      } catch { /* 没头像就用首字 */ }
+      avatarUrls.set(agentId, url);
+      return url;
+    }
+
+    async function paintAvatar(box, partner) {
+      const url = await avatarUrl(partner.id);
+      if (!box.isConnected || !url) return;
+      box.textContent = "";
+      const img = document.createElement("img");
+      img.alt = "";
+      img.src = url;
+      box.appendChild(img);
+    }
+
+    function render() {
+      list.replaceChildren();
+      for (const partner of partners) {
+        const item = document.createElement("li");
+        const button = document.createElement("button");
+        const unread = Math.max(0, Number(partner.unread) || 0);
+        button.type = "button";
+        button.className = `partner${partner.id === selectedId ? " active" : ""}`;
+        button.setAttribute("aria-pressed", partner.id === selectedId ? "true" : "false");
+        button.setAttribute("aria-label", `${partner.name}${unread ? `，${unread} 条没看` : ""}`);
+
+        const avatar = document.createElement("span");
+        avatar.className = "avatar";
+        avatar.textContent = String(partner.name || partner.id).slice(0, 1);
+        void paintAvatar(avatar, partner);
+
+        const copy = document.createElement("span");
+        copy.className = "copy";
+        const name = document.createElement("span");
+        name.className = "name";
+        name.textContent = partner.name;
+        const preview = document.createElement("span");
+        preview.className = "preview";
+        preview.textContent = String(partner.lastMessage?.text || "").replace(/\s+/g, " ").trim();
+        copy.append(name, preview);
+        button.append(avatar, copy);
+
+        if (unread) {
+          const badge = document.createElement("span");
+          badge.className = "badge";
+          badge.textContent = unread > 99 ? "99+" : String(unread);
+          button.appendChild(badge);
+        }
+        button.addEventListener("click", async () => {
+          selectedId = partner.id;
+          render();
+          try {
+            await hana.storage.global.set(SELECTION_KEY, { agentId: partner.id, at: Date.now() });
+          } catch (error) {
+            status.hidden = false;
+            status.textContent = `没能打开：${error?.message || error}`;
+          }
+        });
+        item.appendChild(button);
+        list.appendChild(item);
+      }
+      if (!partners.length) {
+        const empty = document.createElement("li");
+        empty.className = "empty";
+        empty.textContent = "这里还没有伙伴";
+        list.appendChild(empty);
+      }
+    }
+
+    async function readSelection() {
+      try {
+        const value = unwrap(await hana.storage.global.get(SELECTION_KEY));
+        selectedId = typeof value?.agentId === "string" ? value.agentId : "";
+      } catch { /* 读不到就等主页面同步 */ }
+    }
+
+    async function loadPartners() {
+      const seq = ++loadSeq;
+      try {
+        const data = await api("partners");
+        if (seq !== loadSeq) return;
+        partners = Array.isArray(data.partners) ? data.partners : [];
+        if (!selectedId) selectedId = data.lastPartnerId || "";
+        const unread = Math.max(0, Number(data.totalUnread) || 0);
+        summary.textContent = unread ? `${unread} 条没看` : `${partners.length} 位伙伴`;
+        status.hidden = true;
+        render();
+      } catch (error) {
+        if (seq !== loadSeq) return;
+        status.hidden = false;
+        status.textContent = `伙伴列表没读出来：${error?.message || error}`;
+      }
+    }
+
+    hana.ready?.({ ok: true });
+    await readSelection();
+    await loadPartners();
+    const stopStorage = hana.storage.global.onChanged((keys) => {
+      if (!keys.includes(SELECTION_KEY)) return;
+      void readSelection().then(render);
+    });
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void loadPartners();
+    }, 5000);
+    window.addEventListener("pagehide", () => {
+      clearInterval(timer);
+      stopStorage?.();
+      for (const url of avatarUrls.values()) if (url) URL.revokeObjectURL(url);
+    }, { once: true });
+  </script>
+</body>
+</html>

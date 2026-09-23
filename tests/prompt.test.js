@@ -53,6 +53,24 @@ test("有问句或未完语气时，哈哈仍交给模型判断", () => {
   ], "u"), false);
 });
 
+test("聊天上下文会带入投喂，但不把它当成普通用户消息", () => {
+  const rows = threadToMessages([
+    { role: "assistant", text: "我刚想到一个小动作", at: "2026-09-15T15:22:00.000Z", feed: { emoji: "☕" } },
+  ], 24, { userName: "玥儿" });
+  assert.match(rows[0].content[0].text, /玥儿给这条消息投喂了☕/);
+  assert.match(rows[0].content[0].text, /不代表她想继续展开/);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].role, "assistant");
+});
+
+test("用户引用伙伴消息时，引用原文进入模型上下文", () => {
+  const rows = threadToMessages([
+    { role: "user", text: "你还记得这个吗", quote: { messageId: "a-1", text: "那句具体的话" } },
+  ], 24, { userName: "玥儿" });
+  assert.match(rows[0].content, /玥儿引用了你之前的一条消息：那句具体的话/);
+  assert.match(rows[0].content, /你还记得这个吗/);
+});
+
 test("聊天上下文在长间隔处带发生时间，但不改即时聊天格式", () => {
   const rows = threadToMessages([
     { role: "user", text: "晚安", at: "2026-09-15T15:22:00.000Z" },

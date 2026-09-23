@@ -53,7 +53,7 @@ test("睡醒回声优先于普通话题，并允许共享窗外情境作为背�
   assert.ok(!spec.userText.includes("普通话题"), "睡醒回访时不应把普通话题抢到前面");
 });
 
-test("普通主动消息先接住最近场景，再转到新话题", () => {
+test("普通主动消息把最近场景当背景，不强制先承接", () => {
   const spec = proactiveSpec({
     partnerName: "小花",
     userName: "阿舟",
@@ -63,9 +63,10 @@ test("普通主动消息先接住最近场景，再转到新话题", () => {
       assistantText: "那你先缓一哈，别马上接着忙",
     },
   });
-  assert.ok(spec.userText.includes("上一轮聊天刚停在一个具体情境里"));
+  assert.ok(spec.userText.includes("最近一轮聊天的背景"));
   assert.ok(spec.userText.includes("我刚忙完，脑壳还有点昏"));
-  assert.ok(spec.userText.includes("先用一小句接住上一轮情境"));
+  assert.ok(spec.userText.includes("普通闲聊、玩笑和已经收住的话题，默认直接说"));
+  assert.doesNotMatch(spec.userText, /先用一小句接住上一轮情境/);
   assert.ok(spec.userText.includes("像素小物"));
 });
 
@@ -300,6 +301,9 @@ test("主动消息先确认来由链，不把话题当成采访题目", () => {
   assert.match(spec.systemPrompt, /真实素材.*你自己的联想/);
   assert.match(spec.systemPrompt, /话题只是素材，不是要完成的题目/);
   assert.match(spec.systemPrompt, /具体可指认的对象、动作、款式、颜色、搭配、场景或选择/);
+  assert.match(spec.systemPrompt, /具体细节不能单独撑起一条主动消息/);
+  assert.match(spec.systemPrompt, /自己的感受、偏好、判断、玩笑或一点小别扭/);
+  assert.match(spec.systemPrompt, /不等于每条都要提问/);
   assert.match(spec.systemPrompt, /具体到能想象，轻松到不用答/);
   assert.match(spec.systemPrompt, /直接从那件事本身说起/);
   assert.match(spec.systemPrompt, /万能问句开场/);
