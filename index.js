@@ -275,6 +275,7 @@ function describeError(error) {
   return { name: error.name ?? null, message: error.message ?? String(error), code: error.code ?? null };
 }
 
+// __CHAHUAHUI_DEV_ONLY__
 /**
  * 内测入口总开关。
  *
@@ -286,6 +287,7 @@ function describeError(error) {
  * 不该暴露给只是装着玩的人（数据与流程上看，它们对普通使用者也毫无意义）。
  */
 const DEV_TOOLS = false;
+// __CHAHUAHUI_DEV_ONLY_END__
 
 export function apply(ctx) {
   const diagnostics = createDiagnostics(ctx.dataDir);
@@ -3624,6 +3626,7 @@ export function apply(ctx) {
     await maybeShowBanner();
   }
 
+  // __CHAHUAHUI_DEV_ONLY__
   // ── 内测体感测试台（发布前连同 /probe、/notify/test 一起剥掉） ──
   //
   // 把账本摆到指定的几个档位上，用**真实的提示词**和真机模型各回几次，
@@ -3703,7 +3706,8 @@ export function apply(ctx) {
     },
   };
 
-  // ────────────────────── 自动性格分析（内测） ──────────────────────
+  // __CHAHUAHUI_DEV_ONLY_END__
+  // ────────────────────── 人格素材读取（分析与捏人草稿共用） ──────────────────────
   //
   // 从伙伴现有素材里提炼一份调色盘。方法论见 lib/analyze.js 顶部。
   // 只读素材、不写伙伴任何文件；结果写到 dataDir 下的 analysis-<时刻>.json。
@@ -3889,6 +3893,7 @@ export function apply(ctx) {
     return body.length > 4000 ? `${body.slice(0, 4000)}\n…（后略，原文 ${body.length} 字）` : body;
   }
 
+  // __CHAHUAHUI_DEV_ONLY__
   async function analyzePersonalityOnce(input = {}) {
     const agentId = String(input?.agentId ?? "").trim();
     if (!agentId) throw new Error("要带 agentId");
@@ -4020,9 +4025,10 @@ export function apply(ctx) {
     };
   }
 
-  // ────────────────────── 捏人：出草稿（内测） ──────────────────────
+  // __CHAHUAHUI_DEV_ONLY_END__
+  // ────────────────────── 捏人：出草稿 ──────────────────────
   //
-  // 跟 analyzePersonalityOnce 的区别：这里产的是「色 + 候选行为池」，交给用户挑；
+  // 跟性格分析那条路（只读、产报告）的区别：这里产的是「色 + 候选行为池」，交给用户挑；
   // 挑完才算定稿。草稿存 v2/partners/<id>/palette-draft.json，捏完清掉。
 
   async function draftPaletteOnce(agentId, input = {}) {
@@ -4207,6 +4213,7 @@ export function apply(ctx) {
     return { ok: true, agentId, running: true };
   }
 
+  // __CHAHUAHUI_DEV_ONLY__
   /**
    * 后台跑一轮性格分析（模型调用慢，不卡路由也不卡工具）。
    * 结果写到 dataDir 下的 analysis-<时刻>.json，立刻把路径还回去。
@@ -4442,6 +4449,7 @@ export function apply(ctx) {
     return file;
   }
 
+  // __CHAHUAHUI_DEV_ONLY_END__
   // 纠错建议只在内存里短暂停留：前端拿到的是可预览文案，真正的 claims 不往界面暴露。
   const adaptationDrafts = new Map();
   const ADAPTATION_DRAFT_TTL_MS = 30 * 60 * 1000;
@@ -5419,6 +5427,7 @@ export function apply(ctx) {
         }
       });
 
+      // __CHAHUAHUI_DEV_ONLY__
       // 内测用的手动催一次主动巡检（跳过“到没到点”这道门，静默与日上限照管）。
       // 发布前连同 /probe 一起剥掉。
       if (DEV_TOOLS) app.post("/proactive/tick", async (c) => {
@@ -5429,6 +5438,7 @@ export function apply(ctx) {
         }
       });
 
+      // __CHAHUAHUI_DEV_ONLY_END__
       // ── 小动作（只有一个动作；「戳一戳」「拍了拍」只是ta的叫法）──
 
       /** 这个动作现在长什么样：ta做的 / 她做的（设置页与聊天窗都用这个）。 */
@@ -5996,6 +6006,7 @@ export function apply(ctx) {
         }
       });
 
+      // __CHAHUAHUI_DEV_ONLY__
       // ── M0 探针（保留，用于回归） ──
       if (DEV_TOOLS) app.get("/probe/last", (c) => {
         try {
@@ -6048,6 +6059,7 @@ export function apply(ctx) {
         }
       });
 
+      // __CHAHUAHUI_DEV_ONLY_END__
       // ── 茶话会本地角色：只存在应用自己的账本里 ──
 
       app.post("/local-partners", async (c) => {
@@ -6450,6 +6462,7 @@ export function apply(ctx) {
         }),
       );
 
+      // __CHAHUAHUI_DEV_ONLY__
       // 内测用的手动触发：模拟一位伙伴来找她，只看提醒链路通不通，不写聊天记录。
       // 发布前连同 /probe 一起剥掉。
       if (DEV_TOOLS) app.post("/notify/test", async (c) => {
@@ -6462,11 +6475,13 @@ export function apply(ctx) {
           return c.json({ ok: false, error: describeError(error) }, 500);
         }
       });
+    // __CHAHUAHUI_DEV_ONLY_END__
     });
   } catch (error) {
     ctx.logger.error(`[${name}] 路由注册失败: ${error?.message || error}`);
   }
 
+  // __CHAHUAHUI_DEV_ONLY__
   try {
     if (DEV_TOOLS) ctx.tools.register({
       name: "chahuahui_ping",
@@ -6553,6 +6568,7 @@ export function apply(ctx) {
     ctx.logger.error(`[${name}] 体感测试工具注册失败: ${error?.message || error}`);
   }
 
+  // __CHAHUAHUI_DEV_ONLY_END__
   // 提醒那层要听两件事：她换窗口了（横幅跟着走）、她把横幅关了（这批翻篇）。
   // 订阅只是登记，不是受权限保护的调用，所以放在装载期是安全的。
   try {
