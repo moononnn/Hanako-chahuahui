@@ -9,6 +9,48 @@ const navigation = fs.readFileSync(new URL("../ui/navigation.html", import.meta.
 const settings = fs.readFileSync(new URL("../ui/settings.html", import.meta.url), "utf8");
 const app = fs.readFileSync(new URL("../index.js", import.meta.url), "utf8");
 
+test("伙伴投喂：只画在 ta 读过的那条上，只读没菜单，轮询能补挂件", () => {
+  assert.match(panel, /function renderPartnerFeed\(col, message\)/);
+  assert.match(panel, /function visiblePartnerFeedItems\(message\)/);
+  assert.match(panel, /row\.repliedTo === message\?\.id/);
+  assert.match(panel, /replyAt <= fedAt/, "已经先回复、后投喂的旧挂件要从界面收起");
+  // 未读、撤回或已回复后才递的都不画
+  assert.match(panel, /const items = message\.readAt && !message\.recalled \? visiblePartnerFeedItems\(message\) : \[\]/);
+  assert.match(panel, /formatMessageFeed\(\{ items: visiblePartnerFeedItems\(message\) \}\)/);
+  assert.match(panel, /feed\.className = "message-feed from-partner"/);
+  // 只读展示，不挂右键菜单（那是用户投 ta 那份才有的）
+  assert.doesNotMatch(panel, /bindPartnerFeed/);
+  // 轮询发现新投喂时只补那一处
+  assert.match(panel, /function syncPartnerFeed\(message\)/);
+  assert.match(panel, /for \(const m of currentMessages\) syncPartnerFeed\(m\)/);
+  assert.match(panel, /partnerFeedNodes\.clear\(\)/);
+});
+
+test("伙伴投喂：后端也卡已读、卡一天两次、走信号不走定时", () => {
+  assert.match(app, /async function runFeedTickInternal\(\)/);
+  assert.match(app, /const signal = detectFeedSignal\(\{/);
+  assert.match(app, /if \(!target \|\| !isFeedableTarget\(target\) \|\| target\.partnerFeed\?\.items\?\.length\)/);
+  assert.match(app, /const gate = gateFeed\(\{/);
+  assert.match(app, /store\.patchMessage\(agentId, signal\.messageId, \{ partnerFeed: nextFeed \}\)/);
+  assert.match(app, /runProactiveTick\(\)\s*\n\s*\.then\(\(\) => runAwaitingTick\(\)\)\s*\n\s*\.then\(\(\) => runFeedTick\(\)\)/);
+  assert.match(app, /feedAssetText\(\{/);
+  // 撤回时顺手把挂件摘掉
+  assert.match(app, /recallMode: "hard",\s*\n\s*recalledAt: new Date\(\)\.toISOString\(\),\s*\n\s*partnerFeed: null,/);
+});
+
+test("伙伴投喂：撤回的 message 不进模型上下文", () => {
+  assert.match(app, /recalled: true,\s*\n\s*recalledAt: new Date\(\)\.toISOString\(\),\s*\n\s*\/\/ 撤回的消息上不该还挂着她递的小东西\s*\n\s*partnerFeed: null,/);
+  const prompt = fs.readFileSync(new URL("../lib/prompt.js", import.meta.url), "utf8");
+  assert.match(prompt, /replyTimes\.some\(\(replyAt\) => replyAt <= fedAt\)/, "回复早于投喂时，模型上下文也不能把它说成没接话");
+  assert.match(prompt, /const partnerFeedText = row\.recalled \? "" : formatPartnerFeed\(visibleFeed\)/);
+});
+
+test("伙伴投喂：设置页有单独开关，默认开", () => {
+  assert.match(settings, /const feedSw = document\.createElement\("button"\)/);
+  assert.match(settings, /s\.partnerFeedEnabled === false \? "不投喂" : "可以投喂"/);
+  assert.match(settings, /savePartner\(agentId, \{ partnerFeedEnabled: next \}/);
+});
+
 test("伙伴列表支持拖动排序，并通过后端持久化", () => {
   assert.match(app, /app\.post\("\/partner-order"/);
   assert.match(app, /store\.setPartnerOrder\(ids\)/);
@@ -20,11 +62,17 @@ test("伙伴列表支持拖动排序，并通过后端持久化", () => {
   assert.match(panel, /li\.style\.opacity = "0\.04"/);
   assert.match(panel, /dragOriginIds/);
   assert.match(panel, /insertBefore\(draggedPartnerNode/);
+  assert.match(panel, /orderRevision !== partnerOrderRevision \|\| draggedPartnerId \|\| orderSavePending/, "旧轮询结果不能覆盖拖动期间或刚保存的顺序");
+  assert.match(panel, /partnerOrderRevision \+= 1;[\s\S]*?orderSavePending = true;/, "排序提交期间锁住旧列表回包");
+  assert.doesNotMatch(panel, /suppressPartnerClick/, "拖完不能靠下一次点击清掉残留拦截状态");
   assert.match(navigation, /item\.draggable = true/);
   assert.match(navigation, /api\("partner-order", "POST", \{ ids: partners\.map/);
   assert.match(navigation, /setDragImage\(ghost/);
   assert.match(navigation, /item\.style\.opacity = "0\.04"/);
   assert.match(navigation, /insertBefore\(draggedPartnerNode/);
+  assert.match(navigation, /orderRevision !== partnerOrderRevision \|\| draggedPartnerId \|\| orderSavePending/, "旧轮询结果不能覆盖拖动期间或刚保存的顺序");
+  assert.match(navigation, /partnerOrderRevision \+= 1;[\s\S]*?orderSavePending = true;/, "排序提交期间锁住旧列表回包");
+  assert.doesNotMatch(navigation, /suppressPartnerClick/, "拖完不能靠下一次点击清掉残留拦截状态");
 });
 
 test("表情包先放进待发送区，与文字共用一条发送链", () => {
@@ -51,6 +99,9 @@ test("聊天流打开到底部、上翻后可一键回到底部", () => {
   assert.match(panel, /autoScrollAllowed = stickToBottom/, "用户上翻时不被新消息拽回去");
   assert.match(panel, /async function stickerBubble\([\s\S]*?img\.classList\.remove\("loading"\);\s*\/\/ 表情包是异步插入的：[\s\S]*?scrollDown\(\);/, "异步表情包加载后仍会补到底部定位");
   assert.match(panelCss, /\.jump-bottom \{[\s\S]*?position: absolute;[\s\S]*?border-radius: 50%;/, "按钮是聊天区里的轻量悬浮圆按钮");
+  assert.match(panel, /<div class="composer-row">[\s\S]*?<button class="jump-bottom" id="jump-bottom"[\s\S]*?<\/button>[\s\S]*?<button class="emoji-btn image-btn"/, "回到底部按钮要锚定输入行，随输入框增高一起上移");
+  assert.match(panelCss, /\.composer-row \{[^}]*position: relative;/s, "输入行提供回到底部按钮的定位基准");
+  assert.match(panelCss, /\.jump-bottom \{[\s\S]*?bottom: calc\(100% \+ 24px\);/, "回到底部按钮悬浮在输入行上方，不再固定在聊天区底部");
 });
 
 test("回复只有一条路能画：正在演的那轮归演出，剩下的归轮询", () => {
@@ -188,7 +239,7 @@ test("设置接口只接受用户设置字段", () => {
   assert.match(app, /app\.use\("\*", async \(c, next\) =>/);
   assert.match(app, /INVALID_PARTNER_ID/);
   assert.match(app, /const GLOBAL_SETTING_KEYS = new Set\(\[/);
-  assert.match(app, /const PARTNER_SETTING_KEYS = new Set\(\["tier", "proactiveEnabled", "model", "vision", "voice"\]\)/);
+  assert.match(app, /const PARTNER_SETTING_KEYS = new Set\(\["tier", "proactiveEnabled", "model", "vision", "voice", "partnerFeedEnabled"\]\)/);
   assert.match(app, /code = "UNKNOWN_SETTING"/);
   assert.match(app, /pickSettingsPatch\(body, PARTNER_SETTING_KEYS, "伙伴设置"\)/);
   assert.doesNotMatch(app, /function normalizePartnerSettingsPatch\(body\) \{\n\s*const patch = \{ \.\.\.\(body/);
@@ -343,6 +394,16 @@ test("设置页完全不展示伙伴爱好", () => {
   assert.doesNotMatch(executableSettings, /爱好|hobbies/, "伙伴爱好只能从聊天里慢慢了解");
   assert.match(app, /app\.get\("\/knowing\/:agentId"/);
   assert.doesNotMatch(app, /return c\.json\(\{[\s\S]{0,1200}hobbies:/, "用户可见的 knowing 回包不能带爱好");
+});
+
+test("选模型：没单独指定时跟伙伴在 Hana 里的默认模型，设置页要把实际用的写出来", () => {
+  // 2026-09-28：以前没这一档，第二档之后直接退到宿主的“当前焦点模型”，
+  // 结果每位伙伴在 Hana 里各配各的，茶话会里却全员同一个模型。
+  assert.match(app, /agentRef: await agentDefaultModel\(agentId\)/, "四处定模型都要带伙伴在 Hana 里的默认模型");
+  assert.match(app, /ctx\.bus\.request\("agent:profile", \{ agentId, scope: "all" \}\)/, "读伙伴默认模型走宿主正门，不绕沙箱去翻文件");
+  assert.match(app, /effectiveModel: choice \? \{ provider: choice\.provider, model: choice\.model, source: choice\.source \}/, "设置页回包要带上实际生效的模型和来源");
+  assert.match(settings, /现在实际用 \$\{eff\.model\}/, "设置页要把“实际跟的是谁”写出来，不能继续一片空白");
+  assert.match(settings, /跟随 ta 在 Hana 里的模型/, "不单独指定时那句说法也要改对");
 });
 
 test("伙伴语音设置分成表达方式与全局朗读模型", () => {
@@ -562,13 +623,19 @@ test("起跑线：自动量那边的痕迹，也能自己定从哪儿算，只�
   assert.match(app, /seedStale\(knowing\.relationSeed, seedLastTry\)/, "该重量的就重量一份（量不出东西也有节流）");
   assert.doesNotMatch(app, /session:list/, "量会话那条路 v2 应用走不通，别写");
   assert.match(app, /note: relationshipNote\(effectiveRelationship\(knowing\), knowing\.relationSeed\)/, "回复那一句也要带上起跑线");
-  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, topic, hobby, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, stickerText, userRhythmText: userRhythm \}\)/, "ta 主动冒出来的消息也要带上相处理解、兴趣、临时搜索素材、当前时间、未回应语境、醒来回声、最近场景、共享情境、表情包和生活节拍");
-  assert.match(app, /const now = new Date\(\);[\s\S]{0,180}?currentTimeText/, "主动消息在搜索完成后再取当前时间");
+  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, stickerText, userRhythmText: userRhythm \}\)/, "主动消息只带与当前消息类型相符的兴趣发现，同时带上本人人格");
+  assert.match(app, /async function maybeExploreInterest[\s\S]*?searchTimelyTopic\(fetcher, \{ title: plan\.focus, searchQuery: plan\.searchQuery \}, \{\s*privateTerms: \[USER_NAME, partnerName\],\s*\}\)/, "探索由稳定兴趣生成新角度；已知称呼外发前过滤");
+  assert.match(app, /const candidateDiscovery = followup\?\.read \? null : nextDiscovery\(state\.interestLearning, now\)/, "主动话题只从短期兴趣发现中选择");
+  assert.match(app, /discoveryForProactiveMessage\(candidateDiscovery, \{ exception: gate\.exception \}\)/, "夜间例外不得绑定或消耗兴趣发现");
+  assert.match(app, /const shareableDiscovery = discoveryForProactiveMessage\(discovery, \{ exception \}\)/, "最终发送门变化为夜间例外时，也必须保护待分享发现");
+  assert.match(app, /if \(shareableDiscovery\) \{[\s\S]{0,250}?markDiscoveryShared\(current\.interestLearning, shareableDiscovery\.id/, "只在实际采用兴趣分享消息后消耗发现");
   assert.match(app, /主动联系不能等用户先说话才有兴趣/);
   assert.match(app, /const personaText = renderPersona\(persona/);
   assert.match(app, /knowing\.hobbies\.born\.no-material/);
   assert.match(app, /hobbyGrowTryAt/);
-  assert.match(app, /nightSpec\(\{[\s\S]{0,200}?relationNote/, "半夜那条也一样");
+  assert.match(app, /nightSpec\(\{[\s\S]{0,120}?personaText/, "半夜那条也是 ta 本人在说，得带人格");
+  assert.match(app, /nudgeSpec\(\{[\s\S]{0,120}?personaText/, "等回音催问也得带人格，不能只给处境");
+  assert.match(app, /const persona = await getPersona\(agentId\)[\s\S]{0,200}?nameFallback: true/, "主动开口前先取本人人格，没写过人设的只锤名字");
 });
 
 test("分享版地基：用户的名字从这台机器的配置读，不写死", () => {
@@ -850,6 +917,7 @@ test("气泡看得出是两张纸：伙伴那条也改成实线边加淡影", ()
 test("窄页面不靠撑出横向滚动：输入区收紧后仍保住发送按钮", () => {
   assert.match(panelCss, /html, body \{[\s\S]{0,180}?overflow-x: hidden;/);
   assert.match(panelCss, /\.stream \{[\s\S]{0,140}?overflow-x: hidden;/, "聊天流只保留竖向历史滚动，不显示无意义的横向滚动条");
+  assert.match(panelCss, /\.message-image \{[^}]*max-width: min\(320px, 100%\)[^}]*box-sizing: border-box;/s, "消息图片宽度受气泡可用宽度约束，不能按视口宽度溢出气泡");
   assert.match(panelCss, /@media \(max-width: 380px\)[\s\S]{0,260}?\.composer-row \{ gap: 4px; \}/);
   assert.match(panelCss, /@media \(max-width: 380px\)[\s\S]{0,360}?button\.send \{ width: 34px; height: 34px; \}/);
   assert.doesNotMatch(panelCss, /html, body \{[\s\S]{0,180}?min-width: 420px;/, "不能再用页面最小宽度把右侧控件撑出视口");
@@ -962,7 +1030,11 @@ test("等回音也过主动硬门并在真实发送后记配额，暂存意图�
   assert.match(app, /const finalGate = autonomousGateNow\(agentId, "proactive"\)[\s\S]{0,1200}?noteSent\(/, "proactive 必须在全局锁内二次过门并记账");
   assert.match(awaitingBody, /withGlobalAutonomousLane[\s\S]{0,700}?autonomousGateNow\(agentId, "awaiting"\)/, "awaiting 必须在全局锁内二次过门");
   assert.match(app, /staged: \[pending\.intent, \.\.\.pending\.rest\]/, "gate 拦住时旧暂存意图要显式写回");
-  assert.match(app, /sent\.gateBlocked && readyTopic[\s\S]{0,300}?stageIntent\(/, "临门被拦时，本轮新挑出的正式话题也要放进暂存抽屉");
+  assert.match(app, /const candidateDiscovery = followup\?\.read \? null : nextDiscovery\(state\.interestLearning, now\)/, "临门只有兴趣探索的新发现能作为主动话题");
+  assert.match(app, /discoveryForProactiveMessage\(candidateDiscovery, \{ exception: gate\.exception \}\)/, "夜间例外不得消耗兴趣发现");
+  assert.match(app, /const shareableDiscovery = discoveryForProactiveMessage\(discovery, \{ exception \}\)/, "发送阶段再次按最终例外状态过滤发现");
+  assert.match(app, /if \(shareableDiscovery\) \{[\s\S]{0,250}?markDiscoveryShared\(current\.interestLearning, shareableDiscovery\.id/, "例外和未采用发现都不落已分享状态");
+  assert.doesNotMatch(app, /sent\.gateBlocked && readyTopic/, "用户旧话题不能再从暂存旁路进入主动话题");
 });
 
 test("被吵醒那一段：先有脾气再回正事，脾气还是ta自己的", () => {
@@ -1340,6 +1412,18 @@ test("聊天输入框可把剪贴板图片送进待发送图片链路", () => {
   assert.match(panel, /name: file\.name \|\| "剪贴板图片\.png"/);
 });
 
+test("图片回包延迟或丢失时用请求编号对账，已落盘图片不再留在待发送区", () => {
+  assert.match(panel, /clientMessageId: `img_\$\{Date\.now\(\)\.toString\(36\)\}_/);
+  assert.match(panel, /clientMessageId: image\.clientMessageId/);
+  assert.match(panel, /function reconcilePendingImage\(messages\)/);
+  assert.match(panel, /message\.clientMessageId === requestId/);
+  assert.match(panel, /reconcilePendingImage\(currentMessages\)/);
+  assert.match(panel, /if \(started\.duplicate\) \{[\s\S]*?optimisticRow\.remove\(\);[\s\S]*?await appendNew\(agentId\);/);
+  assert.match(app, /const clientMessageId = String\(body\?\.clientMessageId \?\? ""\)\.trim\(\)/);
+  assert.match(app, /existing\) return c\.json\(\{ ok: true, messageId: existing\.id, duplicate: true \}\)/);
+  assert.match(app, /\.\.\.\(clientMessageId \? \{ clientMessageId \} : \{\}\)/);
+});
+
 test("待发送图片有缩略图、放大预览和取消入口", () => {
   assert.match(panel, /id="pending-image"/);
   assert.match(panel, /id="pending-image-view"/);
@@ -1411,7 +1495,7 @@ test("每位伙伴一间房：设置页挑图，聊天窗按浓度铺上去", ()
   assert.match(panel, /if \(syncSeq !== chatBackgroundSyncSeq \|\| chatBgFor !== agentId \|\| chatBgStamp !== stamp\) return/, "回来时已经换人换图，就别把上一张贴上去");
   assert.match(panel, /if \(syncSeq !== chatBackgroundSyncSeq \|\| chatBgFor !== agentId \|\| chatBgStamp !== stamp\) return;\s*el\.chat\.classList\.remove\("has-bg"\)/, "旧背景失败也不能清掉新房间");
   assert.match(panel, /let appearanceLoadSeq = 0;/, "背景面板读取也要有代次");
-  assert.match(panel, /let partnersLoadSeq = 0;[\s\S]*?const loadSeq = \+\+partnersLoadSeq;[\s\S]*?if \(loadSeq !== partnersLoadSeq\) return;/, "切换伙伴时旧的伙伴列表回包不能把新房间背景清掉");
+  assert.match(panel, /let partnersLoadSeq = 0;[\s\S]*?const loadSeq = \+\+partnersLoadSeq;[\s\S]*?if \(loadSeq !== partnersLoadSeq \|\| orderRevision !== partnerOrderRevision/, "切换伙伴时旧的伙伴列表回包不能把新房间背景清掉");
   assert.match(panel, /if \(loadSeq !== appearanceLoadSeq \|\| current !== agentId\) return;/, "旧伙伴的图库回包不能覆盖当前面板");
   assert.match(panel, /const currentPartner = partners\.find\(\(p\) => p\.id === current\);[\s\S]*?if \(currentPartner\?\.background\) void syncChatBackground\(current, currentPartner\.background\)/, "旧列表没有背景时不能把当前房间清成默认");
   assert.doesNotMatch(panel, /void syncChatBackground\(current, partners\.find\(\(p\) => p\.id === current\)\?\.background \?\? null\)/, "轮询不能用缺失背景的旧回包清房间");

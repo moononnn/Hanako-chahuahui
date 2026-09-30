@@ -164,10 +164,10 @@
       </article>
 
       <div class="section-head roomy">
-        <div><h2>模型</h2><p>决定聊天时用哪个模型。想单独给某位伙伴换，去 ta 的页面里挑。</p></div>
+        <div><h2>模型</h2><p>决定聊天时用哪个模型。给某位伙伴单独挑了就用挑的；没挑的，跟 ta 自己在 Hana 里配的模型。</p></div>
       </div>
       <article class="setting-card">
-        <div class="card-title"><div><h3>默认模型</h3><p>这里管所有伙伴；没单独设过的都听这一条。</p></div></div>
+        <div class="card-title"><div><h3>默认模型</h3><p>茶话会自己的兜底：某位伙伴没在这里单独设、也没读到 ta 在 Hana 里的模型时，才轮到这一条。</p></div></div>
         <div class="detail-field" id="global-model-host"></div>
         <small class="detail-field-note" id="global-model-note"></small>
       </article>
@@ -556,8 +556,9 @@
       paintGlobalVoiceModel();
     }
 
-    // ── 模型：全局一份默认，每位伙伴还能各自再压一个（2026-09-13）──
-    const FOLLOW_LABEL = "跟随主模型";
+    // ── 模型：全局一份兜底，每位伙伴还能各自再压一个（2026-09-13）；
+    //    什么都没指定的伙伴，跟的是 ta 在 Hana 里给自己配的那一个（2026-09-28）──
+    const FOLLOW_LABEL = "跟随 ta 在 Hana 里的模型";
 
     function modelKeyOf(ref, catalog = modelCatalog) {
       if (!ref?.provider || !ref?.model) return "follow";
@@ -813,7 +814,7 @@
       dressSelects(host);
       note.textContent = !modelCatalog.length
         ? "没读到 Hana 的模型列表，先跟着主模型走。"
-        : (globalSettings.model ? "" : "现在跟着 Hana 的主模型走；主模型换了，这里也跟着换。");
+        : (globalSettings.model ? "" : "没指定：各伙伴都跟自己在 Hana 里配的模型；读不到才落到 Hana 主模型。");
     }
 
     /** 认识伙伴用哪条模型。默认跟着上面那条；觉得候选写得不够好，可以单独指一个强一点的。 */
@@ -1412,6 +1413,21 @@
           if (currentId === agentId) openPartner(agentId, "contact");
         }
       })));
+      // 投喂：ta 也可以给你递个小东西。只在三个时刻发生（被冷处理、说中她的兴趣、你分享了什么），
+      // 一天最多两次，并且只挂在她真的读过的那条上。
+      const feedSw = document.createElement("button");
+      feedSw.type = "button";
+      feedSw.className = `switch${s.partnerFeedEnabled === false ? "" : " on"}`;
+      feedSw.setAttribute("role", "switch");
+      feedSw.setAttribute("aria-checked", String(s.partnerFeedEnabled !== false));
+      feedSw.innerHTML = `<span class="track"><span></span></span><span class="switch-label">${s.partnerFeedEnabled === false ? "不投喂" : "可以投喂"}</span>`;
+      feedSw.addEventListener("click", async () => {
+        const next = s.partnerFeedEnabled === false;
+        if (await savePartner(agentId, { partnerFeedEnabled: next }, next ? "ta 可以给你递小东西了" : "ta 不再递小东西了")) {
+          if (currentId === agentId) openPartner(agentId, "contact");
+        }
+      });
+      contactCard.appendChild(field("给你递小东西", feedSw));
 
       const voiceCard = detailCard("偶尔用声音说话", "这一位的语音只会在短回复、合适的情境里低频出现；长回复仍然发文字。");
       const voiceSwitch = document.createElement("button");
@@ -2332,8 +2348,8 @@
       }
       detailPanels.memory.appendChild(topicsCard);
 
-      // ── 模型：这位伙伴单独用哪个（不选就跟全局那条）──
-      const modelCard = detailCard("ta 说话用哪个模型", "不选就跟全局一致。这里只管 ta 在聊天窗里说的话；翻记忆、写性格那些后台活儿照旧走宿主的辅助模型。");
+      // ── 模型：这位伙伴单独用哪个（不选就跟 ta 在 Hana 里的模型）──
+      const modelCard = detailCard("ta 说话用哪个模型", "不选就跟 ta 在 Hana 里给自己配的模型；连那个也读不到，才落到上面那条默认。");
       const modelHost = document.createElement("div");
       modelHost.className = "detail-field";
       const partnerSel = buildModelSelect(modelKeyOf(s.model));
@@ -2343,12 +2359,30 @@
         const saved = await savePartner(
           agentId,
           { model: modelRefFromKey(key) },
-          key === "follow" ? "改回跟全局一致" : "这位伙伴的模型已保存",
+          key === "follow" ? "改回跟 ta 在 Hana 里的模型" : "这位伙伴的模型已保存",
         );
         if (!saved && currentId === agentId) await openPartner(agentId, "model");
       });
       modelHost.appendChild(partnerSel);
       modelCard.appendChild(modelHost);
+      // 没在这里单独指时，把「实际会跟着谁」写出来：设置页得能自己证明跟对了人。
+      // 以前这里是一片空白，看着像“跟主模型”，实际跟的是另一个东西（2026-09-28）。
+      const modelNote = document.createElement("small");
+      modelNote.className = "detail-field-note";
+      modelCard.appendChild(modelNote);
+      const MODEL_SOURCE_LABEL = {
+        partner: "这里单独指定",
+        global: "茶话会默认那条",
+        agent: "ta 在 Hana 里的默认模型",
+        current: "Hana 当前主模型",
+      };
+      if (s.model) modelNote.textContent = "";
+      else if (partner.effectiveModel) {
+        const eff = partner.effectiveModel;
+        modelNote.textContent = `现在实际用 ${eff.model}（${MODEL_SOURCE_LABEL[eff.source] || "兜底"}）。`;
+      } else {
+        modelNote.textContent = "还没读到可用的模型。";
+      }
       if (!modelCatalog.length) {
         const modelHint = document.createElement("small");
         modelHint.textContent = "没读到 Hana 的模型列表，先跟着主模型走。";

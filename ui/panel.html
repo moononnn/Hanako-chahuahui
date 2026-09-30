@@ -86,9 +86,6 @@
       <div class="stream" id="stream">
         <div class="empty" id="empty-tip">左边点一位伙伴，就能开始聊了<span class="empty-hint">还没有伙伴？点右上角齿轮，去『伙伴管理』建一个茶话会角色</span></div>
       </div>
-      <button class="jump-bottom" id="jump-bottom" type="button" title="回到底部" aria-label="回到底部" hidden>
-        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"/></svg>
-      </button>
       <div class="composer">
         <div class="emoji-drawer" id="emoji-drawer" hidden>
           <div class="emoji-tabs" id="emoji-tabs" role="tablist" aria-label="表情选择"></div>
@@ -161,6 +158,9 @@
           <button type="button" id="pending-quote-clear" aria-label="取消引用">×</button>
         </div>
         <div class="composer-row">
+          <button class="jump-bottom" id="jump-bottom" type="button" title="回到底部" aria-label="回到底部" hidden>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"/></svg>
+          </button>
           <button class="emoji-btn image-btn" id="btn-image" type="button" title="添加图片" aria-label="添加图片" disabled>
             <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.2" y="3.5" width="13.6" height="13" rx="2"></rect><circle cx="7.2" cy="7.5" r="1.2"></circle><path d="m4.8 14.2 3.4-3.4 2.4 2.2 1.8-1.7 2.8 2.9M14.8 3.2v4.2M12.7 5.3h4.2"></path></svg>
           </button>
@@ -309,7 +309,8 @@
     let draggedPartnerNode = null;
     let dragOriginIds = [];
     let dragCommitted = false;
-    let suppressPartnerClick = false;
+    let partnerOrderRevision = 0;
+    let orderSavePending = false;
     let busy = false;
     // 请求被后端拒绝或失败时先把原话寄存在对应伙伴名下，切回来还能接着发。
     const pendingDrafts = new Map();
@@ -1495,6 +1496,10 @@
     document.body.appendChild(messageFeedMenu);
     let feedRow = null;
     let feedMessage = null;
+    /** 已经画过的伙伴投喂挂件，按消息 id 记一份；轮询发现新投喂时只补那一处。 */
+    const partnerFeedNodes = new Map();
+    /** 每条用户消息的气泡列，不管有没有挂件都记：ta 后来递的东西得找得到地方挂。 */
+    const userCols = new Map();
 
     function closeMessageFeed() {
       messageFeedMenu.hidden = true;
@@ -1541,6 +1546,72 @@
       }
       col.appendChild(feed);
     }
+    /** 只保留伙伴回复之前递出的投喂；兼容旧账里已挂到回复之后的那份。 */
+    function visiblePartnerFeedItems(message) {
+      const items = messageFeedItems(message?.partnerFeed);
+      const replyTimes = currentMessages
+        .filter((row) => row?.role === "assistant" && row.repliedTo === message?.id)
+        .map((row) => Date.parse(row.at ?? ""))
+        .filter(Number.isFinite);
+      if (!replyTimes.length) return items;
+      return items.filter((item) => {
+        const fedAt = Date.parse(item?.at ?? "");
+        return !Number.isFinite(fedAt) || !replyTimes.some((replyAt) => replyAt <= fedAt);
+      });
+    }
+
+    /**
+     * ta 递过来的东西。只读展示，没有右键菜单——这是她的动作，不是用户的。
+     * 未读的一律不画：挂上去就等于替她说了一句她还没说的话，穿帮比不递严重。
+     */
+    function renderPartnerFeed(col, message) {
+      if (!col || message?.role !== "user") return;
+      col.querySelector(".message-feed.from-partner")?.remove();
+      // 已读 + 没撤回 + 递出前伙伴还没回复，才保留这份投喂
+      const items = message.readAt && !message.recalled ? visiblePartnerFeedItems(message) : [];
+      if (!items.length) {
+        partnerFeedNodes.delete(message.id);
+        return;
+      }
+      const text = formatMessageFeed({ items });
+      const feed = document.createElement("div");
+      feed.className = "message-feed from-partner";
+      feed.setAttribute("aria-label", `ta 投喂了${text}，意思是她看到了`);
+      feed.title = "她看到了，没有要接话的意思";
+      for (const item of items) {
+        const unit = document.createElement("span");
+        unit.className = "message-feed-item";
+        const emoji = document.createElement("span");
+        emoji.className = "message-feed-emoji";
+        emoji.textContent = item.emoji;
+        unit.appendChild(emoji);
+        if (item.count > 1) {
+          const count = document.createElement("span");
+          count.className = "message-feed-count";
+          count.textContent = String(item.count);
+          unit.appendChild(count);
+        }
+        feed.appendChild(unit);
+      }
+      col.appendChild(feed);
+      partnerFeedNodes.set(message.id, { col, text });
+    }
+
+    /** 轮询回来发现 ta 递了新东西，只补那一处，不重画整段。 */
+    function syncPartnerFeed(message) {
+      if (!message || message.role !== "user") return;
+      const record = partnerFeedNodes.get(message.id);
+      const text = message.readAt && !message.recalled ? formatMessageFeed({ items: visiblePartnerFeedItems(message) }) : "";
+      // 没挂件、也没东西可挂：什么都不用动
+      if (!text && !record) return;
+      if (record && record.text === text) return;
+      // record 缺失也要画：ta 是在这条已经显示出来之后才递的，
+      // 早先只认 record，于是实时递到的东西永远出不来，除非重开窗口。
+      const col = record?.col || userCols.get(message.id);
+      if (!col) return;
+      renderPartnerFeed(col, message);
+    }
+
     async function feedMessageOn(agentId, messageId, emoji, viewSeq = threadViewSeq) {
       const row = feedRow;
       const selectedMessage = feedMessage;
@@ -2068,6 +2139,10 @@
         // 只把真正需要注意的未读摆出来；已读不占聊天流的位置。
         const read = Boolean(opts.read);
         if (!read) tickNodes.set(m.id, tick(col));
+        if (col) {
+          userCols.set(m.id, col);
+          renderPartnerFeed(col, m);
+        }
         if (isLatestUserMessage(m)) bindMessageActions(row, m);
       } else {
         if (m.voice && !Array.isArray(opts.assistantPieces)) {
@@ -2113,6 +2188,8 @@
         el.stream.innerHTML = "";
         seenIds = new Set();
         voiceStates.clear();
+        partnerFeedNodes.clear();
+        userCols.clear();
         lastRenderedConversationAt = null;
         tickNodes.clear();
         if (!list.length) {
@@ -2159,6 +2236,7 @@
       const data = await api("GET", `thread/${agentId}`);
       if (current !== agentId || viewSeq !== threadViewSeq || generation !== renderGeneration) return restoreScroll(0);
       currentMessages = data.messages || [];
+      reconcilePendingImage(currentMessages);
       autoScrollAllowed = stickToBottom;
       const voiceChanged = currentMessages.some((message) => {
         if (!message?.id || !message.voice) return false;
@@ -2196,6 +2274,8 @@
       }
       // 已经挂在屏幕上的未读小字也要跟着新状态走
       for (const m of currentMessages) paintTick(tickNodes.get(m.id), read.has(m.id));
+      // ta 递给这条的东西可能这轮才出现：只补挂件，不动气泡
+      for (const m of currentMessages) syncPartnerFeed(m);
       return restoreScroll(added);
     }
     function appendNew(agentId) {
@@ -2313,8 +2393,11 @@
         setStatus("伙伴顺序已保存");
       } catch (error) {
         setStatus(`顺序没保存：${error.message}`);
+        orderSavePending = false;
         await loadPartners();
+        return;
       }
+      orderSavePending = false;
     }
 
     function renderFriends() {
@@ -2349,10 +2432,7 @@
         li.setAttribute("role", "button");
         li.tabIndex = 0;
         li.setAttribute("aria-label", `${p.name}${badge.hidden ? "" : `，${badge.textContent} 条没看`}`);
-        const openThis = () => {
-          if (suppressPartnerClick) { suppressPartnerClick = false; return; }
-          openPartner(p.id);
-        };
+        const openThis = () => openPartner(p.id);
         li.addEventListener("dragstart", (event) => {
           draggedPartnerId = p.id;
           draggedPartnerNode = li;
@@ -2392,7 +2472,8 @@
         li.addEventListener("drop", async (event) => {
           event.preventDefault();
           dragCommitted = true;
-          suppressPartnerClick = true;
+          partnerOrderRevision += 1;
+          orderSavePending = true;
           document.querySelectorAll(".friend.drag-over").forEach((node) => node.classList.remove("drag-over"));
           renderFriends();
           await savePartnerOrder();
@@ -2446,8 +2527,9 @@
 
     async function loadPartners() {
       const loadSeq = ++partnersLoadSeq;
+      const orderRevision = partnerOrderRevision;
       const data = await api("GET", "partners");
-      if (loadSeq !== partnersLoadSeq) return;
+      if (loadSeq !== partnersLoadSeq || orderRevision !== partnerOrderRevision || draggedPartnerId || orderSavePending) return;
       partners = data.partners || [];
       lastPartnerId = data.lastPartnerId || null;
       if (current) {
@@ -3051,6 +3133,7 @@
         const data = await api("GET", `thread/${agentId}`);
         if (openSeq !== openPartnerSeq) return;
         currentMessages = data.messages || [];
+        reconcilePendingImage(currentMessages);
         renderAll(currentMessages);
         const draft = pendingDrafts.get(agentId);
         if (draft && inputOwner === agentId) {
@@ -3076,6 +3159,14 @@
         reader.onerror = () => reject(new Error("图片没读出来"));
         reader.readAsDataURL(file);
       });
+    }
+
+    function reconcilePendingImage(messages) {
+      const requestId = pendingImage?.clientMessageId;
+      if (!requestId || !Array.isArray(messages)) return;
+      if (messages.some((message) => message?.role === "user" && message.clientMessageId === requestId)) {
+        clearPendingImage();
+      }
     }
 
     function renderPendingImage() {
@@ -3243,7 +3334,10 @@
         const started = await api("POST", "turns", {
           agentId,
           text,
-          ...(image ? { image: { name: image.name, mimeType: image.mimeType, data: image.data } } : {}),
+          ...(image ? {
+            image: { name: image.name, mimeType: image.mimeType, data: image.data },
+            clientMessageId: image.clientMessageId,
+          } : {}),
           ...(sticker ? { stickerId: sticker.id } : {}),
           ...(quote ? { quote } : {}),
           // 她在不在看只是告诉后端「要不要演实时那套」；对方手机在不在手里跟这个无关
@@ -3254,6 +3348,10 @@
         // 成功回包只清理本次仍挂在待发送区的那张图；若期间换过图，保留新图。
         if (pendingImage === image) clearPendingImage();
         if (pendingSticker === sticker) clearPendingSticker();
+        if (started.duplicate) {
+          for (const optimisticRow of optimisticRows) optimisticRow.remove();
+          await appendNew(agentId);
+        }
         const draft = pendingDrafts.get(agentId);
         if (!draft || draft.revision <= inputVersion) pendingDrafts.delete(agentId);
         // 消息一旦被后端接收，发送门立刻打开；伙伴的回复由轮询慢慢补进来。
@@ -3339,7 +3437,12 @@
       try {
         const data = await readImageFile(file);
         if (current !== owner || choice !== imageChoiceSeq) return;
-        pendingImage = { name: file.name || "剪贴板图片.png", mimeType: file.type, data };
+        pendingImage = {
+          name: file.name || "剪贴板图片.png",
+          mimeType: file.type,
+          data,
+          clientMessageId: `img_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+        };
         renderPendingImage();
         clearImagePickFeedback();
         setStatus("图片已放好，按发送交给 ta");

@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { splitReply } from "./lib/split.js";
 import { planTurn, DEFAULT_RHYTHM } from "./lib/rhythm.js";
-import { analyzeUserRhythm, lateStartCue, userRhythmText } from "./lib/user-rhythm.js";
+import { analyzeUserRhythm, userRhythmText } from "./lib/user-rhythm.js";
 import { loadPersona, renderPersona } from "./lib/persona.js";
 import { resolveUserDisplayName } from "./lib/host-user.js";
 import { isValidPartnerId } from "./lib/partner-id.js";
@@ -28,9 +28,10 @@ import {
   summarizeRun,
 } from "./lib/analyze.js";
 import { hasPalette, isPaletteDone, normalizePalette, paletteToText } from "./lib/palette.js";
-import { createAvatarReader, toBytes } from "./lib/avatar.js";
+import { createAvatarReader, looksLikeImage, toBytes } from "./lib/avatar.js";
+import { registerTavernImportService, renderImportedPersona } from "./lib/character-import.js";
 import { buildSystemPrompt, identityBlock, replyChoiceBlock, shouldQuietClose, threadToMessages } from "./lib/prompt.js";
-import { buildAmbientContextText, buildDaybookText, daybookHash, readDaybook, shouldRevealDaybook } from "./lib/daybook.js";
+import { buildAmbientContextText, buildDaybookText, daybookHash, daybookQueryTopics, previousAssistantBeforeUser, readDaybook, shouldUseDaybook } from "./lib/daybook.js";
 import { spokenClock, timeBlock } from "./lib/clock.js";
 import { askUtility, generateReply, normalizeModelRef, chatModelOptions, visionModelOptions, resolveModelChoice } from "./lib/model.js";
 import { createStore, createDiagnostics } from "./lib/store.js";
@@ -50,6 +51,16 @@ import {
 import { dailySpec, isProfileIdentitySafe, profileSpec, runSummary, segmentSpec } from "./lib/summarize.js";
 import { buildWorkfeedText, normalizeWorkEvent } from "./lib/workfeed.js";
 import { addFeed } from "./lib/feed.js";
+import {
+  addPartnerFeed,
+  detectFeedSignal,
+  feedAssetText,
+  FEED_SCAN_LIMIT,
+  gateFeed,
+  isFeedableTarget,
+  noteFeed,
+  pickFeedAsset,
+} from "./lib/partner-feed.js";
 import { buildFactSpec, parseFactsResult } from "./lib/facts.js";
 import { migrateLegacyFacts } from "./lib/fact-migration.js";
 import { applyAdaptationCorrection, buildAdaptationCorrectionSpec, listAdaptationForUser, parseAdaptationCorrection, revokeAdaptationGuide } from "./lib/adaptation-correction.js";
@@ -93,7 +104,24 @@ import {
   validateNativeHobbies,
 } from "./lib/growth.js";
 import { cleanVoice, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNoReply, isUsableVoice, nightSpec, proactiveSpec } from "./lib/compose.js";
-import { searchTimelyTopic } from "./lib/topic-search.js";
+import { formatSearchContext, searchTimelyTopic } from "./lib/topic-search.js";
+import { findPreviousSearchContext, isChatSearchCandidate, searchForChat } from "./lib/chat-search.js";
+import {
+  addDiscovery,
+  explorationDue,
+  explorationSpec,
+  heldDiscoveryText,
+  markDiscoveryOffered,
+  markDiscoveryShared,
+  mentionsDiscovery,
+  nextDiscovery,
+  offerableDiscovery,
+  discoveryForProactiveMessage,
+  parseExplorationPlan,
+  pickInterestForExploration,
+  readInterestLearning,
+  scheduleExploration,
+} from "./lib/interest-exploration.js";
 import {
   buildCatalog,
   buildStickerHint,
@@ -192,7 +220,6 @@ import {
   quietNow,
   resolveProactivePolicy,
   scheduleNext,
-  stageIntent,
   takeIntent,
   windowStartDate,
 } from "./lib/proactive.js";
@@ -211,6 +238,7 @@ import {
   activeVoiceProfileId,
   voiceChoicesForModel,
   cleanVoiceText,
+  isExplicitVoiceRequest,
   nextTextRuntime,
   nextVoiceRuntime,
   resolveVoicePolicy,
@@ -223,6 +251,7 @@ import {
 import {
   MAX_NUDGE_BUBBLES,
   nudgeDelay,
+  nudgeHistoryContext,
   nudgeSpec,
   parseNudgeChoice,
   planNudge,
@@ -237,7 +266,6 @@ import {
   markTopicUsed,
   mergeTopics,
   parseTopics,
-  pickTopic,
   pruneTopics,
   refreshUsedTopics,
   topicSpec,
@@ -292,6 +320,12 @@ const DEV_TOOLS = false;
 export function apply(ctx) {
   const diagnostics = createDiagnostics(ctx.dataDir);
   const store = createStore(ctx.dataDir);
+  // App service 注册是入口登记，不在装载期请求宿主数据或调用模型；能力未授权时茶话会本体仍照常加载。
+  try {
+    registerTavernImportService(ctx, store, diagnostics);
+  } catch (error) {
+    diagnostics({ event: "tavern-import.registration.failed", error: describeError(error) });
+  }
 
   function recordPartnerStickerUsage(agentId, bubbles, sentAt = new Date().toISOString()) {
     const list = Array.isArray(bubbles) ? bubbles : [];
@@ -360,7 +394,7 @@ export function apply(ctx) {
     "globalGate", "quiet", "actionStyle", "messageAvatars", "messageRefine", "myActionTail",
     "rhythmEnabled", "rhythmStyleEnabled", "rhythmProactiveEnabled", "rhythmResetAt", "voiceEnabled", "voiceProfiles", "voiceProfile",
   ]);
-  const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "vision", "voice"]);
+  const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "vision", "voice", "partnerFeedEnabled"]);
 
   function pickSettingsPatch(input, allowed, label) {
     const body = input && typeof input === "object" && !Array.isArray(input) ? input : {};
@@ -473,12 +507,17 @@ export function apply(ctx) {
       context: voiceContext,
       runtime: { ...runtime, ...adaptationFeedbackRuntime(agentId) },
     });
+    const triggerMessage = triggerMessageId
+      ? store.getThread(agentId).messages.find((row) => row.id === triggerMessageId)
+      : null;
+    const requested = kind === "reply" && isExplicitVoiceRequest(triggerMessage?.text);
     const decision = shouldGenerateVoice({
       globalSettings,
       partnerSettings: partnerSettings.voice,
       runtime,
       text,
       voicePolicy,
+      requested,
     });
     if (!decision.ok) {
       store.setProactiveState(agentId, nextTextRuntime(runtime));
@@ -919,6 +958,33 @@ export function apply(ctx) {
   }
 
   /**
+   * 这位伙伴在 Hana 里给自己配的默认模型（agents/<id>/config.yaml 的 models.chat）。
+   *
+   * 为什么走宿主正门：茶话会在沙箱里跑，fs 只放行了它自己的 dataDir，
+   * 直接去读别人的 config.yaml 会被拒；而且那是用户资源，走正门才是规矩。
+   * 读不到就返回 null，选型链自然往下退，不硬编一个。
+   *
+   * 2026-09-28 加：以前没这一档，没单独指定时直接退到宿主的“当前焦点模型”，
+   * 那是模型选择器里选中的那个，跟“这位伙伴平时用什么”根本对不上。
+   */
+  const agentModelCache = new Map();
+  const AGENT_MODEL_TTL_MS = 10 * 60 * 1000;
+  async function agentDefaultModel(agentId) {
+    const hit = agentModelCache.get(agentId);
+    if (hit && Date.now() - hit.at < AGENT_MODEL_TTL_MS) return hit.ref;
+    let ref = null;
+    try {
+      const result = await ctx.bus.request("agent:profile", { agentId, scope: "all" });
+      const models = result?.profile?.models ?? result?.models ?? {};
+      ref = normalizeModelRef(models.chat ?? models.chatModel ?? null);
+    } catch (error) {
+      diagnostics({ event: "agent.model.failed", agentId, error: describeError(error) });
+    }
+    agentModelCache.set(agentId, { at: Date.now(), ref });
+    return ref;
+  }
+
+  /**
    * 这位伙伴算不算已经住进茶话会了。
    *
    * 判定跟界面那道门禁用同一把尺（见 /onboarding）：捏过性格盘，或者走完过一遍认识流程。
@@ -940,10 +1006,14 @@ export function apply(ctx) {
   async function getPersona(agentId, { force = false } = {}) {
     const local = store.localPartner(agentId);
     if (local) {
+      const localDescription = local.tavernCard
+        ? renderImportedPersona(local.tavernCard)
+        : local.description || null;
       return {
         agentId,
-        readAt: local.createdAt,
-        files: { identity: null, description: local.description || null, public: null, pinned: null, facts: null, experience: null, dialect: null },
+        readAt: local.updatedAt ?? local.createdAt,
+        files: { identity: null, description: localDescription, public: null, pinned: null, facts: null, experience: null, dialect: null },
+        rawKeys: local.tavernCard ? ["description"] : [],
         extras: {},
         errors: {},
       };
@@ -1176,7 +1246,7 @@ export function apply(ctx) {
     const partnerBook = store.getPartnerAdaptation(agentId);
     const userBook = store.getUserAdaptation();
     const observed = inferObservedGuide({
-      messages: store.getThread(agentId).messages,
+      messages: conversationMessages(store.getThread(agentId).messages),
       guides: [...userBook.guides, ...partnerBook.guides],
       locks: [...userBook.observationLocks, ...partnerBook.observationLocks],
       now: new Date(),
@@ -1235,7 +1305,7 @@ export function apply(ctx) {
         const userBook = store.getUserAdaptation();
         const migrated = migrateLegacyFacts({
           facts: store.readMemory(agentId).facts,
-          messages: store.getThread(agentId).messages,
+          messages: conversationMessages(store.getThread(agentId).messages),
           book,
           existingGuides: [...userBook.guides, ...book.guides],
           now: new Date(),
@@ -1497,23 +1567,18 @@ export function apply(ctx) {
   }
 
   /** 把一条主动消息送进她那个窗（她不在也照发，显示未读）。 */
-  async function deliverProactive(agentId, { partnerName, topic, hobby, exception, followup, wakeEcho, sceneEcho }) {
+  async function deliverProactive(agentId, { partnerName, topic, hobby, discovery, exception, followup, wakeEcho, sceneEcho }) {
     await loadUserName();
     const memoryText = buildMemoryBlock(store.readMemory(agentId));
-    let searchContext = "";
-    if (!exception && topic?.freshness === "timely") {
-      const fetcher = typeof ctx.network?.fetch === "function" ? ctx.network.fetch.bind(ctx.network) : null;
-      const searched = await searchTimelyTopic(fetcher, topic);
-      searchContext = searched.context ?? "";
-      diagnostics({
-        event: "proactive.topic-search",
-        agentId,
-        topic: topic.title,
-        ok: searched.ok,
-        reason: searched.reason ?? null,
-        results: searched.results?.length ?? 0,
-      });
-    }
+    // 主动开口也得是「ta 本人」在说话：跟面对面回复用同一份人格来源。
+    // 以前这条路只有名字加通用口语规矩，谁开口都是同一个路人腔（实机：不同人设的
+    // 伙伴发出同一句「你人嘞，溜哪儿去了嘛」）。nameFallback 与聊天那头一致：
+    // 分享版里没写过人设的伙伴，至少把名字锚死。
+    const persona = await getPersona(agentId);
+    const personaText = renderPersona(persona, { partnerName, userName: USER_NAME, nameFallback: true });
+    const shareableDiscovery = discoveryForProactiveMessage(discovery, { exception });
+    const shareableHobby = shareableDiscovery ? hobby : null;
+    const searchContext = shareableDiscovery ? formatSearchContext(shareableDiscovery.results) : "";
     const now = new Date();
     const currentTimeText = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日，${spokenClock(now)}`;
     const rhythmSettings = store.getGlobalSettings();
@@ -1550,6 +1615,7 @@ export function apply(ctx) {
       ? nightSpec({
           partnerName,
           userName: USER_NAME,
+          personaText,
           memoryText,
           relationNote,
           adaptationText,
@@ -1557,7 +1623,7 @@ export function apply(ctx) {
           correction: topic?.correction ?? "",
           currentTimeText,
         })
-      : proactiveSpec({ partnerName, userName: USER_NAME, topic, hobby, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, stickerText, userRhythmText: userRhythm });
+      : proactiveSpec({ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, stickerText, userRhythmText: userRhythm });
 
     let raw = "";
     try {
@@ -1597,7 +1663,7 @@ export function apply(ctx) {
       return { ok: false, reason: "abstract-only" };
     }
     // 出口兜底：同一句话别换个说法再发一遍。
-    // 计划那一侧靠话题本的角度账本（下面 markTopicUsed 记的那笔），这侧防模型没照做。
+    // 探索角度另由短期发现索引避重；这里仅挡最近几条成品消息的近似复述。
     const saidRecently = store.getThread(agentId).messages
       .filter((row) => row.proactive && row.text)
       .slice(-6);
@@ -1636,18 +1702,25 @@ export function apply(ctx) {
       form: "word",
       exception: Boolean(exception),
       topicId: topic?.id ?? null,
-      interestId: hobby?.id ?? null,
-      interestName: hobby?.name ?? null,
-      interestObject: hobby?.object ?? null,
+      discoveryId: shareableDiscovery?.id ?? null,
+      interestId: shareableHobby?.id ?? shareableDiscovery?.interestId ?? null,
+      interestName: shareableHobby?.name ?? shareableDiscovery?.interestName ?? null,
+      interestObject: shareableHobby?.object ?? null,
     }, preparedVoice);
     if (!stored) return { ok: false, reason: "message-missing" };
     recordPartnerStickerUsage(agentId, bubbles, stored.at);
     if (topic) {
-      // 记下这次聊的是哪一面：下次回来时拿它提醒模型换个延伸，而不是把话题封掉
+      // 旧共同话题仍留在本子里供兼容，不再作为常规主动话题来源。
       store.saveTopicBook(
         agentId,
         markTopicUsed(store.getTopicBook(agentId), topic.id, new Date(), { angle: text }),
       );
+    }
+    if (shareableDiscovery) {
+      const current = store.getProactiveState(agentId);
+      store.setProactiveState(agentId, {
+        interestLearning: markDiscoveryShared(current.interestLearning, shareableDiscovery.id, text, new Date()),
+      });
     }
     diagnostics({
       event: exception ? "proactive.night.ok" : "proactive.ok",
@@ -1661,7 +1734,7 @@ export function apply(ctx) {
       ok: true,
       bubbles,
       messageId: stored.id,
-      interest: hobby ? { id: hobby.id ?? null, name: hobby.name ?? null, object: hobby.object ?? null } : null,
+      interest: shareableHobby ? { id: shareableHobby.id ?? null, name: shareableHobby.name ?? null, object: shareableHobby.object ?? null } : null,
     };
   }
 
@@ -1748,23 +1821,145 @@ export function apply(ctx) {
   }
 
   /**
+   * 伙伴投喂：ta 也可以给你递个小东西。
+   *
+   * 独立于主动联系那一层，因为性质不同：说话要等回音，投喂不用。
+   * 所以它不吃主动档位、不占主动配额，只吃自己的三道门：
+   *   ① 信号（见 detectFeedSignal）——只有那三种时刻算数，不定时投递
+   *   ② 门禁（gateFeed）——一天最多两次、两次隔九十分钟
+   *   ③ 已读（isFeedableTarget）——只挂 ta 真的读过的那条，否则穿帮
+   */
+  let feedTickPromise = null;
+  /**
+   * 「这轮为什么没递」是最该有的日志，之前完全没有，只能扒线程 JSON 反推。
+   * 但巡检五分钟一轮、每个伙伴每轮都可能空，限流到半小时一条，别把日志写爆。
+   */
+  const FEED_IDLE_LOG_MS = 30 * 60 * 1000;
+  const feedIdleLogAt = new Map();
+  function noteFeedIdle(agentId, detail) {
+    const now = Date.now();
+    if (now - Number(feedIdleLogAt.get(agentId) ?? 0) < FEED_IDLE_LOG_MS) return;
+    feedIdleLogAt.set(agentId, now);
+    diagnostics({ event: "feed.idle", agentId, ...detail });
+  }
+  async function runFeedTick() {
+    await ensureLegacyFactsMigration();
+    if (feedTickPromise) return feedTickPromise;
+    feedTickPromise = runFeedTickInternal();
+    try {
+      return await feedTickPromise;
+    } finally {
+      feedTickPromise = null;
+    }
+  }
+
+  async function runFeedTickInternal() {
+    let partners;
+    try {
+      partners = await listPartners();
+    } catch (error) {
+      diagnostics({ event: "feed.tick.no-partners", error: describeError(error) });
+      return { ok: false, reason: "no-partners" };
+    }
+    const now = new Date();
+    const report = [];
+
+    for (const partner of partners) {
+      const agentId = partner.id;
+      if (!isSettled(agentId)) continue;
+      const settings = store.getPartnerSettings(agentId);
+      if (settings.partnerFeedEnabled === false) continue;
+
+      const thread = store.getThread(agentId);
+      const knowing = store.getKnowing(agentId);
+      // 「她手边有什么」只算一次：兴趣、爱好、调过的盘、话题本合起来当她的资产
+      const assets = feedAssetText({
+        hobbies: knowing.hobbies,
+        palette: knowing.palette,
+        topics: store.getTopicBook(agentId)?.topics ?? [],
+      });
+      const signal = detectFeedSignal({
+        messages: thread.messages,
+        readThroughId: thread.readThroughId,
+        readThroughAt: thread.readThroughAt,
+        interestText: assets,
+        now,
+      });
+      if (!signal) {
+        const window = thread.messages.slice(-FEED_SCAN_LIMIT);
+        noteFeedIdle(agentId, {
+          reason: "no-signal",
+          lastRole: thread.messages[thread.messages.length - 1]?.role ?? null,
+          lastReadAt: thread.readThroughAt ?? null,
+          // 窗口里还挂着多少条「她读过、还没被递过」的话：有的话说明卡在内容不匹配，
+          // 没有的话说明她那边根本没在往下走。
+          pending: window.filter((row) => row?.role === "user" && isFeedableTarget(row) && !row.partnerFeed?.items?.length).length,
+        });
+        continue;
+      }
+
+      const at = new Date();
+      // 落盘前再核一遍：这条消息是不是真的被读过。中途可能被撤回、清聊天，
+      // 也可能同一轮里别的通道刚发过话——那就重新判，不硬递。
+      const fresh = store.getThread(agentId);
+      const target = fresh.messages.find((row) => row.id === signal.messageId);
+      if (!target || !isFeedableTarget(target) || target.partnerFeed?.items?.length) {
+        diagnostics({ event: "feed.skip", agentId, reason: "stale-target", kind: signal.kind, messageId: signal.messageId });
+        continue;
+      }
+
+      const feedState = store.getProactiveState(agentId).partnerFeed ?? null;
+      // 睡着的时候不递东西：半夜给一句投喂，比不回更奇怪。
+      const dozing = dozingNow(now, settings.sleep);
+      const gate = gateFeed({
+        state: feedState,
+        now,
+        busy: hasReplyInFlight(agentId) || autonomousLanes.has(agentId) || dozing.dozing,
+      });
+      if (!gate.ok) {
+        diagnostics({ event: "feed.skip", agentId, reason: gate.reason, kind: signal.kind, messageId: signal.messageId });
+        continue;
+      }
+
+      const emoji = pickFeedAsset({
+        assetText: assets,
+        agentId,
+        recent: feedState?.recent ?? [],
+      });
+      if (!emoji) continue;
+
+      const fedAt = new Date();
+      const nextFeed = addPartnerFeed(target.partnerFeed, emoji, { at: fedAt.toISOString(), kind: signal.kind, reason: signal.reason });
+      const updated = store.patchMessage(agentId, signal.messageId, { partnerFeed: nextFeed });
+      if (!updated) continue;
+      store.setProactiveState(agentId, {
+        partnerFeed: noteFeed({ ...(feedState ?? {}), lastEmoji: emoji }, fedAt),
+      });
+      diagnostics({ event: "feed.sent", agentId, emoji, kind: signal.kind, messageId: signal.messageId });
+      report.push({ agentId, action: "fed", emoji, kind: signal.kind, messageId: signal.messageId });
+    }
+    return { ok: true, report };
+  }
+
+  /**
    * 催这一下：说什么、要不要说，全看ta自己。
    * 代码只管把处境摆给ta、把「催了几次」记住。
    */
   async function deliverNudge(agentId, { partner, plan, settings, ratio, knowing, contactPolicy }) {
     await loadUserName();
-    const recent = store.getThread(agentId).messages.slice(-10);
-    const conversational = (row) => row && row.kind !== "action" && row.kind !== "poke";
-    const lastAssistant = [...recent].reverse().find((row) => conversational(row) && row.role === "assistant" && !row.proactive)?.text ?? "";
-    const lastUser = [...recent].reverse().find((row) => conversational(row) && row.role === "user")?.text ?? "";
+    // 等回音这一条也是 ta 在说话：不能只给处境，还得让人格在场。
+    const persona = await getPersona(agentId);
+    const personaText = renderPersona(persona, { partnerName: partner.name, userName: USER_NAME, nameFallback: true });
+    const { lastAssistantText, lastUserText } = nudgeHistoryContext(store.getThread(agentId).messages);
     const spec = nudgeSpec({
       partnerName: partner.name,
       userName: USER_NAME,
+      personaText,
       stage: plan.stage,
       temperament: plan.temperament,
       waitedMinutes: Math.max(1, Math.round((plan.waitedMs ?? 0) / 60000)),
-      lastUserText: lastUser,
-      lastAssistantText: lastAssistant,
+      lastUserText,
+      lastAssistantText,
       knowingText: buildKnowingText({
         disclosure: ratio,
         personality: knowing.personality,
@@ -1973,11 +2168,11 @@ export function apply(ctx) {
       return { ok: false, reason: "no-partners" };
     }
     const globalSettings = store.getGlobalSettings();
-    const rhythmSettings = globalSettings;
     const now = new Date();
     const report = [];
     /** 一轮 tick 最多自省一位，别一次叫一群模型 */
     let reviewedThisTick = false;
+    let exploredThisTick = false;
 
     for (const partner of partners) {
       const agentId = partner.id;
@@ -1999,11 +2194,23 @@ export function apply(ctx) {
       let state = store.getProactiveState(agentId);
       // 头一回：先排个点，不立刻发（避免刚重载就一群人扑上来）
       if (!state.nextDueAt) {
-        store.setProactiveState(agentId, { nextDueAt: nextDueFor(agentId, settings, now, globalSettings) });
+        const learning = readInterestLearning(state.interestLearning, now);
+        store.setProactiveState(agentId, {
+          nextDueAt: nextDueFor(agentId, settings, now, globalSettings),
+          interestLearning: learning.curiosity.startedAt ? learning : scheduleExploration(learning, now),
+        });
         report.push({ agentId, action: "scheduled" });
         continue;
       }
 
+      const learning = readInterestLearning(state.interestLearning, now);
+      if (!learning.curiosity.startedAt || (!exploredThisTick && explorationDue(learning, now))) {
+        if (learning.curiosity.startedAt) exploredThisTick = true;
+        await maybeExploreInterest(agentId, partner.name, now).catch((error) => {
+          diagnostics({ event: "interest.exploration.failed", agentId, error: describeError(error) });
+        });
+      }
+      state = store.getProactiveState(agentId);
       const pending = takeIntent(state, now);
       if (!force && !dueNow(state, now) && !pending.intent) continue;
 
@@ -2019,10 +2226,10 @@ export function apply(ctx) {
         ? book.topics.find((row) => row.id === followup.previousTopicId) ?? null
         : null;
       if (followup) followup.previousTopic = previousTopic;
-      // 已读未回先处理关系反应，不继续端新的兴趣话题。
-      const readyTopic = followup?.read
-        ? null
-        : pickTopic(book, now, { excludeId: followup?.previousTopicId ?? null });
+      // 带内容的主动话题只从兴趣探索的新发现里来；已读未回先处理关系反应。
+      const candidateDiscovery = followup?.read ? null : nextDiscovery(state.interestLearning, now);
+      const knowing = store.getKnowing(agentId);
+      const topic = null;
       const contactPolicy = contactPolicyFor(agentId, now, "proactive");
       const gate = gateCheck({
         now,
@@ -2033,6 +2240,11 @@ export function apply(ctx) {
         globalState: store.getGlobalRuntime(),
         relationalPolicy: contactPolicy,
       });
+      // 夜间例外走独立留言提示词，不带兴趣发现，也不能把发现误记为已分享。
+      const discovery = discoveryForProactiveMessage(candidateDiscovery, { exception: gate.exception });
+      const hobby = discovery
+        ? knowing.hobbies.find((row) => row.id === discovery.interestId) ?? { id: discovery.interestId, name: discovery.interestName }
+        : null;
 
       const wakeEcho = gate.ok && !gate.exception && !followup?.read
         ? wakeEchoFor(thread.messages, { now: now.getTime(), consumedId: settings.wakeEcho?.sourceId ?? null })
@@ -2042,59 +2254,24 @@ export function apply(ctx) {
         : null;
 
       if (!gate.ok) {
-        recordWatch(agentId, { action: "blocked", reason: gate.reason, topic: readyTopic?.title ?? null });
-        // 时机不合适：只记下“想找你”，不硬发。takeIntent 是纯读取；这里仍显式写回，保证契约一眼可见。
+        recordWatch(agentId, { action: "blocked", reason: gate.reason, topic: discovery?.focus ?? null });
+        // 时机不合适时保留原暂存意图；探索发现本身仍留在短期账本里。
         if (pending.intent) {
           store.setProactiveState(agentId, {
             staged: [pending.intent, ...pending.rest],
             lastSkippedAt: now.toISOString(),
           });
-        } else if (readyTopic) {
-          store.setProactiveState(agentId, {
-            staged: stageIntent(state, { topicId: readyTopic.id, at: now.toISOString() }, now),
-            lastSkippedAt: now.toISOString(),
-          });
-          diagnostics({ event: "proactive.staged", agentId, topic: readyTopic.title, reason: gate.reason });
         }
         report.push({ agentId, action: "blocked", reason: gate.reason });
         continue;
       }
 
-      const pendingTopic = pending.intent
-        ? (book.topics.find((row) => row.id === pending.intent.topicId) ?? null)
-        : null;
-      // 暂存意图也要遵守同题排除，不能从旁路把上一轮沉默的话题捞回来。
-      // 暂存意图可能早于用户的手动操作，已放下的话题不能从这条旁路复活。
-      const livePendingTopic = pendingTopic?.state === "dropped" ? null : pendingTopic;
-      const globalRuntime = store.getGlobalRuntime();
-      const rhythmCue = rhythmSettings.rhythmEnabled && rhythmSettings.rhythmProactiveEnabled
-        && !wakeEcho && !followup && !livePendingTopic && globalRuntime.rhythmCueDay !== dailyKey(now)
-        ? lateStartCue(thread.messages, { now, since: rhythmSettings.rhythmResetAt })
-        : null;
-      const topic = wakeEcho || followup?.read
-        ? null
-        : rhythmCue
-          ? { id: "user-rhythm:late-start", title: "她今天还没有像平时那样出现", note: `她通常在 ${rhythmCue.expectedAt} 左右来找伙伴，今天已经晚了约 ${rhythmCue.lateMinutes} 分钟。`, source: "user-rhythm" }
-          : livePendingTopic?.id === followup?.previousTopicId ? readyTopic : (livePendingTopic ?? readyTopic);
-      const memoryText = buildMemoryBlock(store.readMemory(agentId));
-      const knowing = store.getKnowing(agentId);
-      // 有共同话题优先；没有时，伙伴自己的兴趣就是正式的主动由头，不再只是随机兜底。
-      const hobby = wakeEcho || followup?.read
-        ? null
-        : topic
-          ? null
-          : knowing.hobbies.length
-            ? (() => {
-                const usable = knowing.hobbies.filter((row) => row.id !== state.lastInterestUse?.id || knowing.hobbies.length === 1);
-                return usable[Number(state.sentToday?.count ?? 0) % usable.length] ?? knowing.hobbies[0];
-              })()
-            : null;
-      const selfSource = Boolean(memoryText.trim() || hobby || wakeEcho || sceneEcho);
-      const form = wakeEcho || sceneEcho || followup?.read
+      // 好奇心触发探索，但没有真实的新发现时，不从旧话题或静态兴趣里硬凑内容消息。
+      const form = wakeEcho || followup?.read
         ? "word"
-        : topic || hobby
+        : discovery
           ? "word"
-          : decideForm({ topic: null, selfSource, tier: settings.tier }).form;
+          : decideForm({ topic: null, selfSource: false, tier: settings.tier }).form;
 
       if (form === "poke") {
         // 这个动作不需要由头——ta天然就是"我就是闲着"
@@ -2147,6 +2324,7 @@ export function apply(ctx) {
           partnerName: partner.name,
           topic,
           hobby,
+          discovery,
           exception: Boolean(finalGate.exception),
           followup,
           wakeEcho,
@@ -2163,14 +2341,10 @@ export function apply(ctx) {
         return { ...delivered, sentAt };
       }));
       if (!sent.ok) {
-        recordWatch(agentId, { action: sent.gateBlocked ? "blocked" : "failed", reason: sent.reason, topic: topic?.title ?? null });
-        // 没生成出来不算发过；临门被 gate 拦住时，旧意图原样归位，新挑出的正式话题也塞回抽屉。
+        recordWatch(agentId, { action: sent.gateBlocked ? "blocked" : "failed", reason: sent.reason, topic: discovery?.focus ?? null });
+        // 没生成出来不算发过；发现仍留在短期账本里，临门被 gate 拦住时旧意图原样归位。
         const retryAt = new Date();
-        let staged = pending.rest;
-        if (sent.gateBlocked && pending.intent) staged = [pending.intent, ...pending.rest];
-        else if (sent.gateBlocked && readyTopic) {
-          staged = stageIntent({ ...store.getProactiveState(agentId), staged: pending.rest }, { topicId: readyTopic.id, at: retryAt.toISOString() }, retryAt);
-        }
+        const staged = sent.gateBlocked && pending.intent ? [pending.intent, ...pending.rest] : pending.rest;
         store.setProactiveState(agentId, {
           nextDueAt: nextDueFor(agentId, settings, retryAt, globalSettings),
           staged,
@@ -2181,20 +2355,15 @@ export function apply(ctx) {
 
       store.setProactiveState(agentId, {
         ...store.getProactiveState(agentId),
-        ...(rhythmCue ? { rhythmCueDay: dailyKey(now) } : {}),
         nextDueAt: nextDueFor(agentId, settings, sent.sentAt, globalSettings),
         lastInterestUse: sent.interest
           ? { ...sent.interest, at: now.toISOString() }
           : store.getProactiveState(agentId).lastInterestUse ?? null,
       });
-      store.setGlobalRuntime({
-        ...store.getGlobalRuntime(),
-        ...(rhythmCue ? { rhythmCueDay: dailyKey(now) } : {}),
-      });
       if (wakeEcho) {
         store.setPartnerSettings(agentId, { wakeEcho: { sourceId: wakeEcho.sourceId, consumedAt: now.toISOString() } });
       }
-      report.push({ agentId, action: "sent", topic: topic?.title ?? null, wakeEcho: Boolean(wakeEcho), exception: Boolean(gate.exception) });
+      report.push({ agentId, action: "sent", topic: discovery?.focus ?? null, wakeEcho: Boolean(wakeEcho), exception: Boolean(gate.exception) });
     }
 
     // 顺手把还没写过那句的伙伴补上（只有一个动作，一轮最多暖 3 位）。
@@ -2657,6 +2826,67 @@ export function apply(ctx) {
     return { grown: 1 };
   }
 
+  /** 有好奇心时才沿着长期兴趣找一个新角度；搜索结果只短期留存，供主动分享使用。 */
+  async function maybeExploreInterest(agentId, partnerName, now = new Date()) {
+    let state = store.getProactiveState(agentId);
+    let learning = readInterestLearning(state.interestLearning, now);
+    if (!learning.curiosity.startedAt) {
+      learning = scheduleExploration(learning, now);
+      store.setProactiveState(agentId, { interestLearning: learning });
+      return { explored: false, reason: "curiosity-started" };
+    }
+    if (!explorationDue(learning, now)) return { explored: false, reason: "not-curious-yet" };
+    if (nextDiscovery(learning, now)) {
+      learning = scheduleExploration(learning, now);
+      store.setProactiveState(agentId, { interestLearning: learning });
+      return { explored: false, reason: "discovery-waiting" };
+    }
+
+    const retryLater = (reason) => {
+      learning = scheduleExploration(learning, now, Math.random, { retry: true });
+      store.setProactiveState(agentId, { interestLearning: learning });
+      diagnostics({ event: "interest.exploration.skipped", agentId, reason });
+      return { explored: false, reason };
+    };
+
+    try {
+      await loadUserName();
+      await maybeTendHobbies(agentId);
+      const knowing = store.getKnowing(agentId);
+      const hobby = pickInterestForExploration(knowing.hobbies, learning, { now });
+      if (!hobby) return retryLater("no-interest");
+      const spec = explorationSpec({
+        interest: hobby,
+        book: learning,
+        now,
+      });
+      const rawPlan = await askCheap(spec.systemPrompt, spec.userText, 180, { timeoutMs: 20_000 });
+      const plan = parseExplorationPlan(rawPlan);
+      if (!plan) return retryLater("no-new-angle");
+      const fetcher = typeof ctx.network?.fetch === "function" ? ctx.network.fetch.bind(ctx.network) : null;
+      const search = await searchTimelyTopic(fetcher, { title: plan.focus, searchQuery: plan.searchQuery }, {
+        privateTerms: [USER_NAME, partnerName],
+      });
+      if (!search.ok || !search.results?.length) return retryLater(search.reason ?? "no-results");
+      const added = addDiscovery(learning, { interest: hobby, plan, results: search.results }, now);
+      if (!added.added) return retryLater(added.reason);
+      learning = scheduleExploration(added.book, now);
+      store.setProactiveState(agentId, { interestLearning: learning });
+      diagnostics({
+        event: "interest.exploration.ready",
+        agentId,
+        interest: hobby.name,
+        focus: plan.focus,
+        results: search.results.length,
+        contextChars: formatSearchContext(search.results).length,
+        partnerName,
+      });
+      return { explored: true, interest: hobby.name, focus: plan.focus };
+    } catch (error) {
+      return retryLater(describeError(error));
+    }
+  }
+
   /**
    * 回复之后在后台静悄悄整理。
    *
@@ -2865,16 +3095,32 @@ export function apply(ctx) {
     // 拾光记的日子账本：只借不给。没装、快照坏了都当今天没什么可说的。
     // 这是她选的沉浸感（设置页「拾光记今日情境」），没打开就读都不读。
     // 日子按天说一遍就够（跨天或内容变了才重新露），不每轮把节日念叨一次。
+    const latestUser = [...windowed].reverse().find((row) => row?.role === "user" && !row.recalled);
+    const threadMessages = store.getThread(agentId).messages;
+    const latestUserIndex = latestUser ? threadMessages.findIndex((row) => row?.id === latestUser.id) : -1;
+    const previousAssistant = latestUserIndex > 0
+      ? previousAssistantBeforeUser(threadMessages, latestUserIndex)
+      : null;
+    const followupGap = Date.parse(latestUser?.at ?? "") - Date.parse(previousAssistant?.at ?? "");
+    const previousAssistantText = followupGap >= 0 && followupGap <= 10 * 60_000 ? previousAssistant?.text : "";
     let daybookText = "";
+    const daybookTopics = daybookOn()
+      ? daybookQueryTopics(latestUser?.text, { previousAssistantText })
+      : [];
     try {
       const snapshot = daybookOn() ? await readDaybook(ctx) : null;
-      const built = buildDaybookText(snapshot, agentId, { userName: USER_NAME });
+      const built = buildDaybookText(snapshot, agentId, {
+        userName: USER_NAME,
+        ...(daybookTopics.length ? { topics: daybookTopics } : {}),
+      });
       if (built) {
         const lifeDay = dayKey(new Date());
         const hash = daybookHash(built);
-        if (shouldRevealDaybook(store.getPartnerSettings(agentId).daybook, { lifeDay, hash })) {
+        const mark = store.getPartnerSettings(agentId).daybook;
+        if (shouldUseDaybook({ enabled: daybookOn(), topics: daybookTopics, mark, lifeDay, hash })) {
           daybookText = built;
-          store.setPartnerSettings(agentId, { daybook: { lifeDay, hash } });
+          if (!daybookTopics.length) store.setPartnerSettings(agentId, { daybook: { lifeDay, hash } });
+          else diagnostics({ event: "daybook.on-demand", agentId, topics: daybookTopics });
         }
       }
     } catch (error) {
@@ -2883,6 +3129,32 @@ export function apply(ctx) {
     const workfeedText = workfeedOn()
       ? buildWorkfeedText(store.readWorkfeed(), agentId, { lifeDay: dayKey(new Date()), userName: USER_NAME })
       : "";
+    const previousUser = threadMessages.slice(-12).reverse()
+      .find((row) => row?.role === "user" && row.id !== latestUser?.id && !row.recalled);
+    const sincePrevious = Date.parse(latestUser?.at ?? "") - Date.parse(previousUser?.at ?? "");
+    const previousSearchContext = findPreviousSearchContext(threadMessages, latestUser);
+    const previousText = previousSearchContext
+      || (sincePrevious >= 0 && sincePrevious <= 10 * 60_000 ? previousUser?.text : "");
+    const chatSearch = await searchForChat({
+      text: latestUser?.text,
+      previousText,
+      ask: (prompt, text) => askCheap(prompt, text, 180, { timeoutMs: 10_000 }),
+      fetcher: typeof ctx.network?.fetch === "function" ? ctx.network.fetch.bind(ctx.network) : null,
+      privateTerms: [USER_NAME, partner?.name ?? agentId],
+    });
+    if (chatSearch.attempted) diagnostics({ event: "chat.search", agentId, ok: chatSearch.ok, requestSent: chatSearch.requestSent === true, reason: chatSearch.reason, query: chatSearch.query ?? null, results: chatSearch.results ?? 0, candidates: chatSearch.candidates ?? 0, sources: chatSearch.sources ?? null });
+    // 手里有还没讲过的发现时，普通聊天也允许 ta 自然带出来。
+    // 只有“这轮压根没拿到外部材料”时才给：有新料还拿旧料凑，反而像没在听。
+    const heldAt = new Date();
+    const heldDiscovery = chatSearch.context
+      ? null
+      : offerableDiscovery(store.getProactiveState(agentId).interestLearning, { now: heldAt });
+    if (heldDiscovery) {
+      store.setProactiveState(agentId, {
+        interestLearning: markDiscoveryOffered(store.getProactiveState(agentId).interestLearning, heldDiscovery.id, heldAt),
+      });
+      diagnostics({ event: "chat.discovery.offered", agentId, discoveryId: heldDiscovery.id, interest: heldDiscovery.interestName });
+    }
     const systemPrompt = buildSystemPrompt({
       partnerId: agentId,
       partnerName: partner?.name ?? agentId,
@@ -2896,6 +3168,8 @@ export function apply(ctx) {
       timeText,
       daybookText,
       workfeedText,
+      searchText: chatSearch.context,
+      discoveryText: heldDiscovery ? heldDiscoveryText(heldDiscovery) : "",
       userRhythmText: rhythmText,
       // 正睡着被弄醒了：这一条得让ta带着起床气回
       wakeText: wakeBlockFor(agentId),
@@ -2916,7 +3190,7 @@ export function apply(ctx) {
       describeSticker: (id) => stickerLabels.get(id) ?? null,
     });
 
-    // 这次用哪个模型：伙伴指定 > 全局默认 > 宿主当前模型。
+    // 这次用哪个模型：本应用单独指定 > 本应用全局指定 > 伙伴在 Hana 里的默认模型 > 兜底。
     // 目录拉一次，resolve 和 stream 两处共用。拉不到也不播报，退回“跟当前模型走”。
     let modelCatalog = null;
     try {
@@ -2927,6 +3201,7 @@ export function apply(ctx) {
     const choice = resolveModelChoice(modelCatalog, {
       partnerRef: store.getPartnerSettings(agentId).model,
       globalRef: store.getGlobalSettings().model,
+      agentRef: await agentDefaultModel(agentId),
     });
 
     let generated = await generateReply(ctx, {
@@ -2978,6 +3253,16 @@ export function apply(ctx) {
     const replyText = marker.keyword
       ? [cleanedText, `[表情:${marker.keyword}]`].filter(Boolean).join("\n")
       : cleanedText;
+    // 真的说出口了才标成已讲；没提就留着，冷却期到了还能再给一次机会。
+    if (heldDiscovery && mentionsDiscovery(cleanedText, heldDiscovery)) {
+      const current = store.getProactiveState(agentId);
+      store.setProactiveState(agentId, {
+        interestLearning: markDiscoveryShared(current.interestLearning, heldDiscovery.id, cleanedText.slice(0, 240), new Date()),
+      });
+      diagnostics({ event: "chat.discovery.shared", agentId, discoveryId: heldDiscovery.id });
+    } else if (heldDiscovery) {
+      diagnostics({ event: "chat.discovery.held", agentId, discoveryId: heldDiscovery.id });
+    }
     if (replyText !== rawGeneratedText.trim()) {
       diagnostics({ event: "chat.output.cleaned", agentId });
     }
@@ -3923,6 +4208,7 @@ export function apply(ctx) {
     const choice = resolveModelChoice(modelCatalog, {
       partnerRef: store.getPartnerSettings(agentId).model,
       globalRef: store.getGlobalSettings().model,
+      agentRef: await agentDefaultModel(agentId),
     });
     const modelRef = choice ? { provider: choice.provider, model: choice.model } : null;
     const modelLabel = choice ? `${choice.provider}/${choice.model}` : null;
@@ -4063,6 +4349,7 @@ export function apply(ctx) {
     const choice = resolveModelChoice(modelCatalog, {
       partnerRef: store.getPartnerSettings(agentId).model,
       globalRef: store.getGlobalSettings().model,
+      agentRef: await agentDefaultModel(agentId),
     });
     const modelRef = choice ? { provider: choice.provider, model: choice.model } : null;
     const modelLabel = choice ? `${choice.provider}/${choice.model}` : null;
@@ -4309,6 +4596,7 @@ export function apply(ctx) {
     const choice = resolveModelChoice(modelCatalog, {
       partnerRef: store.getPartnerSettings(agentId).model,
       globalRef: store.getGlobalSettings().model,
+      agentRef: await agentDefaultModel(agentId),
     });
 
     const out = [];
@@ -4847,6 +5135,8 @@ export function apply(ctx) {
             bubbles: null,
             recalled: true,
             recalledAt: new Date().toISOString(),
+            // 撤回的消息上不该还挂着她递的小东西
+            partnerFeed: null,
           });
         } else {
           result = store.patchMessage(agentId, messageId, {
@@ -4855,6 +5145,7 @@ export function apply(ctx) {
             recalled: true,
             recallMode: "hard",
             recalledAt: new Date().toISOString(),
+            partnerFeed: null,
           });
           const knowing = store.getKnowing(agentId);
           const relationship = retractRelationshipSource(knowing.relationship, messageId);
@@ -4958,12 +5249,20 @@ export function apply(ctx) {
         const quote = rawQuote && String(rawQuote.text ?? "").trim()
           ? { messageId: String(rawQuote.messageId ?? "").trim(), text: String(rawQuote.text).trim().slice(0, 4000) }
           : null;
+        const clientMessageId = String(body?.clientMessageId ?? "").trim();
         const imageInput = body?.image && typeof body.image === "object" ? body.image : null;
         // 回复是伙伴自己的慢节奏，不能占住她的发送门；正在处理时的新消息会并入下一轮。
         const isSticker = Boolean(stickerId);
         const isImage = Boolean(imageInput);
         if (!isValidPartnerId(agentId)) {
           return c.json({ ok: false, error: { code: "INVALID_PARTNER_ID", message: "伙伴 ID 不合法" } }, 400);
+        }
+        if (clientMessageId && !/^[a-zA-Z0-9_-]{8,100}$/.test(clientMessageId)) {
+          return c.json({ ok: false, error: { message: "消息编号不合法" } }, 400);
+        }
+        if (clientMessageId) {
+          const existing = store.getThread(agentId).messages.find((message) => message?.role === "user" && message.clientMessageId === clientMessageId);
+          if (existing) return c.json({ ok: true, messageId: existing.id, duplicate: true });
         }
         if (text.length > 12000) {
           return c.json({ ok: false, error: { code: "MESSAGE_TOO_LONG", message: "一条消息最多 12000 字" } }, 413);
@@ -5014,6 +5313,7 @@ export function apply(ctx) {
         const stored = store.appendMessage(agentId, {
           role: "user",
           text: messageText,
+          ...(clientMessageId ? { clientMessageId } : {}),
           ...(quote ? { quote } : {}),
           ...(isSticker ? { kind: "sticker", bubbles: userBubbles } : {}),
           ...(attachment ? { attachment: { id: attachment.id, name: attachment.name, mimeType: attachment.mimeType, size: attachment.size }, visionNote } : {}),
@@ -5169,25 +5469,42 @@ export function apply(ctx) {
       app.get("/settings", async (c) => {
         try {
           await loadUserName();
+          // 模型目录先拉：下面每一位伙伴的「实际用哪个」都要靠它算。
+          // 拉不到就给空数组，设置页照常能开。
+          let catalog = null;
+          let models = [];
+          let visionModels = [];
+          try {
+            catalog = await ctx.models.list();
+            models = chatModelOptions(catalog);
+            visionModels = visionModelOptions(catalog);
+          } catch (error) {
+            diagnostics({ event: "settings.models.failed", error: describeError(error) });
+          }
           const allPartners = await listAllPartners();
           const visible = allPartners.filter((row) => !store.isPartnerHidden(row.id));
           const byId = new Map(allPartners.map((row) => [row.id, row]));
           // 隐藏名单是插件自己的账。伙伴暂时不在 Hana 活跃清单里时也要能看见并放回，名字退回编号。
           const hidden = store.hiddenPartnerIds().map((id) => byId.get(id) ?? { id, name: id, unavailable: true });
-          const partners = visible.map((row) => ({
-            ...row,
-            unread: store.unreadCount(row.id),
-            settings: store.getPartnerSettings(row.id),
-          }));
-          // 模型下拉目录：聊天模型和识图模型分开投影；拉不到就给空数组
-          let models = [];
-          let visionModels = [];
-          try {
-            const catalog = await ctx.models.list();
-            models = chatModelOptions(catalog);
-            visionModels = visionModelOptions(catalog);
-          } catch (error) {
-            diagnostics({ event: "settings.models.failed", error: describeError(error) });
+          const globalModelRef = store.getGlobalSettings().model;
+          // 「实际用哪个」逐位算出来跟着回：设置页得能自己证明它跟对了人。
+          // 以前这一栏不存在，界面又把未指定的说成“跟主模型走”，实际却不是（2026-09-28）。
+          const partners = [];
+          for (const row of visible) {
+            const partnerSettings = store.getPartnerSettings(row.id);
+            const agentModel = await agentDefaultModel(row.id);
+            const choice = resolveModelChoice(catalog, {
+              partnerRef: partnerSettings.model,
+              globalRef: globalModelRef,
+              agentRef: agentModel,
+            });
+            partners.push({
+              ...row,
+              unread: store.unreadCount(row.id),
+              settings: partnerSettings,
+              agentModel,
+              effectiveModel: choice ? { provider: choice.provider, model: choice.model, source: choice.source } : null,
+            });
           }
           return c.json({
             ok: true,
@@ -5916,9 +6233,16 @@ export function apply(ctx) {
           return c.json({ ok: false, error: { message: "伙伴编号不合法" } }, 400);
         }
         try {
-          // 茶话会本地角色暂时使用首字占位，不读取 Hana 的头像目录。
+          // 茶话会本地角色只从自己的 dataDir 读导入头像，不去 Hana agents 目录找同名文件。
           if (kind === "agent" && store.localPartner(raw)) {
-            return c.json({ ok: false, error: { message: "本地角色暂未配置头像" } }, 404);
+            const localAvatar = store.getLocalPartnerAvatar(raw);
+            if (!localAvatar || !looksLikeImage(localAvatar.bytes)) {
+              return c.json({ ok: false, error: { message: "没有头像" } }, 404);
+            }
+            return c.body(localAvatar.bytes, 200, {
+              "Content-Type": localAvatar.contentType,
+              "Cache-Control": "private, max-age=300",
+            });
           }
           // 没配头像的伙伴用宿主自带的那张（按「缘」分）
           const yuan = kind === "agent" ? await yuanOf(raw) : null;
@@ -6609,14 +6933,16 @@ export function apply(ctx) {
   // 主动那层的巡检。挂在这里是故意的：它只是个定时器，真正的活儿在回调里，
   // 装载期一个受权限保护的接口都不碰。
   const PROACTIVE_TICK_MS = 5 * 60 * 1000;
+  // 三层巡检串着跑，不并行：并行时投喂可能先落盘，紧接着主动联系又发一条，
+  // 同一分钟里两个动作叠着出站。串起来后，投喂那轮看到的是主动那轮更新完的账。
   const timer = setInterval(() => {
     void recoverPendingReplies();
-    void runProactiveTick().catch((error) =>
-      ctx.logger.error(`[${name}] 主动巡检出错: ${error?.message || error}`),
-    );
-    void runAwaitingTick().catch((error) =>
-      ctx.logger.error(`[${name}] 等回音巡检出错: ${error?.message || error}`),
-    );
+    void runProactiveTick()
+      .then(() => runAwaitingTick())
+      .then(() => runFeedTick())
+      .catch((error) =>
+        ctx.logger.error(`[${name}] 巡检出错: ${error?.message || error}`),
+      );
   }, PROACTIVE_TICK_MS);
   timer.unref?.();
   // 重启后先恢复未完成的回复；主动巡检仍然故意晚一点，避免刚装载就一群人扑上来
@@ -6627,8 +6953,10 @@ export function apply(ctx) {
   // 起来一会儿后再看第一眼（不是立刻）
   const kick = setTimeout(() => {
     void ensureLegacyFactsMigration().catch(() => {}).finally(() => {
-      void runProactiveTick().catch(() => {});
-      void runAwaitingTick().catch(() => {});
+      void runProactiveTick()
+        .then(() => runAwaitingTick())
+        .then(() => runFeedTick())
+        .catch(() => {});
     });
   }, 90 * 1000);
   kick.unref?.();

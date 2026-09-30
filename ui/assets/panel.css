@@ -517,8 +517,8 @@ html, body {
 .jump-bottom {
   position: absolute;
   z-index: 4;
-  right: 18px;
-  bottom: 78px;
+  right: 4px;
+  bottom: calc(100% + 24px);
   width: 34px;
   height: 34px;
   padding: 7px;
@@ -738,8 +738,9 @@ html, body {
 }
 .message-image {
   display: block;
-  max-width: min(320px, 70vw);
+  max-width: min(320px, 100%);
   max-height: 320px;
+  box-sizing: border-box;
   margin-top: 7px;
   border-radius: 10px;
   object-fit: contain;
@@ -881,6 +882,16 @@ html, body {
   line-height: 1;
 }
 .message-feed[hidden] { display: none; }
+/* ta 递过来的那份：靠右一点、底色更淡，跟用户投的那份一眼能分开 */
+.message-feed.from-partner {
+  margin-left: auto;
+  border-color: rgba(74, 70, 64, .08);
+  background: rgba(255, 253, 248, .62);
+  box-shadow: none;
+  font-size: 14px;
+  opacity: .9;
+  cursor: help;
+}
 /* 被点起来的那条：气泡轻轻欠一下身，动作看着是从它身上出来的 */
 .row.actions-open .bubble {
   transform: scale(1.015);
@@ -1056,7 +1067,7 @@ html, body {
 .pending-quote button { flex: none; margin-left: auto; border: 0; padding: 2px 5px; border-radius: 6px; background: transparent; color: var(--ink-faint); font: inherit; font-size: 16px; cursor: pointer; }
 .pending-quote button:hover { background: rgba(255,255,255,.6); color: var(--primary-ink); }
 .pending-quote[hidden] { display: none; }
-.composer-row { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; min-width: 0; }
+.composer-row { position: relative; display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; min-width: 0; }
 .emoji-btn {
   flex: none;
   width: 38px;
