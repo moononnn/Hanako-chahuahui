@@ -85,7 +85,8 @@
     let draggedPartnerNode = null;
     let dragOriginIds = [];
     let dragCommitted = false;
-    let suppressPartnerClick = false;
+    let partnerOrderRevision = 0;
+    let orderSavePending = false;
 
     function unwrap(result) {
       return result && Object.prototype.hasOwnProperty.call(result, "value") ? result.value : result;
@@ -169,7 +170,6 @@
           button.appendChild(badge);
         }
         button.addEventListener("click", async () => {
-          if (suppressPartnerClick) { suppressPartnerClick = false; return; }
           selectedId = partner.id;
           render();
           try {
@@ -217,18 +217,23 @@
         item.addEventListener("drop", async (event) => {
           event.preventDefault();
           dragCommitted = true;
-          suppressPartnerClick = true;
+          partnerOrderRevision += 1;
+          orderSavePending = true;
           list.querySelectorAll(".drag-over").forEach((node) => node.classList.remove("drag-over"));
           render();
+          let saveFailed = false;
           try {
             await api("partner-order", "POST", { ids: partners.map((row) => row.id) });
             summary.textContent = "伙伴顺序已保存";
             setTimeout(() => { if (partners.length) summary.textContent = `${partners.length} 位伙伴`; }, 1800);
           } catch (error) {
+            saveFailed = true;
             status.hidden = false;
             status.textContent = `顺序没保存：${error?.message || error}`;
-            void loadPartners();
+          } finally {
+            orderSavePending = false;
           }
+          if (saveFailed) void loadPartners();
         });
         item.addEventListener("dragend", () => {
           if (!dragCommitted && dragOriginIds.length) {
@@ -263,9 +268,10 @@
 
     async function loadPartners() {
       const seq = ++loadSeq;
+      const orderRevision = partnerOrderRevision;
       try {
         const data = await api("partners");
-        if (seq !== loadSeq) return;
+        if (seq !== loadSeq || orderRevision !== partnerOrderRevision || draggedPartnerId || orderSavePending) return;
         partners = Array.isArray(data.partners) ? data.partners : [];
         if (!selectedId) selectedId = data.lastPartnerId || "";
         const unread = Math.max(0, Number(data.totalUnread) || 0);
