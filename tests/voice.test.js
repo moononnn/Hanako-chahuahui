@@ -4,6 +4,7 @@ import { protectKey } from "../lib/crypto.js";
 import { canonicalGuide, closeRelationship } from "./helpers/adaptation.js";
 import {
   cleanVoiceText,
+  isExplicitVoiceRequest,
   nextTextRuntime,
   nextVoiceRuntime,
   shouldGenerateVoice,
@@ -197,6 +198,13 @@ test("伙伴语音清洗掉表情标记和动作描写，但保留正常正文",
   assert.equal(cleanVoiceText("等下哈\n*低头找耳机*\n[表情:开心]"), "等下哈");
 });
 
+test("识别当下的语音点播，不把长期偏好当成立即请求", () => {
+  assert.equal(isExplicitVoiceRequest("那你发个语音我再听听？"), true);
+  assert.equal(isExplicitVoiceRequest("请用语音回复我"), true);
+  assert.equal(isExplicitVoiceRequest("我喜欢你发语音，以后多发点哦"), false);
+  assert.equal(isExplicitVoiceRequest("今天不要发语音"), false);
+});
+
 test("伙伴语音默认受全局开关和伙伴开关双重控制", () => {
   const args = {
     globalSettings: { voiceEnabled: false },
@@ -218,6 +226,22 @@ test("伙伴语音只接受短的整轮回复，长回复不机械切音频", ()
   assert.equal(shouldGenerateVoice({ ...base, text: "这是一段很长很长的回复。".repeat(30) }).reason, "too-long");
   assert.equal(shouldGenerateVoice({ ...base, text: "第一句。第二句。第三句。第四句。" }).reason, "too-many-sentences");
   assert.equal(shouldGenerateVoice({ ...base, text: "我马上回来找你哈。" }).ok, true);
+});
+
+test("明确点播绕过主动语音开关、关系限制、额度、冷却与连续发送护栏", () => {
+  const result = shouldGenerateVoice({
+    globalSettings: { voiceEnabled: false },
+    partnerSettings: { enabled: false, tier: "rare", voiceId: "female-shaonv" },
+    runtime: { voiceDay: "2026-09-24", voiceSentToday: 6, lastVoiceAt: new Date().toISOString(), consecutiveVoiceReplies: 1 },
+    text: "阿舟今天乖惨了，我给你发一条语音。",
+    voicePolicy: { allowed: false, hardBlocked: true },
+    requested: true,
+    now: new Date("2026-09-24T10:00:00+08:00"),
+    random: () => 0.99,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.layer, "requested");
+  assert.equal(result.requested, true);
 });
 
 test("伙伴语音有每日上限、冷却和连续发送护栏", () => {
@@ -306,4 +330,9 @@ test("伙伴语音运行账本会递增，普通文字会打断连续语音计�
   assert.equal(next.consecutiveVoiceReplies, 1);
   assert.equal(next.voicePending, true);
   assert.equal(nextTextRuntime(next).consecutiveVoiceReplies, 0);
+});
+
+test("用户点播语音不消耗主动额度、冷却时间或连续发送状态", () => {
+  const runtime = { voiceDay: "2026-09-24", voiceSentToday: 2, lastVoiceAt: "2026-09-24T01:00:00.000Z", consecutiveVoiceReplies: 0 };
+  assert.deepEqual(nextVoiceRuntime(runtime, { requested: true, voiceId: "female-shaonv" }), { ...runtime, voicePending: false });
 });

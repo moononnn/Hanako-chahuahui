@@ -46,6 +46,55 @@ test("茶话会本地角色只存自己的账本，重开仍能读到", () => {
   assert.equal(reopened.localPartner(partner.id).description, "只在茶话会里出现的角色");
 });
 
+test("鲜花酿酒馆角色按来源卡片幂等更新，聊天和记忆账本不动，头像独立存文件", () => {
+  const { store, dir } = freshStore();
+  const avatarBytes = fs.readFileSync(new URL("../assets/icon.png", import.meta.url));
+  const source = { appId: "hanabrew-v2-dev", cardId: "阿岚.png", format: "png", creator: "作者", tags: ["侦探"] };
+  const first = store.importTavernPartner({
+    source,
+    character: { name: "阿岚", description: "原卡设定", personality: "嘴硬", scenario: "小岛", exampleDialogue: "别误会", firstMessage: "来自酒馆的初见" },
+    avatar: { bytes: avatarBytes, extension: "png", mimeType: "image/png" },
+  });
+  assert.equal(first.created, true);
+  assert.equal(first.openingPending, true);
+  const id = first.partner.id;
+  store.appendMessage(id, { role: "assistant", kind: "tavern-opening", sourceCardId: source.cardId, text: "来自酒馆的初见" });
+  store.markTavernOpeningSeeded(id);
+  store.appendMessage(id, { role: "user", text: "我们已经聊过" });
+  store.writeMemory(id, { profile: { text: "相处记忆保留", updatedAt: null }, ledger: [], archive: [] });
+  const second = store.importTavernPartner({
+    source,
+    character: { name: "阿岚", description: "更新后的设定", personality: "仍然嘴硬", scenario: "还是小岛", exampleDialogue: "我才没担心", firstMessage: "新的开场不能覆盖已经发生的初见" },
+    avatar: null,
+  });
+  assert.equal(second.created, false);
+  assert.equal(second.openingPending, false);
+  assert.equal(second.partner.id, id);
+  const third = store.importTavernPartner({
+    source,
+    character: { name: "阿岚", description: "更新后的设定", personality: "仍然嘴硬", scenario: "还是小岛", exampleDialogue: "我才没担心" },
+    avatar: { bytes: avatarBytes, extension: "png", mimeType: "image/png" },
+  });
+  assert.equal(third.created, false);
+  const sameNameOtherCard = store.importTavernPartner({
+    source: { ...source, cardId: "另一个阿岚.png" },
+    character: { name: "阿岚", description: "另一个来源的同名角色" },
+    avatar: null,
+  });
+  assert.equal(sameNameOtherCard.created, true);
+  assert.notEqual(sameNameOtherCard.partner.id, id, "不同来源卡片不能靠同名合并");
+  const reopened = createStore(dir);
+  assert.equal(reopened.localPartner(id).tavernCard.description, "更新后的设定");
+  assert.equal(reopened.getThread(id).messages[0].text, "来自酒馆的初见");
+  assert.equal(reopened.getThread(id).messages[1].text, "我们已经聊过");
+  assert.equal(reopened.readMemory(id).profile.text, "相处记忆保留");
+  assert.deepEqual(reopened.getLocalPartnerAvatar(id).bytes, avatarBytes);
+  assert.equal(reopened.getLocalPartnerAvatar(id).contentType, "image/png");
+  const listed = reopened.listLocalPartners().find((row) => row.id === id);
+  assert.equal(listed.importedFromTavern, true);
+  assert.equal("tavernCard" in listed, false, "完整角色资料不随好友列表传给前端");
+});
+
 test("伙伴手动排序会落盘，重开后仍按原顺序读回", () => {
   const { store, dir } = freshStore();
   assert.deepEqual(store.partnerOrder(), []);

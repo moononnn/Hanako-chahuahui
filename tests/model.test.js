@@ -165,6 +165,24 @@ test("定模型：伙伴指定 > 全局默认 > 宿主当前", () => {
   assert.deepEqual([byCurrent.provider, byCurrent.model, byCurrent.source], ["openai-codex", "gpt-5.6-luna", "current"]);
 });
 
+test("定模型：伙伴在 Hana 里的默认模型垫在宿主焦点模型前面", () => {
+  // 2026-09-28：以前没这一档，没单独指定就直接退到宿主的“当前焦点模型”，
+  // 结果是每位伙伴在 Hana 里各配各的，茶话会里却全员都用同一个模型。
+  const byAgent = resolveModelChoice(CATALOG, { agentRef: { provider: "deepseek", id: "deepseek-flash" } });
+  assert.deepEqual([byAgent.provider, byAgent.model, byAgent.source], ["deepseek", "deepseek-flash", "agent"]);
+
+  // 本应用里显式指定的，仍然压在伙伴默认前面（显式 > 隐式）
+  const explicitWins = resolveModelChoice(CATALOG, {
+    globalRef: { provider: "deepseek", model: "deepseek-flash" },
+    agentRef: { provider: "openai-codex", model: "gpt-5.6-luna" },
+  });
+  assert.deepEqual([explicitWins.provider, explicitWins.model, explicitWins.source], ["deepseek", "deepseek-flash", "global"]);
+
+  // 伙伴默认那个模型不在目录里了（换 provider、删了）就往下退，不硬用
+  const gone = resolveModelChoice(CATALOG, { agentRef: { provider: "deepseek", model: "已经没了" } });
+  assert.deepEqual([gone.provider, gone.model, gone.source], ["openai-codex", "gpt-5.6-luna", "current"]);
+});
+
 test("定模型：指定那个不在目录里（换掉了、删了）就往下退，不硬用", () => {
   const gone = resolveModelChoice(CATALOG, {
     partnerRef: { provider: "deepseek", model: "已经没了" },

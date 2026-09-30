@@ -39,6 +39,30 @@ test("主动消息提示词会带入相处理解", () => {
   assert.match(spec.userText, /认真说事时先接住情绪/);
 });
 
+test("主动开口得带上本人人格，不再是人设不同的伙伴共用一个路人腔", () => {
+  const spec = proactiveSpec({
+    partnerName: "阿岚",
+    userName: "阿舟",
+    personaText: "【人格】\n理性至上，陈述句下达指令，不废话",
+  });
+  assert.match(spec.systemPrompt, /理性至上/);
+  assert.match(spec.systemPrompt, /下面这些说的是你自己（阿岚）/);
+  assert.match(spec.systemPrompt, /不是别人/);
+
+  // 已读未回那条路（模型最容易跟着示例抄的那条）也得带
+  const read = proactiveSpec({
+    partnerName: "阿岚",
+    userName: "阿舟",
+    personaText: "【人格】\n克制",
+    followup: { count: 1, read: true, readAgeMs: 30 * 60 * 1000, previousText: "在忙不" },
+  });
+  assert.match(read.systemPrompt, /克制/);
+
+  // 没给料就退回原来那份通用规矩，不硬编一段假人格
+  const bare = proactiveSpec({ partnerName: "阿岚", userName: "阿舟" });
+  assert.doesNotMatch(bare.systemPrompt, /下面这些说的是你自己/);
+});
+
 test("夜间留言提示词也会带入相处理解", () => {
   const spec = nightSpec({
     partnerName: "小花",
@@ -46,6 +70,19 @@ test("夜间留言提示词也会带入相处理解", () => {
     adaptationText: "【你们相处出来的理解】\\n偏好：多分享一点自己的事",
   });
   assert.match(spec.userText, /多分享一点自己的事/);
+});
+
+test("半夜留言也带本人人格", () => {
+  const spec = nightSpec({
+    partnerName: "阿岚",
+    userName: "阿舟",
+    personaText: "【人格】\n理性至上，不废话",
+  });
+  assert.match(spec.systemPrompt, /理性至上/);
+  assert.match(spec.systemPrompt, /下面这些说的是你自己（阿岚）/);
+
+  const bare = nightSpec({ partnerName: "阿岚", userName: "阿舟" });
+  assert.doesNotMatch(bare.systemPrompt, /下面这些说的是你自己/);
 });
 
 test("睡醒回声优先于普通话题，并允许共享窗外情境作为背景", () => {
@@ -65,7 +102,8 @@ test("普通主动消息把最近场景当背景，不强制先承接", () => {
   const spec = proactiveSpec({
     partnerName: "小花",
     userName: "阿舟",
-    topic: { title: "像素小物" },
+    hobby: { id: "pixel", name: "像素小物", preference: "喜欢研究小机制" },
+    discovery: { id: "learn-pixel", interestId: "pixel", interestName: "像素小物", focus: "角色转身动作的帧数变化" },
     sceneEcho: {
       userText: "我刚忙完，脑壳还有点昏",
       assistantText: "那你先缓一哈，别马上接着忙",
@@ -75,7 +113,7 @@ test("普通主动消息把最近场景当背景，不强制先承接", () => {
   assert.ok(spec.userText.includes("我刚忙完，脑壳还有点昏"));
   assert.ok(spec.userText.includes("普通闲聊、玩笑和已经收住的话题，默认直接说"));
   assert.doesNotMatch(spec.userText, /先用一小句接住上一轮情境/);
-  assert.ok(spec.userText.includes("像素小物"));
+  assert.ok(spec.userText.includes("角色转身动作的帧数变化"));
 });
 
 test("睡醒回声存在时不再额外注入普通场景", () => {
@@ -190,8 +228,9 @@ test("上一条主动消息没回应时，提示词优先轻轻确认而不是�
   });
   assert.match(spec.userText, /还没有接住/);
   assert.match(spec.userText, /轻轻确认/);
-  assert.match(spec.userText, /只能作为顺手想起的新联想/);
+  assert.match(spec.userText, /旧话题不作为这次主动内容来源/);
   assert.match(spec.userText, /我又想到一个好玩的/);
+  assert.doesNotMatch(spec.userText, /茶话会.*主动联系/);
 });
 
 test("连续没回应两次后，提示词不再反复追问", () => {
@@ -255,32 +294,37 @@ test("看过很久了就放下这事，不再提她没回", () => {
   assert.match(unknown.userText, /可以放下了/);
 });
 
-test("主动消息没有共同话题时会带入伙伴自己的具体兴趣包", () => {
+test("有新探索发现时才从长期兴趣生成内容话题，静态兴趣本身不会被直接复述", () => {
+  const hobby = {
+    id: "paper-bag",
+    name: "纸袋封口",
+    object: "纸袋的封口方式",
+    preference: "喜欢歪一点但不能散",
+    ritual: "看到就比较两下",
+    friction: "贴得太正像流水线",
+    reason: "喜欢从小地方看出人的手感",
+  };
+  const empty = proactiveSpec({ partnerName: "小花", userName: "阿舟", hobby });
+  assert.doesNotMatch(empty.userText, /纸袋封口/);
+  assert.match(empty.userText, /没有新探索发现/);
+
   const spec = proactiveSpec({
     partnerName: "小花",
     userName: "阿舟",
-    hobby: {
-      name: "纸袋封口",
-      object: "纸袋的封口方式",
-      preference: "喜欢歪一点但不能散",
-      ritual: "看到就比较两下",
-      friction: "贴得太正像流水线",
-      reason: "喜欢从小地方看出人的手感",
-    },
+    hobby,
+    discovery: { id: "learn-1", interestId: hobby.id, interestName: hobby.name, focus: "不同纸袋封口方式的由来" },
+    searchContext: "· 文章标题：介绍了两种常见封口方法",
     currentTimeText: "2026年9月16日，早上 7 点 16 分",
   });
-  assert.match(spec.userText, /纸袋封口/);
-  assert.match(spec.userText, /落点：纸袋的封口方式/);
-  assert.match(spec.userText, /个人偏好：喜欢歪一点/);
-  assert.match(spec.userText, /平时会做：看到就比较两下/);
-  assert.match(spec.userText, /小别扭：贴得太正/);
-  assert.match(spec.userText, /这些是你自己的落点/);
-  assert.match(spec.userText, /属于你自己的兴趣/);
-  assert.match(spec.userText, /2026年9月16日/);
+  assert.match(spec.userText, /长期兴趣：纸袋封口/);
+  assert.match(spec.userText, /不同纸袋封口方式的由来/);
+  assert.match(spec.userText, /只作临时线索/);
+  assert.match(spec.userText, /文章标题/);
   assert.match(spec.systemPrompt, /原生兴趣不是用户话题的回声/);
   assert.match(spec.systemPrompt, /不要凭空编造现实经历/);
-  assert.match(spec.systemPrompt, /日常聊天里用‘我’指代自己/);
-  assert.match(spec.systemPrompt, /别把自己的名字当第三人称反复自称/);
+  assert.match(spec.systemPrompt, /一小点有依据的内容/);
+  assert.match(spec.systemPrompt, /不套固定开场句/);
+  assert.doesNotMatch(spec.systemPrompt, /闺闺，我刚看到/);
 });
 
 test("主动消息会拦掉明显的空心问候，但放行带具体内容的短句", () => {
@@ -297,34 +341,27 @@ test("有具体落点的话题不接受只讲抽象感受的生成结果", () =>
   assert.equal(isAbstractOnlyProactive("我刚想到一个具体搭配", { topic }), false);
 });
 
-test("主动消息先确认来由链，不把话题当成采访题目", () => {
+test("主动分享要求兴趣根源、新发现和松弛表达，不固定套示例句式", () => {
   const spec = proactiveSpec({
     partnerName: "小花",
     userName: "阿舟",
-    topic: { title: "胶带搭配", anchor: "蓝灰色纸胶带配米白页", note: "她想聊手帐搭配", correction: "这条话题要归到手帐搭配" },
+    hobby: { id: "game", name: "游戏动作" },
+    discovery: { id: "learn-2", interestId: "game", interestName: "游戏动作", focus: "角色收刀动作的地区差异" },
   });
-  assert.match(spec.userText, /具体落点：蓝灰色纸胶带配米白页/);
-  assert.match(spec.userText, /用户纠正：/);
+  assert.match(spec.userText, /角色收刀动作的地区差异/);
   assert.match(spec.systemPrompt, /为什么让你想找她/);
   assert.match(spec.systemPrompt, /真实素材.*你自己的联想/);
-  assert.match(spec.systemPrompt, /话题只是素材，不是要完成的题目/);
-  assert.match(spec.systemPrompt, /具体可指认的对象、动作、款式、颜色、搭配、场景或选择/);
-  assert.match(spec.systemPrompt, /具体细节不能单独撑起一条主动消息/);
-  assert.match(spec.systemPrompt, /自己的感受、偏好、判断、玩笑或一点小别扭/);
+  assert.match(spec.systemPrompt, /有具体内容的主动话题必须扎根于自己长期保留的兴趣/);
+  assert.match(spec.systemPrompt, /只把兴趣名称、偏好或熟悉的小细节换种说法，不算新话题/);
+  assert.match(spec.systemPrompt, /轻松闲聊，有一搭没一搭/);
+  assert.match(spec.systemPrompt, /不套固定开场句/);
+  assert.match(spec.systemPrompt, /一小点有依据的内容/);
   assert.match(spec.systemPrompt, /不等于每条都要提问/);
-  assert.match(spec.systemPrompt, /具体到能想象，轻松到不用答/);
-  assert.match(spec.systemPrompt, /直接从那件事本身说起/);
   assert.match(spec.systemPrompt, /万能问句开场/);
-  assert.match(spec.systemPrompt, /不必每条都提问/);
   assert.match(spec.systemPrompt, /不必暗示她马上回复/);
   assert.match(spec.systemPrompt, /日常聊天里用‘我’指代自己/);
-  assert.match(spec.systemPrompt, /不是每条消息的开场标签/);
-  assert.match(spec.systemPrompt, /不要无缘无故用她的名字起句/);
-  assert.match(spec.systemPrompt, /自然落地/);
-  assert.match(spec.systemPrompt, /这道筛子在心里，不在嘴上/, "来处是心里的筛子，不是要说给她听的话");
-  assert.match(spec.systemPrompt, /来处要像你本来就带着它/);
-  assert.match(spec.systemPrompt, /也不必每条末尾都加一句邀请/);
-  assert.doesNotMatch(spec.systemPrompt, /突然想到/, "提示词里不许再出现具体的前摇例句");
+  assert.match(spec.systemPrompt, /这道筛子在心里，不在嘴上/);
+  assert.doesNotMatch(spec.systemPrompt, /闺闺，我刚刷到|蓝灰色纸胶带贴在米白页/);
 });
 
 test("手打的图名是话，不是混进来的外文残片", () => {

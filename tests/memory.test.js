@@ -41,15 +41,29 @@ test("至少留一条，哪怕ta自己就超预算", () => {
   assert.equal(recent[0].text.length, 9999);
 });
 
-test("记忆整理只认真正的聊天，不把小动作和硬撤回当事实", () => {
+test("酒馆初见问候不占模型上下文窗口名额", () => {
+  const rows = [
+    { role: "assistant", kind: "tavern-opening", text: "卡片问候" },
+    msg("user", "更早的真实聊天"),
+    msg("assistant", "真实回复"),
+    msg("user", "最新聊天"),
+  ];
+  const { recent, overflow } = splitForContext(rows, { keepMessages: 3, keepChars: 1000 });
+  assert.deepEqual(recent.map((row) => row.text), ["更早的真实聊天", "真实回复", "最新聊天"]);
+  assert.deepEqual(overflow, []);
+});
+
+test("记忆整理只认真正的聊天，不把小动作、酒馆初见问候和硬撤回当事实", () => {
   const rows = [
     msg("user", "真的聊天"),
     { role: "assistant", kind: "action", text: "拍一拍文案" },
     { role: "user", kind: "poke", text: "旧动作" },
+    { role: "assistant", kind: "tavern-opening", text: "角色卡里的首次问候" },
     { role: "assistant", recalled: true, recallMode: "hard", text: "撤回内容" },
   ];
   assert.equal(isConversationMessage(rows[0]), true);
   assert.equal(isConversationMessage(rows[1]), false);
+  assert.equal(isConversationMessage(rows[3]), false);
   assert.deepEqual(conversationMessages(rows).map((row) => row.text), ["真的聊天"]);
 });
 
