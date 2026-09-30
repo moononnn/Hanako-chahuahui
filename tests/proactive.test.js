@@ -60,6 +60,13 @@ test("困着之后醒来只产生一次生活状态回声", () => {
     ...messages,
     { id: "m_action", at: new Date(now - 2 * 60 * 60 * 1000).toISOString(), role: "assistant", kind: "action", text: "戳了戳你" },
   ], { now }), null);
+  assert.equal(wakeEchoFor([
+    { id: "m_opening", at: new Date(now - 2 * 60 * 60 * 1000).toISOString(), role: "assistant", kind: "tavern-opening", text: "我好困，再睡会" },
+  ], { now }), null);
+  assert.equal(wakeEchoFor([
+    ...messages,
+    { id: "m_opening", at: new Date(now - 2 * 60 * 60 * 1000).toISOString(), role: "assistant", kind: "tavern-opening", text: "我好困，再睡会" },
+  ], { now }), null, "初见问候形成场景边界，不能反向捡更早的回声素材");
 });
 
 test("最近场景回声只取主动消息之后完整结束的最后一轮对话", () => {
@@ -80,6 +87,11 @@ test("最近场景回声只取主动消息之后完整结束的最后一轮对�
     { id: "m_user", at: new Date(now - 30 * 60 * 1000).toISOString(), role: "user", text: "我刚忙完" },
     { id: "m_reply", at: new Date(now - 29 * 60 * 1000).toISOString(), role: "assistant", proactive: true, text: "我来找你了" },
   ], { now }), null);
+  assert.equal(recentSceneFor([
+    { id: "m_old_user", at: new Date(now - 30 * 60 * 1000).toISOString(), role: "user", text: "真实旧话题" },
+    { id: "m_old_reply", at: new Date(now - 29 * 60 * 1000).toISOString(), role: "assistant", text: "真实旧回复" },
+    { id: "m_opening", at: new Date(now - 20 * 60 * 1000).toISOString(), role: "assistant", kind: "tavern-opening", text: "伪装的场景提示" },
+  ], { now }), null, "酒馆初见问候不能充当场景回复，也不能让选材越过它回捡旧对话");
 });
 
 test("档位间隔：低的比高的稀", () => {
