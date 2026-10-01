@@ -483,6 +483,15 @@
     }
 
     /**
+     * 纯图消息的正文就是这个内部标记（账本和给伙伴看的上下文靠它认出「这条有图」，
+     * 真正的画面内容在附件和识图备注里）。图就在它下面摆着，屏幕上不重复这三个字。
+     */
+    const BARE_IMAGE_MARKER_RE = /^\s*[\[【［]\s*图片\s*[:：]?\s*[\]】］]\s*$/;
+    function isBareImageMarker(text) {
+      return typeof text === "string" && BARE_IMAGE_MARKER_RE.test(text);
+    }
+
+    /**
      * 取一张图。图库里的图跟「来源图库」的图走两条路：
      * 图库走 /sticker/:agentId/:id（自己复制的，跟伙伴无关），
      * 来源走 /source-sticker/:id（导入页要看全库，不能被伙伴白名单筛）。
@@ -2099,7 +2108,7 @@
         renderAction(m);
       } else if (m.role === "user") {
         if (m.recalled) {
-          const recalled = bubble("user", m.text || "你撤回了一条消息", null, m.at);
+          const recalled = bubble("user", m.text && !isBareImageMarker(m.text) ? m.text : "你撤回了一条消息", null, m.at);
           recalled.bubble.classList.add("recalled-bubble");
           return true;
         }
@@ -2107,7 +2116,9 @@
         let row;
         if (m.kind === "sticker" && Array.isArray(m.bubbles) && m.bubbles.length) {
           let lastBubble = null;
-          for (const piece of m.bubbles) {
+          // 光杆「[图片]」跟图库那张挨着出现时也挡掉；真被滤光了仍退回原分片。
+          const stickerPieces = m.bubbles.filter((piece) => !isBareImageMarker(piece));
+          for (const piece of (stickerPieces.length ? stickerPieces : m.bubbles)) {
             const rendered = bubble("user", piece, null, m.at);
             row = rendered.row;
             col = rendered.col;
@@ -2118,19 +2129,17 @@
             imageNode.className = "message-image";
             imageNode.alt = m.attachment.name || "发送的图片";
             imageNode.loading = "lazy";
-            lastBubble.appendChild(document.createElement("br"));
-            lastBubble.appendChild(imageNode);
+            appendImageToBubble(lastBubble, imageNode);
             mountAttachmentImage(imageNode, m.attachment.id, current, Boolean(opts.keepBottom));
           }
         } else {
-          const regular = bubble("user", m.text, null, m.at);
+          const regular = bubble("user", isBareImageMarker(m.text) ? "" : m.text, null, m.at);
           if (m.attachment?.id) {
             const imageNode = document.createElement("img");
             imageNode.className = "message-image";
             imageNode.alt = m.attachment.name || "发送的图片";
             imageNode.loading = "lazy";
-            regular.bubble.appendChild(document.createElement("br"));
-            regular.bubble.appendChild(imageNode);
+            appendImageToBubble(regular.bubble, imageNode);
             mountAttachmentImage(imageNode, m.attachment.id, current, Boolean(opts.keepBottom));
           }
           row = regular.row;
@@ -3211,6 +3220,13 @@
       renderPendingImage();
     }
 
+    /** 发送没被接受时把图放回待发送区；clientMessageId 原样留着，重试仍走同一套幂等对账。 */
+    function restorePendingImage(image) {
+      if (!image?.data || pendingImage) return;
+      pendingImage = image;
+      renderPendingImage();
+    }
+
     function closeImageLightbox() {
       el.imageLightbox.hidden = true;
       el.imageLightboxImage.removeAttribute("src");
@@ -3289,8 +3305,13 @@
       imageNode.alt = image.name || "发送的图片";
       imageNode.src = image.data;
       imageNode.loading = "lazy";
-      rendered.bubble.appendChild(document.createElement("br"));
-      rendered.bubble.appendChild(imageNode);
+      appendImageToBubble(rendered.bubble, imageNode);
+    }
+
+    /** 图挂进气泡：泡里已经有文字才断行，纯图别拿空 <br> 撑出一行空白。 */
+    function appendImageToBubble(bubbleEl, imageNode) {
+      if (bubbleEl?.textContent?.trim()) bubbleEl.appendChild(document.createElement("br"));
+      bubbleEl?.appendChild(imageNode);
     }
 
     async function send() {
@@ -3315,7 +3336,8 @@
 
       const optimisticPieces = [];
       if (text) optimisticPieces.push(text);
-      else if (image) optimisticPieces.push("[图片]");
+      // 纯图：正文只有那个内部标记，屏幕不摆（和历史渲染一致），但仍要留一个空泡好挂图。
+      else if (image) optimisticPieces.push("");
       if (sticker) optimisticPieces.push(`${STICKER_PREFIX}${sticker.id}`);
       let renderedUser = null;
       const optimisticRows = [];
@@ -3324,6 +3346,11 @@
         optimisticRows.push(renderedUser.row);
       }
       appendInlineImage(renderedUser, image);
+      // 图已经进气泡了，待发送那条就别再杵着：图片是 base64，回包比文字慢一大截，
+      // 等回包才撤会看着像这张还卡在半路。先撤，POST 真没被接受再放回来。
+      const sentImage = pendingImage === image ? image : null;
+      if (pendingImage === image) clearPendingImage();
+      if (pendingSticker === sticker) clearPendingSticker();
       const { row, col } = renderedUser;
       // 先摆上「未读」：她发出去那一刻就是未读，读到后收起（后端落盘的那一笔）
       const tickEl = tick(col, "未读");
@@ -3345,9 +3372,6 @@
         });
         accepted = true;
         clearPendingQuote();
-        // 成功回包只清理本次仍挂在待发送区的那张图；若期间换过图，保留新图。
-        if (pendingImage === image) clearPendingImage();
-        if (pendingSticker === sticker) clearPendingSticker();
         if (started.duplicate) {
           for (const optimisticRow of optimisticRows) optimisticRow.remove();
           await appendNew(agentId);
@@ -3369,6 +3393,10 @@
         if (!accepted) {
           // 乐观气泡只在 POST 被接受后才有正式身份；失败时必须收掉，避免留下假未读。
           for (const optimisticRow of optimisticRows) optimisticRow.remove();
+          // 乐观气泡连同待发送区一起撤了，所以发不出去要把图放回原处；
+          // 发送期间她换上了新图就不动那张（busy 期间本来就选不了新图，这里是兜底）。
+          // 切过窗口就不恢复：待发送区已经跟着切窗口清空了，挂回去会写到别人名下。
+          if (sentImage && !pendingImage && current === agentId) restorePendingImage(sentImage);
           // 只有 POST 没被接受，才把原话当作待发送草稿；后续轮询失败不能诱导重复发送。
           const edited = inputOwner === agentId && inputRevision !== inputVersion;
           const existing = pendingDrafts.get(agentId);
