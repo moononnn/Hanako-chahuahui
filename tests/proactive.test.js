@@ -10,6 +10,7 @@ import {
   decideForm,
   dueNow,
   gateCheck,
+  hasUnseenUserMessage,
   inWindow,
   dailyKey,
   applyProactiveInterval,
@@ -481,4 +482,30 @@ test("车轱辘话：空话不比、没有历史不拦", () => {
   assert.equal(isRepeatedPhrasing([{ at: Date.now(), text: "在忙吗" }], "   ").repeated, false);
   assert.equal(isRepeatedPhrasing(null, "在忙吗").repeated, false);
   assert.equal(isRepeatedPhrasing([{ at: Date.now(), text: "在忙吗" }], "在忙吗").score, 1);
+});
+
+test("她的话还没被看到时，主动开场要让路", () => {
+  assert.equal(hasUnseenUserMessage([
+    { role: "assistant", text: "在呢" },
+    { role: "user", text: "我去泡个面" },
+  ]), true, "末尾挂着她没被看到的话");
+  assert.equal(hasUnseenUserMessage([
+    { role: "assistant", repliedTo: "u1" },
+    { role: "user", id: "u1", text: "来了主人~", readAt: null, unreadResetAt: "2026-10-01T01:29:17.174Z" },
+    { role: "assistant", kind: "poke" },
+  ]), true, "删掉回复退回未读后，夹着一条戳也算");
+});
+
+test("看过了、或者这轮已经接过了，就不挡主动开场", () => {
+  assert.equal(hasUnseenUserMessage([
+    { role: "user", text: "在吗", readAt: "2026-10-01T00:00:00.000Z" },
+  ]), false, "她的话已经被看到过");
+  assert.equal(hasUnseenUserMessage([
+    { role: "user", text: "在吗" },
+    { role: "assistant", text: "在" },
+  ]), false, "ta 已经接过了");
+  assert.equal(hasUnseenUserMessage([{ role: "user", text: "在吗", kind: "poke" }]), false, "只有动作不算说过话");
+  assert.equal(hasUnseenUserMessage([{ role: "user", text: "在吗", recalled: true }]), false, "撤回的话不再等回音");
+  assert.equal(hasUnseenUserMessage([]), false);
+  assert.equal(hasUnseenUserMessage(null), false);
 });

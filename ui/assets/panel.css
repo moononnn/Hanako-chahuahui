@@ -795,6 +795,8 @@ html, body {
   transition: background .12s ease, color .12s ease;
 }
 .msg-actions button:hover { background: var(--accent-soft); color: var(--primary-ink); }
+.msg-actions button.danger { color: var(--blossom); }
+.msg-actions button.danger:hover { background: #fdeff3; color: var(--blossom); }
 .msg-actions svg {
   flex: none;
   width: 13px;
@@ -917,9 +919,11 @@ html, body {
 .message-editor textarea { display: block; width: 100%; min-height: 130px; resize: vertical; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: #fffdf8; color: var(--ink); font: inherit; line-height: 1.7; }
 .message-editor-foot { justify-content: flex-end; margin-top: 12px; }
 .message-editor-foot button { border: 0; border-radius: var(--r-sm); padding: 7px 12px; font: inherit; cursor: pointer; }
-.message-editor-cancel { background: transparent; color: var(--ink-soft); }
+.message-editor-cancel, .message-delete-cancel { background: transparent; color: var(--ink-soft); }
 .message-editor-save { background: var(--primary); color: #fff; }
-.message-editor-save:disabled { opacity: .55; cursor: wait; }
+.message-editor-delete { background: var(--blossom); color: #fff; }
+.message-delete-copy { margin: 0; color: var(--ink-soft); font-size: 13px; line-height: 1.7; }
+.message-editor-save:disabled, .message-editor-delete:disabled { opacity: .55; cursor: wait; }
 
 /* 表情包：单独一条，不套气泡。像手机上甩图那样。 */
 .sticker {

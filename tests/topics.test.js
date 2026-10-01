@@ -12,6 +12,7 @@ import {
   makeTopic,
   markTopicUsed,
   mergeTopics,
+  removeTopicAngleByMessage,
   normalizeTitle,
   parseTopics,
   normalizeFreshness,
@@ -293,6 +294,25 @@ test("聊过的面记在话题上，下次回来得换个延伸", () => {
     "她上次说想换一支细头的眼线笔",
     "眼线手抖可以先用胶带定个边",
   ]);
+});
+
+test("删除回复会从话题延伸账里剪掉它的短文本，旧账按近邻时间兼容", () => {
+  let book = mergeTopics(emptyTopicBook(), [{ title: "她化妆苦手", kind: "worry" }], T0).book;
+  const id = book.topics[0].id;
+  const keptAt = at(1);
+  const deletedAt = at(2);
+  book = markTopicUsed(book, id, keptAt, { angle: "另一条仍保留的延伸", messageId: "kept-message" });
+  book = markTopicUsed(book, id, deletedAt, { angle: "回复里留下的延伸", messageId: "deleted-message" });
+  const cleaned = removeTopicAngleByMessage(book, id, "deleted-message", deletedAt.toISOString());
+  assert.equal(cleaned.removed, 1);
+  assert.deepEqual(usedAnglesFor(cleaned.book.topics[0]), ["另一条仍保留的延伸"]);
+  assert.equal(cleaned.book.topics[0].usedCount, 2, "只抹回复文字，不伪造之前的话题使用状态");
+
+  const legacyBook = {
+    ...book,
+    topics: book.topics.map((topic) => ({ ...topic, angles: [{ text: "旧版延伸", at: deletedAt.toISOString() }] })),
+  };
+  assert.equal(removeTopicAngleByMessage(legacyBook, id, "old-message", deletedAt.toISOString()).removed, 1);
 });
 
 test("同一个面换个说法不重复记（话题能再聊，但不能念同一句）", () => {

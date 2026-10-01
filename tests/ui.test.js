@@ -174,7 +174,34 @@ test("消息操作与投喂入口分开：操作悬停，投喂右键", () => {
   assert.match(panel, /isLatestUserMessage\(m\).*bindMessageActions\(row, m\)/s, "撤回入口只挂最新一条用户消息");
   assert.match(panel, /function isLatestUserMessage\(message, agentId = current\)/);
   assert.match(panel, /function isLatestAssistantMessage\(message, agentId = current\)/);
-  assert.match(panel, /messageRefineEnabled && isLatestAssistantMessage\(message, agentId\)/, "修整入口只给最后一条伙伴回复");
+  assert.match(panel, /messageRefineEnabled && isLatestAssistantMessage\(message, agentId\)/, "修整与删除入口只给最后一条伙伴回复");
+  assert.match(panel, /actionButton\("删除这条回复", "删除", icon\.trash/);
+  assert.match(panel, /actionButton\("删除这条戳一戳", "删除", icon\.trash/, "戳一戳也要能删");
+  assert.match(panel, /isPoke && message\.role === "assistant"/, "戳一戳只给删除，不给重新生成和调整");
+  assert.match(panel, /if \(m\.role === "assistant"\) bindMessageActions\(row, m\)/, "动作行也要能长出操作条");
+  assert.match(panel, /戳一戳不进 ta 的记忆/, "删戳的确认窗要说清不碰记忆");
+  assert.match(panel, /回复当天的日账也会整份清掉，再从剩余聊天重建，重建失败时会暂时缺这一天的日账/, "回复删除要披露整日日账重建及失败后的缺口");
+  assert.match(app, /store\.removeActionMessage\(agentId, messageId\)/, "戳一戳走轻量删除，不碰摘要与日账");
+  assert.match(panel, /async function deleteAssistantMessage\([\s\S]*?message-delete-copy[\s\S]*?全部气泡[\s\S]*?话题本里由多条消息综合提炼的主题可能仍留有概括[\s\S]*?回到未读状态，ta 会在正常节奏里重新看到你的话/);
+  assert.match(panelCss, /\.msg-actions button\.danger[\s\S]*?\.message-editor-delete[\s\S]*?\.message-delete-copy/s);
+  assert.match(panel, /thread\/\$\{encodeURIComponent\(agentId\)\}\/refine\/\$\{encodeURIComponent\(messageId\)\}/, "删除按钮走后端硬删除路由");
+  assert.match(app, /app\.delete\("\/thread\/:agentId\/refine\/:messageId"/);
+  assert.match(app, /store\.removeAssistantReply\(agentId, messageId\)/, "回复归属由存储层统一判断，避免调用方给主动消息误绑原话");
+  assert.match(app, /new Set\(\["pending", "generating"\]\)/, "完成回合 ready 不该锁住删除入口");
+  const deleteStart = app.indexOf('app.delete("/thread/:agentId/refine/:messageId"');
+  const deleteEnd = app.indexOf('app.post("/thread/:agentId/retract/:messageId"', deleteStart);
+  assert.ok(deleteStart >= 0 && deleteEnd > deleteStart);
+  assert.doesNotMatch(app.slice(deleteStart, deleteEnd), /composeReply\(|deliverScheduledReply\(/, "删完不当场生成，只按正常节奏排一次");
+  assert.match(app.slice(deleteStart, deleteEnd), /scheduleReply\(agentId, \{ plan, messageId: result\.repliedTo \}\)/, "退回未读后照正常节奏重新看到");
+  assert.match(app, /hasUnseenUserMessage\(store\.getThread\(agentId\)\.messages\)/, "她的话还没被看到时先读掉再让路");
+  assert.match(app, /proactive\.saw-user/, "读到她的未读要留个记录");
+  assert.match(app.slice(deleteStart, deleteEnd), /voiceCleanupFailed: result\.voiceCleanupFailed/, "语音文件清理状态必须传到前端显示");
+  assert.match(app.slice(deleteStart, deleteEnd), /voiceCleanupFailed/, "语音文件确实删不掉时不能假装没有残留");
+  assert.match(panel, /result\.voiceCleanupFailed \? "回复已删除，但关联语音文件暂未清理/);
+  assert.match(panel, /result\.voiceCleanupFailed \? "回复已删除，但语音文件暂未清理，且聊天窗口刷新失败/);
+  assert.match(app.slice(deleteStart, deleteEnd), /removeTopicAngleByMessage/, "话题延伸里留存的回复短句也要一起剪掉");
+  assert.match(app, /markTopicUsed\(store\.getTopicBook\(agentId\), topic\.id, new Date\(\), \{ angle: text, messageId: stored\.id \}\)/, "新写的话题延伸必须绑定产生它的回复编号");
+  assert.match(app, /message\.role !== "assistant"/);
   assert.match(panel, /lastRow && opts\.bindAssistantActions !== false[\s\S]*isLatestAssistantMessage\(m\)/, "历史伙伴回复不挂修整入口");
   assert.match(panel, /thread\/\$\{encodeURIComponent\(agentId\)\}\/refine\/\$\{encodeURIComponent\(messageId\)\}\/regenerate/);
   assert.match(panel, /thread\/\$\{encodeURIComponent\(agentId\)\}\/refine\/\$\{encodeURIComponent\(message\.id\)\}\/edit/);
@@ -182,9 +209,81 @@ test("消息操作与投喂入口分开：操作悬停，投喂右键", () => {
   assert.match(panelCss, /\.msg-actions \{[^}]*position: fixed;/s);
   assert.match(panelCss, /\.row\.actions-open \.bubble \{/);
   assert.match(settings, /id="msg-refine-switch"/);
+  assert.match(settings, /重新生成、调整或删除最新一轮回复/);
   assert.match(settings, /messageRefine/);
   assert.match(app, /messageRefine: Boolean\(store\.getGlobalSettings\(\)\.messageRefine\)/);
   assert.match(app, /lastAssistant\?\.id !== messageId[\s\S]*只能调整最后一条伙伴回复/, "后端也要挡住旧回复编辑");
+});
+
+test("伙伴戳一戳删除跟随修正开关，关闭时也收起已打开的菜单", () => {
+  const start = panel.indexOf("    function openMessageActions(");
+  const end = panel.indexOf("    function bindMessageActions(", start);
+  assert.ok(start >= 0 && end > start);
+  const menu = {
+    hidden: true, style: {}, buttons: [],
+    replaceChildren() { this.buttons = []; },
+    appendChild(button) { this.buttons.push(button); },
+    append(...buttons) { this.buttons.push(...buttons); },
+  };
+  const makeRow = () => ({ classList: { add() {}, remove() {} } });
+  const controls = new Function("messageActions", `
+    let current = "partner", threadViewSeq = 1, messageRefineEnabled = false;
+    let actionRow = null, actionMessage = null;
+    function keepActions() {}
+    function closeMessageActions() { messageActions.hidden = true; actionRow = null; actionMessage = null; }
+    function placeMessageActions() {}
+    function isLatestAssistantMessage(message) { return message.latest === true; }
+    function actionButton(title, label) { return { title, label, classList: { add() {} } }; }
+    ${panel.slice(start, end)}
+    return { open: openMessageActions, setEnabled(value) { messageRefineEnabled = value; } };
+  `)(menu);
+  for (const kind of ["poke", "action"]) {
+    const row = makeRow();
+    const message = { id: kind, kind, role: "assistant", latest: false };
+    controls.setEnabled(false);
+    controls.open(row, message);
+    assert.equal(menu.hidden, true, `${kind} 关着时没有删除菜单`);
+    controls.setEnabled(true);
+    controls.open(row, message);
+    assert.equal(menu.hidden, false);
+    assert.deepEqual(menu.buttons.map((button) => button.label), ["删除"], "历史戳也可删，但不提供编辑和重新生成");
+    controls.setEnabled(false);
+    controls.open(row, message);
+    assert.equal(menu.hidden, true, "同一行已打开的旧菜单也要收掉");
+  }
+  controls.open(makeRow(), { id: "mine", kind: "action", role: "user" });
+  assert.equal(menu.hidden, false, "用户撤回不受修正伙伴开关影响");
+  assert.deepEqual(menu.buttons.map((button) => button.label), ["撤回消息"]);
+  controls.open(makeRow(), { id: "reply", role: "assistant", latest: true });
+  assert.equal(menu.hidden, true, "普通伙伴回复关着时也无菜单");
+  controls.setEnabled(true);
+  controls.open(makeRow(), { id: "old-reply", role: "assistant", latest: false });
+  assert.equal(menu.hidden, true, "普通旧回复仍不提供修正");
+  controls.open(makeRow(), { id: "reply", role: "assistant", latest: true });
+  assert.deepEqual(menu.buttons.map((button) => button.label), ["重新生成", "编辑", "删除"]);
+  assert.match(panel, /messageRefineEnabled = Boolean\(data\.messageRefine\);\s*if \(!messageRefineEnabled && actionMessage\?\.role === "assistant"\) closeMessageActions\(\);/, "设置轮询关闭开关时立即收旧菜单");
+});
+
+test("删除确认入口和后台都遵守修正开关", async () => {
+  const start = panel.indexOf("    async function deleteAssistantMessage(");
+  const end = panel.indexOf("    function openMessageEditor(", start);
+  assert.ok(start >= 0 && end > start);
+  let status = "";
+  const remove = new Function("setStatus", `
+    const current = "partner", threadViewSeq = 1, messageRefineEnabled = false;
+    function closeMessageActions() {}
+    ${panel.slice(start, end)}
+    return deleteAssistantMessage;
+  `)((text) => { status = text; });
+  await remove("partner", "poke");
+  assert.match(status, /修正伙伴回复/, "关闭时直接停下，不创建确认窗或发送删除请求");
+  const startRoute = app.indexOf('app.delete("/thread/:agentId/refine/:messageId"');
+  const endRoute = app.indexOf('app.post("/thread/:agentId/retract/:messageId"', startRoute);
+  assert.ok(startRoute >= 0 && endRoute > startRoute);
+  const route = app.slice(startRoute, endRoute);
+  assert.match(route, /if \(!store\.getGlobalSettings\(\)\.messageRefine\)/);
+  assert.match(panel.slice(start, end), /message-editor-delete"\)\.addEventListener\("click", async \(event\) => \{\s*if \(!messageRefineEnabled\)/, "确认窗已打开后关闭开关，确认按钮也不能发删除请求");
+  assert.ok(route.indexOf("if (!store.getGlobalSettings().messageRefine)") < route.indexOf("store.removeActionMessage"), "后台开关校验必须先于删除动作");
 });
 
 test("表情包导入：点击添加后立即进入导入页，来源读不到要讲明白并给重试", () => {
@@ -489,15 +588,19 @@ test("设置页分成通用设置与伙伴管理，并提供移出和放回入�
   assert.match(settings, /role="tablist"/);
   assert.match(settings, /aria-selected="true"/);
   assert.match(settings, /id="removed-entry"/);
-  assert.match(settings, /确认移出/);
+  assert.match(settings, /只移出，内容留着/);
   assert.match(settings, /放回列表/);
   assert.match(settings, /settings\/partner\/\$\{encodeURIComponent\(agentId\)\}\/hide/);
   assert.match(settings, /settings\/partner\/\$\{encodeURIComponent\(partner\.id\)\}\/unhide/);
+  assert.match(settings, /settings\/partner\/\$\{encodeURIComponent\(agentId\)\}\/purge/);
   assert.match(app, /filter\(\(row\) => !store\.isPartnerHidden\(row\.id\)\)/);
   assert.match(app, /hiddenPartners: hidden/);
   assert.match(app, /unavailable = false/);
   assert.match(app, /app\.post\("\/settings\/partner\/:agentId\/hide"/);
   assert.match(app, /app\.post\("\/settings\/partner\/:agentId\/unhide"/);
+  assert.match(app, /app\.post\("\/settings\/partner\/:agentId\/purge"/);
+  assert.match(app, /purgePartnerAttachments/);
+  assert.match(app, /pruneStickerUsage/);
   assert.match(panel, /currentWasRemoved[\s\S]*?partners\[0\]\?\.id[\s\S]*?showNoPartner\(\)/, "聊天窗开着时移出当前伙伴，也要立刻切走");
   assert.match(settings, /globalSaveChain[\s\S]*?patch\.globalGate[\s\S]*?globalSettings\.globalGate/, "全局设置要串行保存并在执行时合并嵌套字段");
   assert.match(settings, /if \(currentId === agentId\) openPartner\(agentId, "contact"\)/, "旧伙伴的保存回包不能切走当前选择");
@@ -827,7 +930,7 @@ test("自己的话只突出未读，已读收起且状态仍查得到", () => {
   const fn = new Function(`${panel.slice(start, end + 6)}; return readUserIds;`)();
 
   const u = (id, extra = {}) => ({ id, role: "user", text: "在吗", ...extra });
-  const a = (id) => ({ id, role: "assistant", text: "在" });
+  const a = (id, repliedTo = null) => ({ id, role: "assistant", text: "在", ...(repliedTo ? { repliedTo } : {}) });
 
   assert.deepEqual([...fn([])], [], "空的不出错");
   assert.deepEqual([...fn([u("u1")])], [], "刚发出去、ta还没看：未读");
@@ -836,7 +939,17 @@ test("自己的话只突出未读，已读收起且状态仍查得到", () => {
     ["u1"],
     "后端落了 readAt 才算已读（刷新也在）",
   );
-  assert.deepEqual([...fn([u("u1"), a("a1")])], ["u1"], "老记录没 readAt：回都回了，补成已读");
+  assert.deepEqual([...fn([u("u1"), a("a1")])], ["u1"], "旧记录没有 repliedTo 时按最近一条用户消息兼容");
+  assert.deepEqual(
+    [...fn([u("u1", { unreadResetAt: "2026-09-30T14:00:00.000Z" }), a("a1")])],
+    [],
+    "删除后恢复未读，不能被其他旧式助手气泡误盖回已读",
+  );
+  assert.deepEqual(
+    [...fn([u("u1"), u("u2"), a("a2", "u2")])],
+    ["u2"],
+    "新记录按 repliedTo 精确对应，后一句的回复不能把前一句盖成已读",
+  );
   assert.deepEqual([...fn([u("u1"), a("a1"), u("u2")])], ["u1"], "后一句还搁着，不能跟着前一句一起算已读");
   assert.deepEqual(
     [...fn([u("u1"), { id: "p1", role: "assistant", kind: "poke", text: "戳了戳你" }, u("u2"), a("a2")])].sort(),
@@ -1191,7 +1304,9 @@ test("伙伴每轮都能按性格安静收尾，且异步排期不把这个结�
   assert.match(app, /store\.setPendingReply\(agentId, \{[\s\S]{0,160}?mode: `live-\$\{plan\.mode\}`[\s\S]{0,160}?messageId: stored\.id/, "实时生成启动前也要落恢复凭证");
   assert.match(app, /async function recoverPendingReplies\(\)/, "重启后要恢复挂起的回复");
   assert.match(app, /const tail = messages\.slice\(lastAssistant \+ 1\)\.filter\(\(row\) => row\?\.role === "user"\)/, "旧排期只看伙伴最近一次回复后的尾部消息");
-  assert.match(app, /tail\.find\(\(row\) => !row\.readAt && !row\.recalled\)/, "旧排期恢复要锚定尾部最早未读用户消息");
+  assert.match(app, /tail\.find\(\(row\) => !row\.readAt && !row\.unreadResetAt && !row\.recalled\)/, "删除后明确恢复未读的原话不能被旧账恢复流程自动重回");
+  assert.match(app, /reply\.recovered\.unread-reset/, "旧排期如果还指着被删除的原话，要清掉而不是重发");
+  assert.match(panel, /if \(m\.proactive \|\| m\.nudge \|\| \["action", "tavern-opening"\]\.includes\(m\.kind\)\) continue;[\s\S]{0,120}?if \(m\.repliedTo\)/, "主动消息即使带脏 repliedTo 也不能把用户原话算已读");
   assert.match(app, /repliedTo === targetMessageId/, "恢复前要识别已落盘的同一条回复，避免关机时重复生成");
   assert.match(app, /repliedTo: pending\?\.messageId \?\? null/, "异步恢复落盘时要保留回复目标，幂等判断才有依据");
   assert.match(app, /threadGenerations\.set\(agentId, threadGeneration\(agentId\) \+ 1\)/, "清空聊天要让旧回包失效");
@@ -1656,4 +1771,21 @@ test("居中浮层按内容定宽，别被 left:50% 砍成半屏", () => {
   assert.match(settingsCss, /\.toast \{[^}]*max-width: min\(420px, calc\(100vw - 32px\)\);/s);
   assert.match(settingsCss, /\.toast \{[^}]*text-wrap: balance;/s, "多行时不要让末行只剩一个字");
   assert.match(panelCss, /\.status-line \{[^}]*width: max-content;/s, "聊天窗状态条同一个坑，一起治");
+});
+
+test("移出 / 删除：当场选可逆性，彻底删除要再确认一次并写清后果", () => {
+  assert.match(settings, /remove\.textContent = "移出 \/ 删除"/);
+  assert.match(settings, /选一种方式/);
+  assert.match(settings, /id="remove-purge-note"/, "两种方式的后果要同时摆出来让人选");
+  assert.match(settings, /id="confirm-remove">只移出，内容留着</);
+  assert.match(settings, /id="confirm-purge">彻底删除</);
+  assert.match(settings, /id="purge-modal"/);
+  assert.match(settings, /id="confirm-purge-final">我确定，删掉</);
+  assert.match(settings, /ta 在 Hana 里不会被动到/, "只删茶话会这本账，Hana 本体不动");
+  assert.match(settings, /这个动作不能撤回/);
+  assert.match(settings, /以后再请同一位，是重新认识/);
+  assert.match(settings, /会删掉：聊天记录、记忆/);
+  assert.match(settings, /closeModal\("remove-modal", false\);\s*openModal\("purge-modal"\)/, "第二层窗接在第一层之后，不能叠着两层");
+  // 弹窗操作栏：两个按钮不同音量、不折行，也不被按钮自己的 margin-auto 拆到两头
+  assert.match(settingsCss, /\.modal-foot \.primary-button, \.modal-foot \.soft-button, \.modal-foot \.danger-button \{[^}]*flex: none;[^}]*white-space: nowrap;/s);
 });
