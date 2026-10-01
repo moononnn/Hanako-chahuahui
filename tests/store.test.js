@@ -130,6 +130,174 @@ test("撤回未读消息会从聊天流移除，且不会误删其他消息", ()
   assert.deepEqual(store.getThread("nova").messages.map((row) => row.id), [second.id]);
 });
 
+test("删除伙伴回复会硬删整轮内容；最后一条关联回复删掉后只把原用户消息恢复未读", () => {
+  const { store, dir } = freshStore();
+  const source = store.appendMessage("nova", { role: "user", text: "我不懂这个梗", at: "2026-09-30T14:00:00.000Z", readAt: "2026-09-30T14:00:30.000Z" });
+  const other = store.appendMessage("nova", { role: "user", text: "另一条消息", at: "2026-09-30T14:01:00.000Z", readAt: "2026-09-30T14:01:30.000Z" });
+  const first = store.appendMessage("nova", { role: "assistant", at: "2026-09-30T14:02:00.000Z", repliedTo: source.id, text: "第一条", bubbles: ["第一条", "第二条"] });
+  const second = store.appendMessage("nova", { role: "assistant", at: "2026-09-30T14:03:00.000Z", repliedTo: source.id, text: "补充回复" });
+  const otherReply = store.appendMessage("nova", { role: "assistant", at: "2026-09-30T14:04:00.000Z", repliedTo: other.id, text: "另一条回复" });
+  store.writeMemory("nova", {
+    profile: { text: "包含被删回复的档案", updatedAt: "2026-09-30T14:05:00.000Z" },
+    facts: [{ fact: "回复中的事实", source: first.id }],
+    ledger: [{ day: "2026-09-30", text: "当天摘要" }, { day: "2026-09-29", text: "保留的旧日账" }],
+    archive: [
+      { id: "affected", from: first.at, to: second.at, count: 2, text: "包含回复的摘要" },
+      { id: "later", from: second.at, to: otherReply.at, count: 2, text: "后续摘要" },
+    ],
+  });
+  const favorite = store.saveFavorite({ agentId: "nova", messageId: first.id, kind: "text", text: first.text });
+  const exceptionId = `reply.advice-style|${first.id}`;
+  store.savePartnerAdaptation("nova", {
+    exceptions: [{ id: exceptionId, behavior: "reply.advice-style", resultMessageId: first.id, outcome: "committed", committedAt: first.at }],
+    feedbackEvents: [{ id: "feedback-for-deleted-reply", exceptionId, sourceMessageId: other.id, lifeDay: "2026-09-30", polarity: "positive" }],
+    habitChanges: [{ key: "reply.advice-style", description: "测试习惯", state: "emerging", exceptionIds: [exceptionId] }],
+  });
+
+  const firstDelete = store.removeAssistantReply("nova", first.id, { at: "2026-09-30T14:02:30.000Z" });
+  assert.equal(firstDelete.message.id, first.id);
+  assert.equal(firstDelete.restoredUnread, false, "同一用户消息还留着一条回复时不提前恢复未读");
+  assert.equal(store.getThread("nova").messages.some((row) => row.id === first.id), false, "整条记录连同所有分条气泡一并移除");
+  assert.equal(store.getThread("nova").messages.find((row) => row.id === source.id).readAt, "2026-09-30T14:00:30.000Z");
+  assert.equal(firstDelete.memoryCleanup.archiveEntries, 2, "含回复的摘要与后续待重建摘要一并清出，避免重复或残留");
+  assert.deepEqual(store.readMemory("nova").archive, []);
+  assert.deepEqual(store.readMemory("nova").ledger.map((row) => row.day), ["2026-09-29"], "对应生活日的合并摘要清除，其他日期保留");
+  assert.equal(store.readMemory("nova").profile.text, "", "无法按单条定位的关系档案先清空，稍后从剩余消息重建");
+  assert.equal(store.readMemory("nova").facts.length, 0, "回复直接来源的事实一并清掉");
+  const adaptation = store.getPartnerAdaptation("nova");
+  assert.equal(adaptation.exceptions.some((row) => row.resultMessageId === first.id), false, "异常行为账不再引用被删回复");
+  assert.equal(adaptation.feedbackEvents.length, 0, "只归属于被删回复的反馈记录一并清掉");
+  assert.equal(adaptation.habitChanges[0].state, "reverted", "没有其他支撑事件的习惯退回");
+  assert.equal(store.removeFavoritesByMessage("nova", first.id), 1);
+  assert.equal(store.getFavorite(favorite.id), null);
+
+  const lastDelete = store.removeAssistantReply("nova", second.id, { at: "2026-09-30T14:03:30.000Z" });
+  assert.equal(lastDelete.restoredUnread, true);
+  const thread = createStore(dir).getThread("nova");
+  const keptSource = thread.messages.find((row) => row.id === source.id);
+  assert.equal(keptSource.text, "我不懂这个梗", "用户原消息保留");
+  assert.equal(keptSource.readAt, null, "伙伴回复都删除后清掉已读时间");
+  assert.equal(keptSource.unreadResetAt, "2026-09-30T14:03:30.000Z", "保留明确的未读状态，避免旧助手气泡误盖回已读");
+  assert.equal(thread.messages.some((row) => row.id === second.id), false);
+  assert.equal(thread.messages.some((row) => row.id === otherReply.id), true, "其他用户消息的回复不受影响");
+  assert.equal(thread.messages.find((row) => row.id === other.id).readAt, "2026-09-30T14:01:30.000Z");
+  assert.equal(store.removeAssistantReply("nova", source.id), null, "不能用这个入口删除用户消息");
+});
+
+test("删除回复对应的适应支撑事件后，习惯状态按剩余证据重新核算", () => {
+  const { store } = freshStore();
+  const source = store.appendMessage("nova", { role: "user", text: "希望先听安慰", at: "2026-09-30T10:00:00.000Z" });
+  const reply = store.appendMessage("nova", { role: "assistant", repliedTo: source.id, text: "安慰回复", at: "2026-09-30T10:01:00.000Z" });
+  const behavior = "reply.advice-style";
+  const removedId = `${behavior}|${reply.id}`;
+  const exceptions = [
+    { id: "reply.advice-style|old-1", behavior, guideIds: ["guide"], resultMessageId: "old-result-1", outcome: "committed", committedAt: "2026-09-20T10:00:00.000Z", lifeDay: "2026-09-20" },
+    { id: "reply.advice-style|old-2", behavior, guideIds: ["guide"], resultMessageId: "old-result-2", outcome: "committed", committedAt: "2026-09-21T10:00:00.000Z", lifeDay: "2026-09-21" },
+    { id: removedId, behavior, guideIds: ["guide"], resultMessageId: reply.id, outcome: "committed", committedAt: reply.at, lifeDay: "2026-09-30" },
+  ];
+  store.saveUserAdaptation({
+    guides: [{ id: "guide", meaning: "先安慰再建议", kind: "preference", scope: "user-wide", origin: "explicit", status: "active", claims: [{ target: behavior, effect: "prefer", value: "comfort-first" }] }],
+  });
+  store.savePartnerAdaptation("nova", {
+    exceptions,
+    feedbackEvents: [
+      { id: "feedback-1", exceptionId: exceptions[0].id, type: "explicit-like", polarity: "positive", sourceMessageId: "feedback-source-1", lifeDay: "2026-09-20", at: "2026-09-20T12:00:00.000Z" },
+      { id: "feedback-2", exceptionId: exceptions[1].id, type: "explicit-like", polarity: "positive", sourceMessageId: "feedback-source-2", lifeDay: "2026-09-21", at: "2026-09-21T12:00:00.000Z" },
+      { id: "feedback-3", exceptionId: removedId, type: "explicit-like", polarity: "positive", sourceMessageId: "feedback-source-3", lifeDay: "2026-09-30", at: "2026-09-30T12:00:00.000Z" },
+    ],
+    habitChanges: [{ key: behavior, description: "先安慰再建议", state: "emerging", guideIds: ["guide"], exceptionIds: exceptions.map((row) => row.id) }],
+  });
+
+  store.removeAssistantReply("nova", reply.id);
+  assert.equal(store.getPartnerAdaptation("nova").habitChanges.some((row) => row.key === behavior), false, "剩余两次不够支撑习惯，不能继承删除前的 emerging 状态");
+  assert.equal(store.getUserAdaptation().guides[0].status, "active", "用户原话来源的全局 guide 保留，只重算行为聚合状态");
+});
+
+test("删除伙伴回复正好落在已读水位时，水位退回原消息且清空已读时间", () => {
+  const { store } = freshStore();
+  const source = store.appendMessage("nova", { role: "user", text: "原消息", at: "2026-09-30T14:00:00.000Z" });
+  const reply = store.appendMessage("nova", { role: "assistant", repliedTo: source.id, text: "伙伴回复", at: "2026-09-30T14:01:00.000Z" });
+  store.markRead("nova", { throughId: reply.id, at: "2026-09-30T14:02:00.000Z" });
+
+  store.removeAssistantReply("nova", reply.id);
+  const thread = store.getThread("nova");
+  assert.equal(thread.readThroughId, source.id);
+  assert.equal(thread.readThroughAt, null);
+});
+
+test("删除时间戳损坏的回复时清空无法定位来源的日账", () => {
+  const { store } = freshStore();
+  const source = store.appendMessage("nova", { role: "user", text: "那天说过的话", at: "2026-09-29T10:00:00.000Z" });
+  const reply = store.appendMessage("nova", { role: "assistant", repliedTo: source.id, text: "需要删除的回复", at: "not-a-date" });
+  store.writeMemory("nova", {
+    ...store.readMemory("nova"),
+    ledger: [{ day: "2026-09-29", text: "可能包含该回复的日账" }, { day: "2026-09-28", text: "另一天的日账" }],
+  });
+
+  store.removeAssistantReply("nova", reply.id);
+  assert.deepEqual(store.readMemory("nova").ledger, [], "时间坏掉时不能证明哪一天的日账安全，保守清空而不留泄漏");
+});
+
+test("删除遇到缺少时间范围的旧摘要时整份失效，原始聊天仍可重新整理", () => {
+  const { store } = freshStore();
+  const source = store.appendMessage("nova", { role: "user", text: "原话保留", at: "2026-09-30T14:00:00.000Z" });
+  const reply = store.appendMessage("nova", { role: "assistant", repliedTo: source.id, text: "旧摘要里会提到的回复", at: "2026-09-30T14:01:00.000Z" });
+  store.markRolledThrough("nova", reply.id);
+  store.writeMemory("nova", { archive: [{ id: "legacy", text: "可能含有被删回复的旧摘要" }] });
+
+  const removed = store.removeAssistantReply("nova", reply.id);
+  const thread = store.getThread("nova");
+  assert.equal(removed.memoryCleanup.archiveEntries, 1);
+  assert.deepEqual(store.readMemory("nova").archive, [], "无法证明安全的旧摘要不能继续带进提示词");
+  assert.equal(thread.rolledThroughId, null);
+  assert.equal(thread.rolledThroughSeq, null);
+  assert.deepEqual(store.pendingMessages("nova").map((row) => row.id), [source.id], "用户原话仍在原始记录中，可按原规则重新整理");
+});
+
+test("删除伙伴主动消息不会误把前面的用户原话当成回复对象", () => {
+  const { store } = freshStore();
+  const source = store.appendMessage("nova", { role: "user", text: "我还没收到回应", readAt: "2026-09-30T14:00:30.000Z" });
+  const proactive = store.appendMessage("nova", { role: "assistant", proactive: true, repliedTo: source.id, text: "我刚想起一个话题" });
+  const removed = store.removeAssistantReply("nova", proactive.id);
+  assert.equal(removed.repliedTo, null);
+  assert.equal(removed.restoredUnread, false);
+  assert.equal(store.getThread("nova").messages.find((row) => row.id === source.id).readAt, "2026-09-30T14:00:30.000Z");
+});
+
+test("删掉一条戳一戳只动聊天账，不碰记忆", () => {
+  const { store } = freshStore();
+  const source = store.appendMessage("nova", { role: "user", text: "在吗", at: "2026-10-01T10:00:00.000Z" });
+  store.writeMemory("nova", {
+    ...store.readMemory("nova"),
+    ledger: [{ day: "2026-10-01", text: "这天的日账" }],
+    archive: [{ id: "a1", from: "2026-10-01T00:00:00.000Z", to: "2026-10-01T23:59:59.000Z", text: "摘要" }],
+  });
+  const poke = store.appendMessage("nova", { role: "assistant", kind: "poke", text: "戳了戳你", at: "2026-10-01T10:01:00.000Z" });
+  store.markRead("nova", { throughId: poke.id, at: "2026-10-01T10:02:00.000Z" });
+
+  const removed = store.removeActionMessage("nova", poke.id);
+  assert.equal(removed.id, poke.id);
+  const thread = store.getThread("nova");
+  assert.equal(thread.messages.some((row) => row.id === poke.id), false);
+  assert.equal(thread.readThroughId, source.id, "水位退回前一条");
+  assert.equal(thread.readThroughAt, null);
+  assert.equal(store.readMemory("nova").ledger.length, 1, "日账不该被一条戳牵连");
+  assert.equal(store.readMemory("nova").archive.length, 1, "摘要不该被一条戳牵连");
+});
+
+test("删戳不认非动作消息，也不要求是最后一条", () => {
+  const { store } = freshStore();
+  const user = store.appendMessage("nova", { role: "user", text: "在吗" });
+  const poke = store.appendMessage("nova", { role: "assistant", kind: "poke", text: "戳" });
+  const reply = store.appendMessage("nova", { role: "assistant", text: "在呢" });
+  assert.equal(store.removeActionMessage("nova", user.id), null, "用户消息不走这条路");
+  assert.equal(store.removeActionMessage("nova", reply.id), null, "普通回复不走这条路");
+  const removed = store.removeActionMessage("nova", poke.id);
+  assert.equal(removed.id, poke.id, "夹在中间的戳也能删（它不进上下文）");
+  assert.equal(store.getThread("nova").messages.some((row) => row.id === reply.id), true);
+  assert.equal(store.removeActionMessage("nova", poke.id), null, "删过的再删返回 null");
+});
+
 test("清聊天不清记忆", () => {
   const { store } = freshStore();
   store.appendMessage("nova", { role: "user", text: "在吗" });
@@ -477,6 +645,40 @@ test("移出伙伴只隐藏清单，聊天、记忆和设置都保留；放回�
   assert.deepEqual(hiddenAfterRestart.unhidePartner("probe"), []);
   assert.deepEqual(hiddenAfterRestart.unhidePartner("probe"), [], "重复放回不报错");
   assert.equal(createStore(dir).isPartnerHidden("probe"), false);
+});
+
+test("彻底删除：茶话会这边翻不出任何痕迹，本地角色资料也不留", () => {
+  const { store, dir } = freshStore();
+  store.appendMessage("probe", { role: "assistant", text: "别把这句弄丢" });
+  store.upsertLedger("probe", "2026-09-12", "聊过一天");
+  store.setPartnerSettings("probe", { tier: "rare" });
+  store.saveFavorite({ agentId: "probe", partnerName: "探针", messageId: "m-1", kind: "text", text: "留着这句", at: "2026-09-12T05:00:00.000Z" });
+  store.hidePartner("probe");
+  store.setLastPartner("probe");
+  // 本地角色（酒馆邀请进来的）本体也要一起没。
+  store.importTavernPartner({
+    source: { appId: "hanabrew-v2-dev", cardId: "探针.png", format: "png" },
+    character: { name: "探针", description: "测试角色", personaNotes: [{ label: "性格", text: "话少" }] },
+  });
+  const localId = store.listLocalPartners()[0].id;
+  assert.ok(localId, "本地角色应已导入");
+  store.appendMessage(localId, { role: "assistant", text: "酒馆来的那句" });
+
+  const result = store.purgePartner("probe");
+  assert.equal(result.favorites, 1, "收藏里属于这位的也要删");
+  const reopened = createStore(dir);
+  assert.equal(fs.existsSync(path.join(dir, "v2", "partners", "probe")), false, "记忆目录不留");
+  assert.equal(fs.existsSync(path.join(dir, "v2", "threads", "probe.json")), false, "聊天文件不留");
+  assert.equal(reopened.isPartnerHidden("probe"), false, "不该继续挂在隐藏名单里");
+  assert.equal(reopened.getLastPartner(), null, "刚刚在看的那位不能悬空");
+  assert.equal(reopened.listFavorites().some((row) => row.agentId === "probe"), false);
+
+  store.purgePartner(localId);
+  const afterLocal = createStore(dir);
+  assert.equal(afterLocal.listLocalPartners().length, 0, "酒馆角色资料本体不留");
+  assert.equal(fs.existsSync(path.join(dir, "v2", "threads", `${localId}.json`)), false);
+  assert.equal(afterLocal.getPersonaCache(localId), null);
+  assert.throws(() => store.purgePartner("../外面"), /伙伴|编号|不合法/);
 });
 
 test("重开一次 store，之前写的东西还在（重启不丢）", () => {

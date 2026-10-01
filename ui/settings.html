@@ -55,7 +55,7 @@
       <article class="setting-card compact">
         <div class="setting-copy">
           <h3>修整伙伴回复</h3>
-          <p>打开后，悬停在伙伴气泡上可以重新生成或调整这一条。默认关闭，不影响平常聊天。</p>
+          <p>打开后，悬停在伙伴气泡上可以重新生成、调整或删除最新一轮回复。默认关闭，不影响平常聊天。</p>
         </div>
         <button class="switch" id="msg-refine-switch" type="button" role="switch" aria-checked="false">
           <span class="track"><span></span></span><span class="switch-label">不显示</span>
@@ -145,8 +145,8 @@
       </article>
       <article class="setting-card compact">
         <div class="setting-copy">
-          <h3>按生活节拍主动关心</h3>
-          <p>如果你明显晚于自己的平时节奏还没有出现，伙伴最多一天轻轻问一次，多个伙伴不会重复提醒。</p>
+          <h3>允许伙伴主动来找你</h3>
+          <p>全局总闸，默认关着。关着的时候没有任何伙伴会主动出现，聊天里也不会突然蹦出谁；打开之后，仍由频率档位、静默时段和你逐位的开关共同管着。</p>
         </div>
         <button class="switch" id="rhythm-proactive-switch" type="button" role="switch" aria-checked="false">
           <span class="track"><span></span></span><span class="switch-label">关闭</span>
@@ -272,9 +272,24 @@
       <div class="modal-head"><h2 id="remove-title">移出伙伴</h2><button class="icon-button" data-close-modal="remove-modal" aria-label="关闭">×</button></div>
       <div class="modal-body">
         <p id="remove-copy"></p>
-        <div class="safe-note">聊天、记忆和设置都会保留。以后放回列表，原来的东西还在。</div>
+        <div class="safe-note">只移出：聊天、记忆和设置都会保留，以后放回列表，原来的东西还在。</div>
+        <div class="safe-note" id="remove-purge-note">彻底删除：茶话会这边关于 ta 的一切都会抹掉，回不来。</div>
       </div>
-      <div class="modal-foot"><button class="danger-button" id="confirm-remove">确认移出</button></div>
+      <div class="modal-foot">
+        <button class="primary-button" id="confirm-remove">只移出，内容留着</button>
+        <button class="danger-button" id="confirm-purge">彻底删除</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-layer" id="purge-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="purge-title">
+      <div class="modal-head"><h2 id="purge-title">彻底删除</h2><button class="icon-button" data-close-modal="purge-modal" aria-label="关闭">×</button></div>
+      <div class="modal-body">
+        <p id="purge-copy"></p>
+        <div class="safe-note">会删掉：聊天记录、记忆（日账与关系档案）、关系进度、话题本、习惯与适应账、自画像与草稿、朗读音频、头像、收藏和 ta 在茶话会的全部设置。这个动作不能撤回。</div>
+      </div>
+      <div class="modal-foot"><button class="danger-button" id="confirm-purge-final">我确定，删掉</button></div>
     </div>
   </div>
 
@@ -987,8 +1002,8 @@
       if (await saveGlobal({ rhythmStyleEnabled: next }, next ? "以后会参考表达习惯" : "已关闭表达习惯参考")) paintGlobal();
     });
     document.getElementById("rhythm-proactive-switch").addEventListener("click", async () => {
-      const next = globalSettings.rhythmProactiveEnabled === false;
-      if (await saveGlobal({ rhythmProactiveEnabled: next }, next ? "允许按节拍主动关心" : "已关闭按节拍主动关心")) paintGlobal();
+      const next = globalSettings.rhythmProactiveEnabled !== true;
+      if (await saveGlobal({ rhythmProactiveEnabled: next }, next ? "以后伙伴会主动来找你" : "所有伙伴都不会再主动出现")) paintGlobal();
     });
     function rNode(tag, className, text) {
       const node = document.createElement(tag);
@@ -1299,10 +1314,10 @@
       const remove = document.createElement("button");
       remove.type = "button";
       remove.className = "remove-link";
-      remove.textContent = "移出茶话会";
+      remove.textContent = "移出 / 删除";
       remove.addEventListener("click", () => {
         pendingRemoveId = agentId;
-        document.getElementById("remove-copy").textContent = `要把「${partner.name}」从茶话会的伙伴列表和主动联系中移出吗？这不会影响 Hana 里的伙伴。`;
+        document.getElementById("remove-copy").textContent = `要把「${partner.name}」从茶话会移出去吗？选一种方式。`;
         openModal("remove-modal");
       });
       hero.append(heroCopy, remove);
@@ -2688,6 +2703,46 @@
       }
     });
 
+    document.getElementById("confirm-purge").addEventListener("click", () => {
+      const agentId = pendingRemoveId;
+      const partner = partners.find((p) => p.id === agentId);
+      if (!agentId || !partner) return;
+      document.getElementById("purge-copy").textContent = `确定要彻底删掉「${partner.name}」吗？ta 在 Hana 里不会被动到，只是你们在茶话会的过往没了。以后再请同一位，是重新认识。`;
+      closeModal("remove-modal", false);
+      openModal("purge-modal");
+    });
+
+    document.getElementById("confirm-purge-final").addEventListener("click", async () => {
+      const agentId = pendingRemoveId;
+      const partner = partners.find((p) => p.id === agentId);
+      if (!agentId || !partner) return;
+      const button = document.getElementById("confirm-purge-final");
+      button.disabled = true; button.textContent = "正在删…";
+      try {
+        await api("POST", `settings/partner/${encodeURIComponent(agentId)}/purge`);
+        partners = partners.filter((p) => p.id !== agentId);
+        hiddenPartners = hiddenPartners.filter((p) => p.id !== agentId);
+        pendingRemoveId = null;
+        partnerRequestSeq += 1;
+        currentId = partners[0]?.id ?? null;
+        closeModal("purge-modal", false);
+        paintPartnerList();
+        paintRemovedPartners();
+        if (currentId) {
+          await openPartner(currentId);
+          document.querySelector(".partner-pick.on")?.focus();
+        } else {
+          el.partnerBody.replaceChildren();
+        }
+        say(`「${partner.name}」在茶话会这边已经删干净了`, "ok");
+      } catch (error) {
+        say(`没删掉：${error.message}`, "err");
+      } finally {
+        button.disabled = false;
+        button.textContent = "我确定，删掉";
+      }
+    });
+
     document.getElementById("confirm-remove").addEventListener("click", async () => {
       const agentId = pendingRemoveId;
       const partner = partners.find((p) => p.id === agentId);
@@ -2712,7 +2767,7 @@
         }
         say(`已移出「${partner.name}」`, "ok");
       } catch (error) { say(`移出失败：${error.message}`, "err"); }
-      finally { button.disabled = false; button.textContent = "确认移出"; }
+      finally { button.disabled = false; button.textContent = "只移出，内容留着"; }
     });
 
     function paintRemovedPartners() {

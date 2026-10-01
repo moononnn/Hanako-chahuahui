@@ -8,6 +8,7 @@ import {
   STICKER_USAGE_SCHEMA_VERSION,
   readStickerUsage,
   recordStickerUsage,
+  pruneStickerUsage,
   stickerUsageFile,
 } from "../lib/sticker-usage.js";
 
@@ -41,6 +42,19 @@ test("记录茶话会发送的表情包，字段最小且可重启读取", () =>
     }],
   });
   assert.equal(fs.existsSync(stickerUsageFile(dir)), true);
+});
+
+test("彻底删除一位伙伴时，只剪掉 ta 的表情记录，别人的不动", () => {
+  const dir = tempDir();
+  recordStickerUsage(dir, { stickerId: "stk_001", partnerId: "hanako", sentAt: "2026-09-20T08:46:00.000Z" });
+  recordStickerUsage(dir, { stickerId: "stk_002", partnerId: "ta-other", sentAt: "2026-09-20T09:00:00.000Z" });
+  recordStickerUsage(dir, { stickerId: "stk_003", partnerId: "ta-other", sentAt: "2026-09-20T09:10:00.000Z" });
+
+  assert.equal(pruneStickerUsage(dir, "ta-other"), true);
+  assert.deepEqual(readStickerUsage(dir).events.map((row) => row.stickerId), ["stk_001"]);
+  assert.equal(pruneStickerUsage(dir, "ta-other"), true, "已经没有 ta 的记录时也不报错");
+  assert.equal(readStickerUsage(dir).events.length, 1, "别人的记录不能被剪掉");
+  assert.equal(pruneStickerUsage("", "ta-other"), false);
 });
 
 test("坏记录和空字段静默丢弃，不影响读取", () => {

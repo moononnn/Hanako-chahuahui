@@ -327,7 +327,7 @@
     const voiceStates = new Map();
     /** 聊天窗里要不要给两边挂头像（设置里开的，默认关，跟以前一样） */
     let showMessageAvatars = false;
-    /** 默认关闭：打开后才给伙伴回复显示重新生成/编辑入口。 */
+    /** 默认关闭：打开后才给伙伴回复显示修正入口，戳一戳只提供删除。 */
     let messageRefineEnabled = false;
     /** id → 表情。跟叫法表同源（后端随 /partners 发下来），不在前端另拄一份 */
     let actionEmoji = new Map();
@@ -1794,6 +1794,50 @@
         if (current === agentId && viewSeq === threadViewSeq) setStatus("这条回复换好了");
       } catch (error) { if (current === agentId && viewSeq === threadViewSeq) setStatus(error.message || "这次没生成出新的回复"); }
     }
+    async function deleteAssistantMessage(agentId, messageId, viewSeq = threadViewSeq) {
+      closeMessageActions();
+      if (!messageRefineEnabled) { setStatus("请先打开「修正伙伴回复」再删除"); return; }
+      const target = currentMessages.find((row) => row.id === messageId) ?? null;
+      const isPoke = target?.kind === "poke" || target?.kind === "action";
+      const layer = document.createElement("div");
+      layer.className = "message-editor-layer message-delete-layer";
+      layer.innerHTML = isPoke
+        ? '<div class="message-editor" role="dialog" aria-modal="true" aria-label="删除这条戳一戳"><div class="message-editor-head"><b>删掉这条戳一戳？</b><button type="button" class="message-editor-close" aria-label="关闭">×</button></div><p class="message-delete-copy">这条动作会从茶话会聊天记录里移除。戳一戳不进 ta 的记忆，不会被写进摘要、日账或关系档案，所以删掉它只是把屏幕上这行字擦掉，ta 记得的事不受影响。</p><div class="message-editor-foot"><button type="button" class="message-delete-cancel">取消</button><button type="button" class="message-editor-delete">删掉</button></div></div>'
+        : '<div class="message-editor" role="dialog" aria-modal="true" aria-label="删除这条伙伴回复"><div class="message-editor-head"><b>彻底删除这条回复？</b><button type="button" class="message-editor-close" aria-label="关闭">×</button></div><p class="message-delete-copy">这会从茶话会聊天记录中永久删除这一整轮回复，包括全部气泡、关联语音和收藏。若它已经进入整理摘要，会先清掉可能含有它的摘要；回复当天的日账也会整份清掉，再从剩余聊天重建，重建失败时会暂时缺这一天的日账。话题本里由多条消息综合提炼的主题可能仍留有概括，无法逐条定位到这条回复。原始聊天仍保留，剩余内容会按原有节奏继续整理。你发的原消息会保留；删完它下面所有回复后，会回到未读状态，ta 会在正常节奏里重新看到你的话，可能接着回。</p><div class="message-editor-foot"><button type="button" class="message-delete-cancel">取消</button><button type="button" class="message-editor-delete">彻底删除</button></div></div>';
+      const onKeyDown = (event) => { if (event.key === "Escape") close(); };
+      const close = () => { document.removeEventListener("keydown", onKeyDown); layer.remove(); };
+      document.addEventListener("keydown", onKeyDown);
+      layer.querySelector(".message-editor-close").addEventListener("click", close);
+      layer.querySelector(".message-delete-cancel").addEventListener("click", close);
+      layer.addEventListener("click", (event) => { if (event.target === layer) close(); });
+      layer.querySelector(".message-editor-delete").addEventListener("click", async (event) => {
+        if (!messageRefineEnabled) { setStatus("请先打开「修正伙伴回复」再删除"); return; }
+        const button = event.currentTarget;
+        button.disabled = true;
+        button.textContent = "正在删除…";
+        try {
+          const result = await api("DELETE", `thread/${encodeURIComponent(agentId)}/refine/${encodeURIComponent(messageId)}`);
+          close();
+          try {
+            await reloadCurrentThread(agentId, viewSeq);
+            await loadPartners();
+            if (current === agentId && viewSeq === threadViewSeq) {
+              setStatus(isPoke ? "这条戳一戳已删除" : result.voiceCleanupFailed ? "回复已删除，但关联语音文件暂未清理，可能被系统占用" : result.restoredUnread ? "这轮回复已删除，你的原话回到未读，ta 会重新看到" : "这条回复已删除");
+            }
+          } catch {
+            if (current === agentId && viewSeq === threadViewSeq) {
+              setStatus(result.voiceCleanupFailed ? "回复已删除，但语音文件暂未清理，且聊天窗口刷新失败；重新打开可更新聊天" : "回复已删除，聊天窗口刷新失败，重新打开就能更新");
+            }
+          }
+        } catch (error) {
+          button.disabled = false;
+          button.textContent = "彻底删除";
+          setStatus(error.message || "没删掉，聊天记录还在");
+        }
+      });
+      document.body.appendChild(layer);
+      layer.querySelector(".message-delete-cancel").focus();
+    }
     function openMessageEditor(message, agentId = current, viewSeq = threadViewSeq) {
       closeMessageActions();
       const layer = document.createElement("div");
@@ -1834,6 +1878,7 @@
 
     function openMessageActions(row, message, agentId = current) {
       if (!row || !message?.id || !agentId) return;
+      if (message.role === "assistant" && !messageRefineEnabled) { closeMessageActions(); return; }
       const viewSeq = threadViewSeq;
       keepActions();
       if (actionRow === row && !messageActions.hidden) return;
@@ -1843,13 +1888,23 @@
         back: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>',
         refresh: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14-4L4 9"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14 4l2-2"/><path d="M20 20v-5h-5"/></svg>',
         edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16-.7 4.7L8 20l11-11-4-4L4 16Z"/><path d="m13 6 4 4"/></svg>',
+        trash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="m10 11 0 6"/><path d="m14 11 0 6"/><path d="m5 7 1 13h12l1-13"/><path d="M9 7V4h6v3"/></svg>',
       };
-      if (message.role === "user") {
+      const isPoke = message.kind === "poke" || message.kind === "action";
+      if (isPoke && message.role === "assistant") {
+        // 戳一戳只给「删掉它」：它没内容可改，也不进记忆，更没有「重新生成」这回事。
+        const removePoke = actionButton("删除这条戳一戳", "删除", icon.trash, () => void deleteAssistantMessage(agentId, message.id, viewSeq));
+        removePoke.classList.add("danger");
+        messageActions.appendChild(removePoke);
+      } else if (message.role === "user") {
         messageActions.appendChild(actionButton("撤回这条消息", "撤回消息", icon.back, () => void recallMessage(agentId, message.id, viewSeq)));
       } else if (messageRefineEnabled && isLatestAssistantMessage(message, agentId)) {
+        const removeReply = actionButton("删除这条回复", "删除", icon.trash, () => void deleteAssistantMessage(agentId, message.id, viewSeq));
+        removeReply.classList.add("danger");
         messageActions.append(
           actionButton("重新生成这条回复", "重新生成", icon.refresh, () => void regenerateMessage(agentId, message.id, viewSeq)),
           actionButton("调整这条回复", "编辑", icon.edit, () => openMessageEditor(message, agentId, viewSeq)),
+          removeReply,
         );
       } else return;
       actionRow = row;
@@ -1976,24 +2031,33 @@
       line.textContent = emoji ? `${emoji} ${m.text}` : m.text;
       row.appendChild(line);
       el.stream.appendChild(row);
+      // 伙伴戳过来那一条可以删掉（她自己的那条走撤回）。删除只清聊天账，不碰记忆。
+      if (m.role === "assistant") bindMessageActions(row, m);
       scrollDown();
     }
 
     /**
      * 哪些自己的话已经落到盘上成「已读」了。
-     *
-     * 两种算数：① ta真看到过了（存了 readAt，后端落盘，刷新也在）；
-     * ② 老记录没有 readAt 但后面确实出现过ta的话——回都回了，肯定看过了。
-     * 两个都不占就是未读，照实摆出「未读」两个字。
+     * 新记录按伙伴回复里的 repliedTo 精确对应；旧记录才退回到最近一条用户消息。
+     * 删除回复后 unreadResetAt 会关掉旧记录兜底，避免别的旧气泡把它误盖回已读。
      */
     function readUserIds(list) {
       const out = new Set();
-      let sawAssistant = false;
-      for (let i = list.length - 1; i >= 0; i -= 1) {
+      const answered = new Set();
+      const legacyAnswered = new Set();
+      for (let i = 0; i < list.length; i += 1) {
         const m = list[i];
-        if (!m) continue;
-        if (m.role === "assistant") sawAssistant = true;
-        else if (m.role === "user" && (m.readAt || sawAssistant)) out.add(m.id);
+        if (m?.role !== "assistant" || m.recalled) continue;
+        if (m.proactive || m.nudge || ["action", "tavern-opening"].includes(m.kind)) continue;
+        if (m.repliedTo) {
+          answered.add(String(m.repliedTo));
+          continue;
+        }
+        const previous = list.slice(0, i).findLast((row) => row?.role === "user" && !row.recalled);
+        if (previous?.id && !previous.unreadResetAt) legacyAnswered.add(previous.id);
+      }
+      for (const m of list) {
+        if (m?.role === "user" && (m.readAt || answered.has(m.id) || (!m.unreadResetAt && legacyAnswered.has(m.id)))) out.add(m.id);
       }
       return out;
     }
@@ -2549,6 +2613,7 @@
       // 外观开关跟着轮询走：她在设置里改完，最迟一轮就生效
       showMessageAvatars = Boolean(data.messageAvatars);
       messageRefineEnabled = Boolean(data.messageRefine);
+      if (!messageRefineEnabled && actionMessage?.role === "assistant") closeMessageActions();
       actionEmoji = new Map((data.actionStyles ?? []).map((style) => [style.id, style.emoji]));
       // 账本读到坏文件时后端会把坏的挪走留档，这里告诉她一声，别让数据静默消失
       if (data.dataWarning) {

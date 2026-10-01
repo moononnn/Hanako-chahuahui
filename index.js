@@ -35,9 +35,10 @@ import { buildAmbientContextText, buildDaybookText, daybookHash, daybookQueryTop
 import { spokenClock, timeBlock } from "./lib/clock.js";
 import { askUtility, generateReply, normalizeModelRef, chatModelOptions, visionModelOptions, resolveModelChoice } from "./lib/model.js";
 import { createStore, createDiagnostics } from "./lib/store.js";
+import { createThreadRebuildScheduler } from "./lib/rebuild-queue.js";
 import { protectKey } from "./lib/crypto.js";
 import { listBackgrounds, readBackgroundBytes, writeBackground, removeBackgroundFile, normalizeOpacity, normalizeTone, isBackgroundFile, fileTypeOf } from "./lib/background.js";
-import { recordStickerUsage } from "./lib/sticker-usage.js";
+import { pruneStickerUsage, recordStickerUsage } from "./lib/sticker-usage.js";
 import {
   DEFAULT_CONTEXT,
   buildMemoryBlock,
@@ -212,6 +213,7 @@ import {
   applyProactiveInterval,
   dueNow,
   gateCheck,
+  hasUnseenUserMessage,
   isDirectReplyToProactive,
   isRepeatedPhrasing,
   noteSent,
@@ -269,6 +271,7 @@ import {
   existingTitles,
   markTopicUsed,
   mergeTopics,
+  removeTopicAngleByMessage,
   parseTopics,
   pruneTopics,
   refreshUsedTopics,
@@ -784,6 +787,29 @@ export function apply(ctx) {
     }
   }
 
+  /**
+   * 彻底删除一位伙伴时，把他在聊天里发过的图片附件也带走。
+   * 附件的属主写在同名 .json 里，按属主扫一遍就行，不用反查聊天记录。
+   */
+  function purgePartnerAttachments(agentId) {
+    let removed = 0;
+    let names = [];
+    try { names = fs.readdirSync(attachmentsDir); } catch { return 0; }
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue;
+      const id = name.slice(0, -".json".length);
+      try {
+        const meta = JSON.parse(fs.readFileSync(path.join(attachmentsDir, name), "utf8"));
+        if (String(meta?.agentId ?? "") !== String(agentId)) continue;
+      } catch {
+        continue; // 读不出属主的附件不猜，交给总量闸管
+      }
+      removeAttachment(id);
+      removed += 1;
+    }
+    return removed;
+  }
+
   async function describeImage(modelRef, attachment) {
     const ref = normalizeModelRef(modelRef);
     if (!ref || !attachment?.data) throw new Error("识图模型不可用");
@@ -1158,6 +1184,23 @@ export function apply(ctx) {
     });
     return next;
   }
+
+  /**
+   * 删除之后的记忆重建：延后跑、同一伙伴只留一个。
+   *
+   * 重建里有模型调用（日账、摘要、关系档案），一次几十秒；以前它紧跟删除请求入队，
+   * 她在几十秒内再动一次删除就得排在后面干等，等过头界面上就是一个
+   * "Internal Server Error"（服务端其实已经删完了，只是响应没等到）。
+   * 合并与延后逻辑在 lib/rebuild-queue.js，那里有单测。
+   */
+  const threadRebuild = createThreadRebuildScheduler({
+    run: (agentId, days) => queueMemoryJob(agentId, async () => {
+      for (const day of days) await rebuildLedgerDay(agentId, day);
+      await maybeRollup(agentId);
+      await maybeRefreshProfile(agentId, { force: true });
+    }),
+    onSchedule: ({ agentId, delayMs, days }) => diagnostics({ event: "memory.rebuild.scheduled", agentId, delayMs, days }),
+  });
 
   const askCheap = (systemPrompt, userText, maxTokens, options = {}) => askUtility(ctx, {
     systemPrompt,
@@ -1576,6 +1619,19 @@ export function apply(ctx) {
     return { closed: true, day: lastDay, text: result.text };
   }
 
+  /** 回复删除后，按剩下的聊天记录重建被清理的那一天；失败时旧摘要已清掉，不会继续引用被删内容。 */
+  async function rebuildLedgerDay(agentId, day) {
+    const rows = conversationMessages(store.getThread(agentId).messages).filter((row) => dayKey(row.at) === day);
+    if (!rows.length) return { updated: false, reason: "no-remaining-messages" };
+    const result = await runSummary(askCheap, dailySpec(rows, day, USER_NAME));
+    if (!result.ok) {
+      diagnostics({ event: "memory.ledger.rebuild-after-delete.failed", agentId, day, reason: result.reason });
+      return { updated: false, reason: result.reason };
+    }
+    store.upsertLedger(agentId, day, result.text);
+    return { updated: true };
+  }
+
   /** 把一条主动消息送进她那个窗（她不在也照发，显示未读）。 */
   async function deliverProactive(agentId, { partnerName, topic, hobby, discovery, exception, followup, wakeEcho, sceneEcho }) {
     await loadUserName();
@@ -1725,7 +1781,7 @@ export function apply(ctx) {
       // 旧共同话题仍留在本子里供兼容，不再作为常规主动话题来源。
       store.saveTopicBook(
         agentId,
-        markTopicUsed(store.getTopicBook(agentId), topic.id, new Date(), { angle: text }),
+        markTopicUsed(store.getTopicBook(agentId), topic.id, new Date(), { angle: text, messageId: stored.id }),
       );
     }
     if (shareableDiscovery) {
@@ -2191,6 +2247,15 @@ export function apply(ctx) {
       // 没捏过性格的伙伴算还没入住：这间屋子 ta 还没进门，谈不上"来找她"
       if (!isSettled(agentId)) continue;
       if (hasReplyInFlight(agentId) || autonomousLanes.has(agentId)) continue;
+      // 她的话还挂着没被看到时，先把这句读了。这件事跟「要不要主动」无关：
+      // ta 看她说的话不该被主动总闸挡着，挡住的话那条未读就永远悬在界面上
+      // （删掉回复退回来的未读就是这种）。读完这一轮先不出手，让「看到」和「要不要开口」分开。
+      if (hasUnseenUserMessage(store.getThread(agentId).messages)) {
+        const touched = store.markUserMessagesRead(agentId);
+        if (touched.length) diagnostics({ event: "proactive.saw-user", agentId, touched: touched.length });
+        report.push({ agentId, action: "read-user", touched: touched.length });
+        continue;
+      }
       const settings = store.getPartnerSettings(agentId);
       if (settings.proactiveEnabled === false) continue;
       // 全局主动总闸（默认关）。拦在自省与排点之前：这条线后面全是围着「要发一条」做的活，
@@ -3724,20 +3789,25 @@ export function apply(ctx) {
         diagnostics({ event: "reply.recovered.already-delivered", agentId: partner.id, messageId: targetMessageId });
         continue;
       }
+      if (targetMessageId && messages.find((row) => row?.id === targetMessageId)?.unreadResetAt) {
+        store.clearPendingReplyIf(partner.id, targetMessageId);
+        diagnostics({ event: "reply.recovered.unread-reset", agentId: partner.id, messageId: targetMessageId });
+        continue;
+      }
       const lastAssistant = messages.findLastIndex((row) => row?.role === "assistant");
       const tail = messages.slice(lastAssistant + 1).filter((row) => row?.role === "user");
       let dueAt = Date.parse(pending?.dueAt ?? "");
       let mode = pending?.mode ?? "recovered";
       // 兼容修复前已经挂住的消息：旧账本没有 pendingReply，只能认末尾未读的用户话。
       if (!Number.isFinite(dueAt)) {
-        if (tail.some((row) => !row.readAt && !row.recalled)) {
+        if (tail.some((row) => !row.readAt && !row.unreadResetAt && !row.recalled)) {
           dueAt = Date.now();
           mode = "legacy-recovered";
         }
       }
       if (!Number.isFinite(dueAt)) continue;
       const replyTargetMessageId = targetMessageId
-        ?? tail.find((row) => !row.readAt && !row.recalled)?.id
+        ?? tail.find((row) => !row.readAt && !row.unreadResetAt && !row.recalled)?.id
         ?? null;
       scheduleReplyAt(
         partner.id,
@@ -4798,6 +4868,13 @@ export function apply(ctx) {
 
   try {
     ctx.routes.register((app) => {
+      // 路由里没接住的异常不能就这么变成一个只有一句英文的 500：
+      // 原因写进账本（含方法与路径），界面给一句她能看懂的话。
+      app.onError((error, c) => {
+        diagnostics({ event: "route.failed", method: c.req.method, path: c.req.path, error: describeError(error) });
+        return c.json({ ok: false, error: { message: "这边出了点问题，稍后再试一次" } }, 500);
+      });
+
       // 伙伴级路由共用一扇门，避免某个新入口忘记单独校验 agentId。
       app.use("*", async (c, next) => {
         const match = c.req.path.match(/^\/(?:thread|attachment|voice|settings\/partner|memory|topics|action|knowing|background|backgrounds|sticker|avatar|recognition|persona-review|adaptation)\/([^/]+)/);
@@ -5155,6 +5232,95 @@ export function apply(ctx) {
         }
         diagnostics({ event: "message.refined", agentId, messageId, mode: "regenerate" });
         return c.json({ ok: true, messageId, bubbles: made.bubbles });
+      });
+
+      app.delete("/thread/:agentId/refine/:messageId", async (c) => {
+        const agentId = String(c.req.param("agentId") ?? "").trim();
+        const messageId = String(c.req.param("messageId") ?? "").trim();
+        const startedAt = Date.now();
+        if (!store.getGlobalSettings().messageRefine) return c.json({ ok: false, error: { message: "回复修整入口还没打开" } }, 403);
+
+        try {
+          const result = await queueMemoryJob(agentId, async () => {
+            const thread = store.getThread(agentId);
+            const index = thread.messages.findIndex((row) => row.id === messageId);
+            const message = index >= 0 ? thread.messages[index] : null;
+            if (!message) {
+              return { ok: false, status: 404, message: "这条已经不在聊天记录里了" };
+            }
+            // 戳一戳：只清聊天账，不碰记忆，也不要求“必须是最后一条”（它不进上下文）。
+            if (["poke", "action"].includes(message.kind)) {
+              const removedAction = store.removeActionMessage(agentId, messageId);
+              if (!removedAction) return { ok: false, status: 409, message: "这条已经变了，刷新看看再删" };
+              diagnostics({ event: "action.deleted", agentId, messageId, from: removedAction.role === "user" ? "user" : "partner" });
+              return { ok: true, action: true, messageId };
+            }
+            if (message.role !== "assistant") {
+              return { ok: false, status: 404, message: "这条伙伴回复已经不在聊天记录里了" };
+            }
+            const latest = thread.messages.findLast((row) => row.role === "assistant" && !row.recalled);
+            if (latest?.id !== messageId) {
+              return { ok: false, status: 409, message: "只能删除最后一轮伙伴回复，刷新看看再删" };
+            }
+            const activeTurnStatuses = new Set(["pending", "generating"]);
+            const inFlight = pendingReplies.has(agentId)
+              || deliveringReplies.has(agentId)
+              || autonomousLanes.has(agentId)
+              || [...turns.values()].some((turn) => turn.agentId === agentId && activeTurnStatuses.has(turn.status));
+            if (inFlight) return { ok: false, status: 409, message: "伙伴正在处理消息，等这轮结束后再删哈" };
+
+            const removed = store.removeAssistantReply(agentId, messageId);
+            if (!removed) return { ok: false, status: 409, message: "这条回复已经变了，刷新看看再删" };
+
+            const favoriteCount = store.removeFavoritesByMessage(agentId, messageId);
+            let voiceCleanupFailed = false;
+            let topicAngleCount = 0;
+            if (removed.message.topicId) {
+              const cleaned = removeTopicAngleByMessage(store.getTopicBook(agentId), removed.message.topicId, messageId, removed.message.at);
+              topicAngleCount = cleaned.removed;
+              if (topicAngleCount) store.saveTopicBook(agentId, cleaned.book);
+            }
+            for (const format of ["wav", "mp3"]) {
+              const file = voiceFile(agentId, messageId, format);
+              try { if (file) fs.rmSync(file, { force: true }); }
+              catch (error) {
+                voiceCleanupFailed = true;
+                diagnostics({ event: "message.delete.voice-cleanup.failed", agentId, messageId, error: describeError(error) });
+              }
+            }
+            if (removed.memoryCleanup.profileCleared) store.setPartnerSettings(agentId, { profileRefreshedAt: null });
+            const pending = store.getPendingReply(agentId);
+            if (removed.repliedTo && (pending?.triggerMessageId ?? pending?.messageId) === removed.repliedTo) store.clearPendingReplyIf(agentId, removed.repliedTo);
+            diagnostics({ event: "message.deleted", agentId, messageId, restoredUnread: removed.restoredUnread, favoriteCount, topicAngleCount });
+            return { ok: true, repliedTo: removed.repliedTo, restoredUnread: removed.restoredUnread, favoriteCount, voiceCleanupFailed, memoryCleanup: removed.memoryCleanup };
+          });
+
+          if (!result) return c.json({ ok: false, error: { message: "删除没有完成，刷新后再试一次" } }, 500);
+          if (!result.ok) return c.json({ ok: false, error: { message: result.message } }, result.status);
+
+          // 戳一戳删完就完了：没有记忆要重建，也没有未读要重排。
+          if (result.action) return c.json({ ok: true, messageId, action: true });
+
+          // 旧摘要先在 removeAssistantReply 里清走，剩下的重建延后排（后台慢活不堵她下一次操作）。
+          threadRebuild.schedule(agentId, { ledgerDay: result.memoryCleanup.ledgerDay });
+          // 删掉的最后一轮回复没了，她那句话就退回“还没被看到”。照正常节奏重走一遍：
+          // ta按手机在不在手、睡没睡那套慢慢摸到它，再决定接还是只表示看到了。
+          // 所以这不是“删了就重发”，是这轮从头来。
+          if (result.restoredUnread && result.repliedTo && !hasReplyInFlight(agentId)) {
+            const settings = store.getPartnerSettings(agentId);
+            const plan = planReply({ phone: settings.phone, now: new Date(), sleep: settings.sleep });
+            store.setPartnerSettings(agentId, { phone: plan.phone });
+            scheduleReply(agentId, { plan, messageId: result.repliedTo });
+            diagnostics({ event: "message.delete.requeued", agentId, triggerMessageId: result.repliedTo, mode: plan.mode });
+          }
+          const elapsedMs = Date.now() - startedAt;
+          if (elapsedMs > 5000) diagnostics({ event: "message.delete.slow", agentId, messageId, elapsedMs });
+          return c.json({ ok: true, messageId, repliedTo: result.repliedTo, restoredUnread: result.restoredUnread, favoriteCount: result.favoriteCount, voiceCleanupFailed: result.voiceCleanupFailed });
+        } catch (error) {
+          // 不让它变成一个只有英文一句的 500：把她能看懂的话给出去，原因留在账本里。
+          diagnostics({ event: "message.delete.failed", agentId, messageId, elapsedMs: Date.now() - startedAt, error: describeError(error) });
+          return c.json({ ok: false, error: { message: "删除没有完成，稍后再试一次" } }, 500);
+        }
       });
 
       app.post("/thread/:agentId/retract/:messageId", (c) => {
@@ -5591,6 +5757,16 @@ export function apply(ctx) {
         return c.json({ ok: true, hiddenPartnerIds: store.hidePartner(agentId) });
       });
 
+      app.post("/settings/partner/:agentId/purge", (c) => {
+        const agentId = String(c.req.param("agentId") ?? "").trim();
+        if (!isValidPartnerId(agentId)) return c.json({ ok: false, error: { message: "伙伴编号不合法" } }, 400);
+        const result = store.purgePartner(agentId);
+        const attachments = purgePartnerAttachments(agentId);
+        const stickers = pruneStickerUsage(ctx.dataDir, agentId);
+        diagnostics?.({ event: "partner.purge", agentId, ...result, attachments, stickers });
+        return c.json({ ok: true, purged: { ...result, attachments, stickers } });
+      });
+
       app.post("/settings/partner/:agentId/unhide", (c) => {
         const agentId = String(c.req.param("agentId") ?? "").trim();
         if (!agentId) return c.json({ ok: false, error: { message: "缺少伙伴编号" } }, 400);
@@ -5856,6 +6032,10 @@ export function apply(ctx) {
           const partner = (await listPartners()).find((row) => row.id === agentId);
           const partnerName = partner?.name ?? agentId;
           const stored = await deliverAction(agentId, { partnerName, from: "user", ensure: true });
+          // 她主动敲了一下：说明她人就在这儿。那她说的话 ta 也就看过了——
+          // 不把「未读」收掉的话，就会出现「戳得动、话却还挂着未读」的矛盾。
+          const sawUser = store.markUserMessagesRead(agentId);
+          if (sawUser.length) diagnostics({ event: "action.saw-user", agentId, touched: sawUser.length });
           // 用户又主动互动了，旧的等回音到此翻篇。
           store.setPartnerSettings(agentId, { awaiting: null });
           // 不马上接：排一个随机时刻，到点ta自己决定接不接（她看不到这一段）

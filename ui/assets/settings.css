@@ -293,6 +293,7 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 .modal-head h2 { margin: 0; color: var(--mint-deep); font-size: 16px; }
 .modal-sub { margin: 2px 0 0; color: var(--ink-soft); font-size: 11.5px; }
 .modal-foot { justify-content: flex-end; border-top: 1px solid var(--line); }
+.modal-foot .primary-button, .modal-foot .soft-button, .modal-foot .danger-button { display: inline-block; flex: none; margin: 0; white-space: nowrap; }
 .modal-body { padding: 18px; overflow: auto; overscroll-behavior: contain; }
 .modal-body p { margin: 0; }
 .safe-note { margin-top: 12px; padding: 11px 12px; border-radius: 12px; background: var(--mint-soft); color: var(--mint-deep); font-size: 12.5px; }
