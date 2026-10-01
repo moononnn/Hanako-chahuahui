@@ -2193,6 +2193,9 @@ export function apply(ctx) {
       if (hasReplyInFlight(agentId) || autonomousLanes.has(agentId)) continue;
       const settings = store.getPartnerSettings(agentId);
       if (settings.proactiveEnabled === false) continue;
+      // 全局主动总闸（默认关）。拦在自省与排点之前：这条线后面全是围着「要发一条」做的活，
+      // 总闸关着时不必去自省、不必排落点、更不必叫模型找素材。
+      if (globalSettings.rhythmProactiveEnabled !== true) continue;
 
       // 自省：记录攒够了就自己看一遍，看出规律就改排点与话题的习惯
       if (!reviewedThisTick) {

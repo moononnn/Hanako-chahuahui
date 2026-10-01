@@ -192,6 +192,31 @@ test("关掉主动就什么都不发", () => {
   assert.equal(result.reason, "turned-off");
 });
 
+test("全局总闸关着时，谁都发不出来，排在自家开关之后之外也拦得住", () => {
+  const closed = gateCheck({
+    now: at(15),
+    settings: { tier: "clingy", proactiveEnabled: true },
+    globalSettings: { rhythmProactiveEnabled: false, quiet: DEFAULT_QUIET },
+  });
+  assert.equal(closed.ok, false);
+  assert.equal(closed.reason, "global-off");
+
+  const opened = gateCheck({
+    now: at(15),
+    settings: { tier: "clingy", proactiveEnabled: true },
+    globalSettings: { rhythmProactiveEnabled: true, quiet: DEFAULT_QUIET },
+  });
+  assert.equal(opened.ok, true);
+
+  // 单关一位伙伴仍然照旧生效，不被全局闸改写
+  const oneOff = gateCheck({
+    now: at(15),
+    settings: { tier: "clingy", proactiveEnabled: false },
+    globalSettings: { rhythmProactiveEnabled: true },
+  });
+  assert.equal(oneOff.reason, "turned-off");
+});
+
 test("自家日上限到了就停", () => {
   const day = dailyKey(at(15));
   const result = gateCheck({
