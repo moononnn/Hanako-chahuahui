@@ -150,7 +150,7 @@ import {
   removeStickerGroup,
 } from "./lib/sticker-library.js";
 import { canAnswerPoke } from "./lib/poke.js";
-import { BADGE_GUIDE, badgeText, fallbackBadge, normalizeBadge, parseBadgeMarker } from "./lib/badges.js";
+import { badgeGuide, badgeText, fallbackBadge, normalizeBadge, parseBadgeMarker } from "./lib/badges.js";
 import { effectiveVisionConfig, imageBytesMatchMime, isStrictBase64, normalizeVisionConfig } from "./lib/vision.js";
 import { prepareVisionFrames } from "./lib/gif-frames.js";
 import {
@@ -204,6 +204,7 @@ import {
 } from "./lib/actions.js";
 import { SLEEP_SHAPE, baseHoursFor, dozingNow, isSleepSet, parseSleep, sleepSpec, sleepWindows } from "./lib/sleep.js";
 import { DOZE_SLOWDOWN, mergeDueAt, planReply } from "./lib/reply.js";
+import { advancePhone } from "./lib/phone.js";
 import { recallEligibility, shouldCancelScheduledReply } from "./lib/recall.js";
 import {
   dailyKey,
@@ -227,11 +228,13 @@ import {
 import {
   correctionsFor,
   noteReview,
+  noteTone,
   noteWatch,
   reviewDue,
   reviewSpec,
   watchSummary,
 } from "./lib/selfwatch.js";
+import { ECHO_MIN_STREAK, buildStanceText, echoStreak, hobbyInPlay, stanceAnchors } from "./lib/stance.js";
 import {
   VOICE_PRESETS,
   VOICE_TIERS,
@@ -1634,7 +1637,9 @@ export function apply(ctx) {
 
     let raw = "";
     try {
-      raw = await askVoice(withNamePlate(`${spec.systemPrompt}\n\n${BADGE_GUIDE}`, partnerName), spec.userText, 300, agentId, "proactive");
+      // 主动来找这一路同样得报出当前佩戴结果：ta 得知道「自己现在是什么状态」才谈得上换。
+      const badgeHint = badgeGuide({ current: store.getPartnerSettings(agentId).badge });
+      raw = await askVoice(withNamePlate(`${spec.systemPrompt}\n\n${badgeHint}`, partnerName), spec.userText, 300, agentId, "proactive");
     } catch (error) {
       diagnostics({ event: "proactive.failed", agentId, error: describeError(error) });
       return { ok: false, reason: "threw" };
@@ -2128,7 +2133,7 @@ export function apply(ctx) {
     const summary = watchSummary(watch, now);
     const corrections = correctionsFor(summary);
     const latestNote = watch.reviews[watch.reviews.length - 1]?.text ?? "";
-    const spec = reviewSpec({ partnerName, userName: USER_NAME, summary, latestNote });
+    const spec = reviewSpec({ partnerName, userName: USER_NAME, summary, latestNote, echo: watch.tone?.maxStreak ?? 0 });
     let note = "";
     try {
       const raw = await askCheap(withNamePlate(spec.systemPrompt, partnerName), spec.userText, 120);
@@ -3162,6 +3167,24 @@ export function apply(ctx) {
       });
       diagnostics({ event: "chat.discovery.offered", agentId, discoveryId: heldDiscovery.id, interest: heldDiscovery.interestName });
     }
+    // 立场料：ta 自己在意的态度 + 自己最近说过的判断 + 「最近太顺」的提醒。
+    // 三样都只从本地已有数据里翻，不额外调模型；翻不到就不给，不硬凑。
+    const echo = echoStreak(threadMessages);
+    const stanceText = buildStanceText({
+      inPlay: hobbyInPlay({ messages: threadMessages, hobbies: knowing.hobbies, text: latestUser?.text }),
+      anchors: stanceAnchors(threadMessages),
+      echo,
+    });
+    // 「太顺」这件事得事后看得见：记在自己的小本子上，不混进主动那本账。
+    try {
+      const watch = store.getSelfWatch(agentId);
+      if (echo >= ECHO_MIN_STREAK && (watch.tone?.maxStreak ?? 0) < echo) {
+        store.saveSelfWatch(agentId, noteTone(watch, echo));
+        diagnostics({ event: "stance.echo", agentId, streak: echo });
+      }
+    } catch (error) {
+      diagnostics({ event: "stance.echo.failed", agentId, error: describeError(error) });
+    }
     const systemPrompt = buildSystemPrompt({
       partnerId: agentId,
       partnerName: partner?.name ?? agentId,
@@ -3171,6 +3194,9 @@ export function apply(ctx) {
       memoryText,
       knowingText,
       adaptationText,
+      // 立场料：ta 自己在意的态度、自己说过的判断，以及“最近太顺”的提醒。
+      // 只给聊天这条回复路；主动联系那条路不是被对方否定之后的场合，不需要承接。
+      stanceText,
       stickerText,
       timeText,
       daybookText,
@@ -3178,6 +3204,8 @@ export function apply(ctx) {
       searchText: chatSearch.context,
       discoveryText: heldDiscovery ? heldDiscoveryText(heldDiscovery) : "",
       userRhythmText: rhythmText,
+      // 徽章那段每轮重算：它得告诉 ta「你现在戴着什么」，静态块做不到。
+      badge: store.getPartnerSettings(agentId).badge,
       // 正睡着被弄醒了：这一条得让ta带着起床气回
       wakeText: wakeBlockFor(agentId),
       // 每轮都给伙伴一个真实的回应出口：正常说、只发表情包，或安静收尾。
@@ -4788,13 +4816,24 @@ export function apply(ctx) {
             const settings = store.getPartnerSettings(row.id);
             const sleepNow = dozingNow(new Date(), settings.sleep);
             const unread = store.unreadCount(row.id);
+            // 手机在不在手里得先按流逝的时间推进到现在，不能直接读存的布尔值。
+            // 以前这里只读 holding，untilMs 过期十几个小时了也照样当“拿着”，
+            // 于是所有人的兜底状态都卡在同一级。
+            const phone = advancePhone(settings.phone, Date.now());
+            // 一个字都没说过的 ta 没有可依据的真实状态，这一栏就空着。
+            const hasHistory = thread.messages.some((item) => (
+              (item?.role === "user" || item?.role === "assistant")
+              && item?.kind !== "action"
+              && item?.kind !== "poke"
+            ));
             const badge = normalizeBadge(settings.badge) ?? fallbackBadge({
               sleeping: Boolean(sleepNow.dozing),
               awaiting: isAwaitingThread(thread.messages, settings.awaiting),
               busy: Boolean(store.getPendingReply(row.id)),
               unread,
               lastMessage: last,
-              holdingPhone: settings.phone?.holding !== false,
+              holdingPhone: phone.holding,
+              hasHistory,
             });
             const vision = effectiveVisionConfig(store.getGlobalSettings().vision, settings.vision);
             return {

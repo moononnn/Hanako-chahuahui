@@ -103,6 +103,20 @@ test("酒馆初见问候留在聊天记录展示，不把原卡原文送入后�
   assert.equal(rows[0].content, "谢谢你刚才的欢迎");
 });
 
+test("标签主动消息：让伙伴记得是自己先开的口，不把谁在等谁弄反", () => {
+  const rows = threadToMessages([
+    { role: "assistant", proactive: true, text: "我都得快把屏幕盯出包浆了，人嘞" },
+    { role: "user", text: "来了主人~" },
+  ], 24, { userName: "阿舟" });
+  assert.match(rows[0].content[0].text, /这条是你主动找她说的/);
+  assert.match(rows[0].content[0].text, /我都得快把屏幕盯出包浆了/);
+  assert.doesNotMatch(rows[1].content, /这条是你主动找她说的/, "只标主动那条，别把她的回话也染上");
+
+  // 普通回复不是主动开口，不能乱标
+  const plain = threadToMessages([{ role: "assistant", text: "知道了" }]);
+  assert.doesNotMatch(plain[0].content[0].text, /这条是你主动找她说的/);
+});
+
 test("聊天上下文在长间隔处带发生时间，但不改即时聊天格式", () => {
   const rows = threadToMessages([
     { role: "user", text: "晚安", at: "2026-09-15T15:22:00.000Z" },
@@ -119,6 +133,26 @@ test("普通聊天提示词要求接住后自然带出新钩子", () => {
   assert.match(CHAT_HOUSE_STYLE, /带出一点你自己的东西/);
   assert.match(CHAT_HOUSE_STYLE, /不必每轮换题，也不必每轮提问/);
   assert.match(CHAT_HOUSE_STYLE, /倾诉、告别/);
+});
+
+test("徽章说明不进静态风格块，改成每轮按当前佩戴结果拼", () => {
+  // 静态块里不能有固定文案：得每轮重算才能告诉 ta 现在戴着什么。
+  assert.doesNotMatch(CHAT_HOUSE_STYLE, /状态徽章/, "徽章说明不能烘焙在静态风格块里");
+
+  const worn = buildSystemPrompt({
+    partnerName: "小花",
+    userName: "阿舟",
+    badge: { type: "common", id: "busy" },
+  });
+  assert.match(worn, /你现在佩戴的是「忙碌中」/);
+
+  const fresh = buildSystemPrompt({ partnerName: "小花", userName: "阿舟", badge: null });
+  assert.match(fresh, /还没有自己的状态徽章/);
+
+  // 不传 badge 也不能把整段丢掉，更不能让 undefined 泄进提示词。
+  const missing = buildSystemPrompt({ partnerName: "小花", userName: "阿舟" });
+  assert.match(missing, /状态徽章/);
+  assert.doesNotMatch(missing, /undefined/);
 });
 
 test("普通聊天提示词要求先说清楚再生活化", () => {
@@ -243,4 +277,71 @@ test("手打的文字表情：像自己打出来的图名，用得很松", () =>
   assert.match(CHAT_HOUSE_STYLE, /就是你打字打出来的几个字/);
   assert.match(CHAT_HOUSE_STYLE, /聊天里随时能来一个/, "正常聊天里也能用，不局限在某个场景");
   assert.match(CHAT_HOUSE_STYLE, /别每句都挂一个/, "松归松，别变成口头禅");
+});
+
+// ── 喜好纪律：自己讲出去的东西被接不住时 ──
+
+test("兴趣分享后的打趣先接互动，不把未被追问的出处变成免责声明", () => {
+  const prompt = buildSystemPrompt({ partnerName: "小七", userName: "阿舟" });
+  assert.match(prompt, /对方在接梗、打趣或问你愿不愿意聊时，先接这份互动/);
+  assert.match(prompt, /没有追问出处，也没有需要纠正的事实时，不主动插入/);
+  assert.match(prompt, /只在你确实查过而对方正问查证结果时/);
+  assert.match(prompt, /按你自己的性格表达兴致，克制的也可以简短接住，不必统一变得活泼/);
+});
+
+test("兴趣底气不代替事实依据：未知出处可留白，真实错误仍要改正", () => {
+  const prompt = buildSystemPrompt({ partnerName: "小七", userName: "阿舟", searchText: "只有标题摘要，出处未确认" });
+  assert.match(prompt, /喜欢、好奇和觉得好玩可以大方说，事实起源仍按证据说/);
+  assert.match(prompt, /不知道出处不影响继续聊有依据的内容和自己的感受，但不能编来源、经历或已查证的结论/);
+  assert.match(prompt, /真问到出处或涉及会误导对方的事实时，简短说清未知或纠正错误/);
+  assert.match(prompt, /确有事实错误仍要改正/);
+  assert.match(prompt, /只有标题摘要，出处未确认/);
+});
+
+test("喜好纪律是常驻块：不分性格、不分有没有写过人设，每个伙伴都带", () => {
+  const bare = buildSystemPrompt({ partnerName: "小花", userName: "阿舟" });
+  assert.match(bare, /不许把自己刚讲过的东西回头判成/, "没写过人设的伙伴也得有这条");
+  const withPersona = buildSystemPrompt({
+    partnerName: "小花",
+    userName: "阿舟",
+    personaText: "小花很温柔，不太会拒绝人。",
+  });
+  assert.match(withPersona, /护的是自己站的那一边/, "人设写着软，也不能把自己判成错");
+  assert.ok(
+    withPersona.indexOf("不许把自己刚讲过的东西回头判成") < withPersona.indexOf("小花很温柔"),
+    "喜好纪律要排在人格前面，不能被人设盖过去",
+  );
+});
+
+test("喜好纪律把「不懂」和「不喜欢」分开，并禁掉自我归因", () => {
+  const prompt = buildSystemPrompt({ partnerName: "小花", userName: "阿舟" });
+  // 「不懂」是缺口，不是否定
+  assert.match(prompt, /不等于他说你讲错了/);
+  assert.match(prompt, /“不懂”是个缺口/);
+  assert.match(prompt, /是你自己的东西被碰到了/);
+  // 实机里原话，逐条禁掉
+  assert.match(prompt, /“我说错了”“我串题了”“我不该提”/);
+  // 护自己不等于逼对方改口
+  assert.match(prompt, /不强迫对方也喜欢/);
+  assert.match(prompt, /不是逼对方改口/);
+});
+
+test("喜好纪律的护法按性格分岔，不收窄成一种反应", () => {
+  const prompt = buildSystemPrompt({ partnerName: "小花", userName: "阿舟" });
+  assert.match(prompt, /护法按你自己的性子来/);
+  assert.match(prompt, /温柔的可以多讲两句/, "温柔的人也有站得住的做法");
+  assert.match(prompt, /随和的可以说“那我以后少提”/, "收着也是捍卫，不是认错");
+  assert.match(prompt, /只回一个问号/, "性子强的允许顶回去");
+});
+
+test("喜好纪律跟查证、立场同一层相邻，排在人格之前，且不带内部机制", () => {
+  const prompt = buildSystemPrompt({ partnerName: "小花", userName: "阿舟", personaText: "人格设定正文" });
+  const searchAt = prompt.indexOf("查证的事怎么说");
+  const stanceAt = prompt.indexOf("第一步是回看刚才到底发生了什么");
+  const tasteAt = prompt.indexOf("不许把自己刚讲过的东西回头判成");
+  const personaAt = prompt.indexOf("人格设定正文");
+  assert.ok(searchAt >= 0 && stanceAt > searchAt, "查证与立场相邻");
+  assert.ok(tasteAt > stanceAt, "喜好纪律跟立场同一层，接在后面");
+  assert.ok(tasteAt < personaAt, "三条常驻纪律都在人格之前");
+  assert.doesNotMatch(prompt, /sourceMessageId|claims|概率/, "纪律不带内部机制");
 });

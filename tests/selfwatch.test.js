@@ -10,6 +10,7 @@ import {
   emptyWatch,
   kindSays,
   noteReview,
+  noteTone,
   noteWatch,
   readWatch,
   reasonSays,
@@ -178,4 +179,27 @@ test("坏数据收得住：不是本子就当空本子", () => {
   assert.equal(messy.reviews[0].text, "有内容");
   assert.deepEqual(messy.corrections, {});
   assert.equal(messy.lastReviewedAt, 12345);
+});
+
+test("太顺：单独一栏记高水位，不混进主动那本账", () => {
+  const base = noteWatch(emptyWatch(), { reason: "no-topic" }, T0);
+  let watch = noteTone(base, 3, at(1));
+  assert.equal(watch.tone.maxStreak, 3);
+  assert.equal(watch.notes.length, 1, "不能往里塞笔记，不然主动那本账的统计就被搅了");
+  watch = noteTone(watch, 2, at(2));
+  assert.equal(watch.tone.maxStreak, 3, "只记高水位，不倒退");
+  watch = noteTone(watch, 5, at(3));
+  assert.equal(watch.tone.maxStreak, 5);
+  assert.equal(readWatch(watch).tone.maxStreak, 5, "读回来还在");
+  assert.equal(readWatch({ tone: "不是对象" }).tone, null);
+  assert.equal(readWatch({ tone: { maxStreak: 999 } }).tone.maxStreak, 64);
+  assert.equal(emptyWatch().tone, null);
+});
+
+test("太顺：自省的时候说得出这件事", () => {
+  const summary = watchSummary(noteWatch(emptyWatch(), { reason: "no-topic" }, T0), at(1));
+  const quiet = reviewSpec({ partnerName: "小花", userName: "阿舟", summary, latestNote: "" });
+  assert.doesNotMatch(quiet.userText, /没有自己的看法/);
+  const loud = reviewSpec({ partnerName: "小花", userName: "阿舟", summary, latestNote: "", echo: 4 });
+  assert.match(loud.userText, /连着 4 轮回话里没有自己的看法/);
 });

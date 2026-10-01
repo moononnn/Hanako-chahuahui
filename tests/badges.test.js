@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { COMMON_BADGES, fallbackBadge, normalizeBadge, parseBadgeMarker } from "../lib/badges.js";
+import { COMMON_BADGES, badgeGuide, badgeText, fallbackBadge, normalizeBadge, parseBadgeMarker } from "../lib/badges.js";
 
 test("常见状态徽章只接受白名单，并保留统一形状", () => {
   assert.equal(COMMON_BADGES.some((row) => row.id === "sleeping"), true);
@@ -45,5 +45,37 @@ test("短暂状态优先于长期兜底状态", () => {
   assert.equal(fallbackBadge({ unread: 1, lastMessage: recent, holdingPhone: false }).id, "new");
   assert.equal(fallbackBadge({ busy: true, unread: 1, lastMessage: recent }).id, "busy");
   assert.equal(fallbackBadge({ sleeping: true, busy: true, unread: 1 }).id, "sleeping");
+});
+
+test("一个字都没说过的 ta 不给徽章：没数据就别拿默认值冒充 ta 的状态", () => {
+  // 实机：小满聊天记录为空，界面上照样显示「摸鱼中」，像 ta 已经在过日子了。
+  assert.equal(fallbackBadge({ hasHistory: false }), null);
+  // 但只要有一句真实对话，兜底就照常工作。
+  assert.equal(fallbackBadge({ hasHistory: true, holdingPhone: true }).id, "idle");
+});
+
+test("badgeText 遇到空徽章返回空串，界面上不显示", () => {
+  assert.equal(badgeText(null), "");
+  assert.equal(badgeText(normalizeBadge({ type: "common", id: "idle" })), "摸鱼中");
+});
+
+test("徽章说明要报出当前佩戴结果，ta 才有参照物判断该不该换", () => {
+  const worn = badgeGuide({ current: { type: "common", id: "busy" } });
+  assert.match(worn, /你现在佩戴的是「忙碌中」/, "得告诉 ta 现在戴着什么");
+  assert.match(worn, /隐藏标记/, "换的时候仍然要教写法");
+  // 已经戴着的，别催着每轮都改。
+  assert.match(worn, /不要每轮都换/);
+
+  // 自定义徽章也照报标题。
+  assert.match(badgeGuide({ current: { type: "custom", title: "夜行猫" } }), /你现在佩戴的是「夜行猫」/);
+});
+
+test("还没戴过徽章的 ta：门槛降到「现在就定一个」，并说清那一栏不是自己挑的", () => {
+  const fresh = badgeGuide({ current: null });
+  assert.match(fresh, /还没有自己的状态徽章/);
+  assert.match(fresh, /不是你自己挑的/, "得说清界面上那个是系统推的默认值");
+  assert.match(fresh, /顺手定一个/, "首次要给出明确动作");
+  assert.match(fresh, /\[徽章:/, "仍然要教标记写法");
+  assert.doesNotMatch(fresh, /你现在佩戴的是/, "没戴过就不该说有佩戴结果");
 });
 
