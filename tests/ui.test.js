@@ -267,7 +267,7 @@ test("发送时间：气泡保留悬停精确时间，长间隔在消息流中�
   assert.match(panelCss, /\.time-divider::before,[\s\S]*?background: var\(--line-soft\)/, "时间刻度用极浅实线，不用虚框");
   assert.match(panel, /line\.className = "msg-line"/, "时间跟气泡并排站一层");
   assert.match(panel, /line\.append\(b, time\)/, "时间贴在气泡外侧，不叠在别的消息上");
-  assert.match(panel, /bubble\("user", m\.text, null, m\.at\)/, "画历史消息时把 at 递进去");
+  assert.match(panel, /bubble\("user", isBareImageMarker\(m\.text\) \? "" : m\.text, null, m\.at\)/, "画历史消息时把 at 递进去");
   assert.match(panel, /bubble\("assistant", piece, null, m\.at\)/);
   assert.match(panelCss, /\.row:hover \.msg-time \{ opacity: 1; \}/, "平时不显示，hover 才出");
   assert.match(panelCss, /\.msg-time \{[^}]*opacity: 0;/s, "平时是隐的但仍占位，hover 不跳");
@@ -1391,6 +1391,28 @@ test("图片发送门禁：附件校验、伙伴归属和识图协议都在服�
   assert.match(app, /VISION_TEST_UNCONFIRMED/);
 });
 
+// 纯图消息的「[图片]」是账本和提示词用的内部标记，图就在它下面，屏幕上不重复摆。
+test("纯图消息不显示光杆「[图片]」标记，但账本正文一字不动", () => {
+  assert.match(panel, /const BARE_IMAGE_MARKER_RE = /);
+  assert.match(panel, /function isBareImageMarker\(text\)/);
+  // 历史普通消息：正文是标记时传空文本给气泡。
+  assert.match(panel, /bubble\("user", isBareImageMarker\(m\.text\) \? "" : m\.text, null, m\.at\)/);
+  // 表情包分片里夹着的标记一并滤掉，真被滤光仍退回原分片。
+  assert.match(panel, /m\.bubbles\.filter\(\(piece\) => !isBareImageMarker\(piece\)\)/);
+  assert.match(panel, /stickerPieces\.length \? stickerPieces : m\.bubbles/);
+  // 乐观发送：纯图留一个空泡挂图，不再推一个「[图片]」分片。
+  assert.match(panel, /else if \(image\) optimisticPieces\.push\(""\);/);
+  // 撤回一条纯图，显示的是人话而不是三个字。
+  assert.match(panel, /m\.text && !isBareImageMarker\(m\.text\) \? m\.text : "你撤回了一条消息"/);
+  // 账本侧照旧写这个标记（伙伴靠它认出「这条有图」）。
+  assert.match(app, /const messageText = text \|\| \(isSticker \? "\[表情\]" : "\[图片\]"\);/);
+  // 纯图不留空行。
+  assert.match(panel, /function appendImageToBubble\(bubbleEl, imageNode\)/);
+  assert.match(panel, /if \(bubbleEl\?\.textContent\?\.trim\(\)\) bubbleEl\.appendChild\(document\.createElement\("br"\)\);/);
+  assert.doesNotMatch(panel, /optimisticPieces\.push\("\[图片\]"\)/);
+  assert.doesNotMatch(panel, /appendChild\(document\.createElement\("br"\)\);\s*\r?\n\s*\w+\.appendChild\(imageNode\)/);
+});
+
 test("图片选择不会跨伙伴或发送回包误清新图片", () => {
   assert.match(panel, /let imageChoiceSeq = 0/);
   assert.match(panel, /const owner = current;[\s\S]*?const choice = \+\+imageChoiceSeq/);
@@ -1399,8 +1421,28 @@ test("图片选择不会跨伙伴或发送回包误清新图片", () => {
   assert.match(panel, /pendingImage === image\) clearPendingImage\(\)/);
 });
 
-test("发送成功后只清理本次图片，不误删发送期间换上的新图片", () => {
-  assert.match(panel, /if \(pendingImage === image\) clearPendingImage\(\);/);
+// 待发送条不能等回包才撤：图已经进气泡了还杵着，会看着像没发出去（图片 base64 回包慢一大截）。
+test("图进气泡的同时就撤掉待发送条，不等 POST 回包", () => {
+  assert.match(
+    panel,
+    /appendInlineImage\(renderedUser, image\);[\s\S]{0,400}?const sentImage = pendingImage === image \? image : null;[\s\S]{0,200}?if \(pendingImage === image\) clearPendingImage\(\);/,
+  );
+  // 成功分支不再重复清理：那时已经没有待发送条可清了。
+  assert.doesNotMatch(panel, /clearPendingQuote\(\);[\s\S]{0,200}?clearPendingImage\(\)/);
+});
+
+test("POST 没被接受就把图放回待发送区，原样保留 clientMessageId", () => {
+  assert.match(panel, /function restorePendingImage\(image\)/);
+  assert.match(panel, /if \(!image\?\.data \|\| pendingImage\) return;/);
+  // 恢复锁在原窗口：切过伙伴时待发送区已清空，挂回去会写到别人名下。
+  assert.match(panel, /if \(sentImage && !pendingImage && current === agentId\) restorePendingImage\(sentImage\);/);
+  // 恢复走的是原对象，不重新生成编号，重试仍能对账、不重复落盘。
+  assert.doesNotMatch(panel, /restorePendingImage\(\{[\s\S]{0,200}?clientMessageId:/);
+});
+
+// 换图期间的新图不能被发送动作清掉，这个护栏不能因为清理时机提前而丢。
+test("发送动作只清理本次那张图，不误删发送期间换上的新图片", () => {
+  assert.match(panel, /const sentImage = pendingImage === image \? image : null;/);
   assert.doesNotMatch(panel, /imageChoiceVersion/);
 });
 
