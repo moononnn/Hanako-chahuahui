@@ -1,6 +1,61 @@
 # TESTING · 茶话会
 
-当前版本与测试状态以 `manifest.json` 为准；最近一次全量：**858 条通过**（2026-09-23，v0.7.408）。覆盖发布流程收束、包内文档修复与既有功能回归；页面脚本、SDK 和关键文件语法检查通过。
+本轮（0.7.458，戳一戳删除遵守修正开关）：`node --test tests/*.test.js` 全量 **1017/1017** 通过（2026-10-01）。新增 2 条 UI 回归：提取真实 `openMessageActions` 函数执行，覆盖 poke/action 两种旧动作在开关关闭时无菜单、开启时仅删除、同一行旧菜单在关闭后收起，用户撤回不受影响，普通旧回复仍无修正入口、最新回复保留三种操作；执行关闭状态下真实删除函数确认不创建弹窗或发请求，并静态核对轮询收菜单、确认按钮再次守门、后台原有开关门禁先于动作删除。修前两条失败，修后通过。`node --check index.js`、`node --check tests/ui.test.js` 和两个内联脚本语法检查通过（模块脚本用 `vm.SourceTextModule`，非模块用 `vm.Script`）。不调用真实删除接口，不改聊天记录；真实设置切换、悬停与已打开确认窗的交互待实机验收。
+
+本轮（0.7.457，纯图不摆「[图片]」）：`tests/ui.test.js` 新增 1 条，覆盖显示层挡标记而账本不动——`BARE_IMAGE_MARKER_RE` 与 `isBareImageMarker` 存在、历史普通消息正文是标记时传空文本、表情包分片里的标记被滤且被滤光时退回原分片、乐观发送纯图留空泡而不是推「[图片]」、撤回纯图显示「你撤回了一条消息」、`appendImageToBubble` 只在泡里有文字时才插 `<br>`、且 `index.js` 的 `messageText` 仍写 `[图片]`（伙伴靠它认「这条有图」）、旧的 `optimisticPieces.push("[图片]")` 与裸 `<br>` 挂图写法都不再出现。原有「画历史消息时把 at 递进去」一条按新表达式重写，意图（时间）不变。全量 **1015/1015** 通过（2026-10-01）。这里验的是渲染分支，真实观感（纯图气泡是否干净、有字带图时换行是否正常）待实机验收。
+
+本轮（0.7.456，图片发出去后待发送条立刻收）：改的是纯前端时序，静态断言守住四个点——`appendInlineImage` 之后就是 `const sentImage = pendingImage === image ? image : null;` 和随后的 `clearPendingImage()`（待发送条不等 POST 回包才撤，否则图片 base64 回包慢时会看着像卡在半路）；成功分支里不再出现 `clearPendingImage`；`restorePendingImage` 存在、拒绝空图和已有新图、恢复走原对象而不重新生成 `clientMessageId`（重试仍走同一套幂等对账）；恢复锁 `current === agentId`（切过伙伴时待发送区已清空，挂回去会写到别人名下）。原先两条「发送成功后清理」的断言按新时序重写。全量 **1014/1014** 通过（2026-10-01）；Hana App 静态校验 0 errors、1 条常规动态依赖 warning。这里验证的是代码时序，真实发送的观感（条是否即刻消失、失败时是否回到待发送区）待实机验收。
+
+本轮（0.7.455，兴趣分享少自证）：`node --check lib/prompt.js` 与 `node --test tests/*.test.js` 通过，全量 **1012/1012**（2026-10-01）。新增 2 条 prompt 契约测试：接梗优先、未追问不插免责声明、真实搜索结果才报告查证状态、克制性格保留、未知出处不编造、真实错误仍纠正；新增用例修前失败、修后通过。修改前全量基线 1010/1010。这里验证的是组装出的提示词，不是模型输出质量；相同游戏梗场景及追问出处仍待实机验收。
+
+本轮（0.7.449，回复彻底删除）：`tests/store.test.js` 新增 6 条覆盖整轮硬删除与关联回复未读水位、删除回复正好落在已读水位时回退、时间戳损坏时清空无法定位来源的日账、旧归档缺少时间范围时整份失效、主动消息即使带脏 `repliedTo` 也不误认用户原话，并清理被删结果对应的适应行为、反馈，且合并伙伴级与 user-wide guide、按剩余证据重算习惯门槛；`tests/topics.test.js` 新增 1 条，确认删掉的回复短句从话题延伸账清除；`tests/ui.test.js` 守住悬停入口、永久删除确认、不会自动回复、重启恢复不重排已删除原话、完成回合可立即删除、语音清理失败会提示、综合话题残余边界在确认窗披露与话题短句清理接线。全量 997/997 通过（2026-10-01）；`node --check index.js`、`lib/store.js`、`lib/topics.js` 通过；Hana App 静态校验 0 errors、1 条常规动态依赖 warning。
+
+本轮（0.7.448，立场料）：新增 `tests/stance.test.js` 6 条覆盖「什么算纯顺着对方接」（附和与极短算、带自己判断与反问不算）、连续计数断一条归零、立场锚只认 ta 自己发的带判断词整句并丢掉太短太长与带标记的、正聊到哪个兴趣优先认上一条自己挂的 interestId 再退回词面命中与两种都认不出就不给、三段立场料各自只在有料时出现且没到门槛不提；`tests/selfwatch.test.js` 新增 2 条覆盖 `tone` 单独一栏记高水位不倒退且不塞进主动那本账的笔记、坏值丢掉、自省时说得出现象。全量 990/990 通过（2026-09-30），`node --check` 与 manifest JSON 解析通过，Hana App 静态校验 0 errors、1 条动态依赖常规 warning。注意：提示词那层只能降概率，真实效果要在聊天里实机验收。
+
+本轮（0.7.447，喜好纪律）：`tests/prompt.test.js` 新增 4 条覆盖喜好纪律是常驻块且排在人格之前、把「不懂」和「不喜欢」分开并禁掉自我归因（「我说错了」「我串题了」「我不该提」）、护法按性格分岔（温柔多讲两句 / 随和说少提但不认错 / 性子强顶回去）、与查证和立场同层相邻且不带内部机制；`tests/analyze.test.js` 新增 2 条覆盖捏人草稿与补候选两个入口都要求池子里留一条护着自己喜好的行为（只改一个入口会出现新伙伴有、老伙伴点再来几条却没有的断层）。全量 982/982 通过（2026-09-30）。
+
+本轮（0.7.446，GIF 动图读动作）：新增 `tests/gif-frames.test.js` 6 条，覆盖帧数不超上限时全取、超上限时沿时间轴均匀取样并保留首尾、静态图原样透传不改字节不改类型、多帧 GIF 抽成按时间顺序的 PNG、单帧 GIF 走静态路径但统一转 PNG、取帧上限生效、假 GIF 头与空数据直接报错不静默通过。全量 976/976 通过（2026-09-30），`node --check index.js` 通过，Hana App 静态校验 0 errors。
+
+
+当前版本与测试状态以 `manifest.json` 为准；最新全量：**1017/1017 条通过**（2026-10-01，v0.7.458）。以下为 v0.7.449 的历史校验记录，`node --check index.js`、`lib/store.js`、`lib/topics.js` 通过。Hana App 静态校验 0 errors、1 条动态依赖无法由静态检查证明的常规 warning。
+
+本轮（v0.7.443，移出 / 彻底删除）：`tests/store.test.js` 覆盖 purgePartner 删干净记忆目录、聊天文件、收藏、隐藏名单、lastPartnerId 与酒馆本地角色本体，并挡住非法 id；`tests/ui.test.js` 守住两层弹窗、两种方式的并列选择、确认窗里「Hana 本体不动 / 不能撤回 / 再请等于重新认识」三句关键文案，以及两层窗不叠着开；`tests/sticker-usage.test.js` 守住表情使用记录按伙伴剪除。全量 961/961 通过（2026-09-30）。
+
+本轮（v0.7.442，酒馆角色世界书人格档案）：被邀请的角色能带上 `character_book` 里的基础信息 / 性格 / 二次解释 / 扮演准则，不再只剩一句简介。邀请包 schemaVersion 提到 2，茶话会收 `personaNotes`（最多 8 条 / 单条 2000 字 / 合计 6000 字），与卡面资料同样进不可信 JSON 隔离，伪造分隔符与 `</system>` 仍只是原文；旧邀请包没有该字段时静默为空。`tests/character-import.test.js` 新增 2 条（收口与坏结构、世界书档案进 persona 编译）；全量 959/959 通过（2026-09-30）。
+
+本轮（v0.7.441，伙伴投喂回复边界）：伙伴回复过的消息不再保留为“没有要接话”的投喂候选；回复之后的新分享仍可成为候选。前端和模型上下文按回复与投喂的时间先后过滤旧账中“先回复、后投喂”的矛盾挂件；已经先递、之后才回复的记录仍保留。`tests/partner-feed.test.js` 覆盖单条多气泡回复和回复后新消息；`tests/ui.test.js`、`tests/prompt.test.js` 守住历史过滤。投喂专项 25/25、UI 专项 106/106、提示词专项 23/23、全量 957/957 通过（2026-09-30）。
+
+本轮新增 `tests/character-import.test.js` 与 `tests/store.test.js` 回归：覆盖调用方身份、字段长度与来源卡校验、系统提示/世界书隔离、头像 PNG 元数据清理与尺寸限制、本地头像落盘、同源幂等更新、不同来源同名不合并、聊天/记忆/旧头像保留，以及初见问候不重复写入。补充验证导入资料以 JSON 字符串边界传入、伪造分隔符不能关闭边界、用户宏不被茶话会二次替换；角色卡初见问候仍在聊天记录中展示，但会从聊天上下文裁剪、等回音/等回音判定、拾光记追问、关系学习、记忆整理和主动回声选材中排除。跨 App service 只在 Hana 实机上确认权限批准与运行态握手，自动化使用假 service 上下文。
+
+本轮（v0.7.432，伙伴排序与点击修复）：拖动排序或保存期间，列表轮询的旧回包不再覆盖刚调整的顺序；移除拖拽后遗留的点击拦截，避免下一次打开伙伴对话框的点击被吞。`tests/ui.test.js` 新增两种列表形态的回归断言；全量 941 条通过。
+
+本轮（v0.7.430，拾光记情境按需取用）：保留每天首次情境注入；用户明确询问天气、今日安排、身体状况或近期共同经历时，绕过当日去重，只注入对应类别。设置关闭仍完全不读。新增 `tests/daybook.test.js` 回归。
+
+本轮（v0.7.427，伙伴投喂）：ta 也能给你递小东西，只表达“我看到了”。新增 `lib/partner-feed.js`（纯逻辑）与 `runFeedTick`（每 5 分钟随主动巡检一起跑，不调模型）。硬约束三条：只挂在 ta 真的读过的那条上（`isFeedableTarget` 要求 `readAt`，落盘前再核一遍，前端也挡一道）、一天最多两次且两次隔九十分钟（`gateFeed`）、不做“该不该递”的模型判断。触发只认三个信号（冷处理 / 兴趣命中 / 你分享了东西），刻意不做定时投递。递什么从她自己的兴趣、爱好、调过的盘、话题本里挑（`feedAssetText` + `pickFeedAsset`），一个都没命中才按伙伴 id 稳定轮转兜底池；最近递过的不重复。上下文里对称写明「你让她知道你看到了，但没有要接话的意思」，避免被当成对方的回应。挂件只读、无右键菜单，轮询只补挂件不重画气泡；设置页按伙伴单独开关。
+
+测试覆盖：投喂账本累加与合并、已读硬门槛（未读/撤回/动作消息/`readAt` 不可解析一律不挂）、一天上限与间隔、换日重置、ta 手上有活或睡着时不递、关键词不泛化、选品表无重复、同一条不重复投、连发多条往前回溯且不跨伙伴回复、冷处理信号的三小时下限、兴趣优先于分享、上下文注入方向正确且撤回后不再注入、前端未读/撤回不画与轮询补挂件、撤回时清掉挂件、三层巡检串行、设置开关默认开。
+
+本轮经交叉审查补强六处：撤回消息不再显示挂件也不再进模型上下文（撤回时直接清 `partnerFeed`）；选品关键词去掉单字与泛化词（“甜/喝/糖/面/看/鱼”一律不再拖候选）；同一条消息不重复投；主动/等回音/投喂三层巡检串行执行，避免同一分钟两个动作叠着出站；连发多条用户消息时从末尾往前回溯候选；`readAt` 必须可解析才算读过。
+
+本轮（v0.7.426，宽泛新闻搜索兜底）：记录显示“普通新闻？”在规划模型失败时没有产生查询词、也没发出必应请求。把“普通新闻／随便看看新闻”等宽泛请求识别为实时热榜场景，使规划模型失败时仍能拉取公开热榜，不会构造空泛必应查询；新增对应失败路径回归测试。专项 22 条、全量 903 条通过。
+
+本轮（v0.7.422，八卦/热搜热榜兜底）：实测必应网页 RSS 对“最近有什么瓜/热搜”这类中文时效问题只回知乎、百度百科这类汇总页，搜到了也过不了日期与相关性过滤，于是新增 `lib/hot-board.js` 接百度热搜与今日头条热榜（两个源并行，一个挂掉不影响另一个）；规划模型空手或跑偏时用本地公开话题词再试一次；诊断日志补记实际搜索词。测试覆盖：榜单解析与去重、坏 JSON 静默降级、两个源全挂与全空的分型、热榜上下文来源性质、私人词不外发、泛词不直接外发而改用本地领域词。宿主 `ctx.network.fetch` 对新增域名的放行须在她重启后实机验收。
+
+本轮（v0.7.421，跨领域时效搜索与续接修复）：搜索候选扩展到穿搭、美妆、数码、软件游戏、汽车、旅行、美食、价格、新品与版本变化；公开主题续接延长至 12 小时，续问链没有具体主题时不构造查询；增加查询主题相关性过滤，并把没生成查询词、未发请求、网络失败、结果跑题分别报告。新增真实 13:11 场景复现、跨领域查询、相关性与失败分型测试。专项 11 条、全量 885 条通过。
+
+上一轮（v0.7.419，延迟后续搜上下文续接）：第一次把续搜上下文延长到两小时，但只取最近一条候选，连续纯“再找找”会把原主题挤掉；专项 9 条、全量 883 条通过。
+
+上一轮（v0.7.418，补齐口语搜索请求与延迟追问）：识别“再找找/翻翻”等自然请求；“找到了吗”可借用不超过一小时内的前一条公开搜索话题继续查，只有前文明确是公开搜索候选才延长上下文。专项 8 条、全量 882 条通过。
+
+上一轮（v0.7.417，减少搜索回复的过度保守）：有具体近期公开线索时，提示伙伴先轻松转述并点明来源/未证实状态，不因缺少官方确认默认拒答；无具体线索、泛汇总或严重未证实指控仍不编造、不扩散。专项 8 条、全量 882 条通过。
+
+上一轮（v0.7.416，搜索结果闲聊口吻）：具体娱乐报道可用轻松吃瓜话术，但需区分报道、传言与确认事实；内容只能来自标题和摘要，不补剧情，泛汇总不硬编，严重指控/健康/私生活的无可靠来源传言不复述。聊天搜索专项 8 条、全量 882 条通过。
+
+上一轮（v0.7.415，时效搜索相关性与闲聊追问）：搜索规划提示词要求将宽泛口语转成尽可能具体的近期公开主题，不臆造人物或事件；有临近公开话题时，短的相关疑问可继续触发搜索，普通应和不触发。新增追问回归测试。专项 8 条、全量 882 条通过。
+
+上一轮（v0.7.414，回到底部按钮随输入行上移）：回到底部按钮移入输入行作为定位锚点，输入框增高时按钮随行上移，不再挤到发送按钮旁；增加 UI 回归断言。专项 101 条、全量 881 条通过。
+
+上一轮（v0.7.412，复制图片发送状态对账）：图片消息加入稳定请求编号；成功回包丢失或延迟时，轮询按编号核对已落盘消息并清理待发送状态，重试不会重复创建已落盘消息。新增 UI 回归，全量 874 条通过。
 
 本轮（v0.7.408，发布流程收束与包内文档修复）：发布预检新增契约一致性、发布副本语法、manifest 资源、ZIP 重复/路径穿越和机器证据清单检查；README 测试说明改为公开仓库链接，清理分享版源码内部注释。
 
@@ -145,14 +200,30 @@
 ## 怎么跑
 
 ```sh
-node --test tests/badges.test.js tests/voice.test.js tests/actions.test.js tests/analyze.test.js tests/avatar.test.js tests/awaiting.test.js tests/background-adaptive.test.js tests/background.test.js tests/clock.test.js tests/compose.test.js tests/daybook.test.js tests/days.test.js tests/facts.test.js tests/growth.test.js tests/host-user.test.js tests/knowing.test.js tests/load.test.js tests/memory.test.js tests/model.test.js tests/notify.test.js tests/palette.test.js tests/partner-id.test.js tests/pass.test.js tests/persona-review.test.js tests/persona-standard.test.js tests/persona.test.js tests/phone.test.js tests/poke.test.js tests/proactive.test.js tests/prompt.test.js tests/recall.test.js tests/recognition.test.js tests/relationship.test.js tests/reply.test.js tests/rhythm.test.js tests/selfwatch.test.js tests/sleep.test.js tests/split.test.js tests/sticker-library.test.js tests/stickers.test.js tests/store-durability.test.js tests/store.test.js tests/summarize.test.js tests/topic-search.test.js tests/topics.test.js tests/ui.test.js tests/vision.test.js tests/workfeed.test.js
+node --test tests/actions.test.js tests/adaptation-correction.test.js tests/adaptation.test.js tests/analyze.test.js tests/avatar.test.js tests/awaiting.test.js tests/background-adaptive.test.js tests/background.test.js tests/badges.test.js tests/chat-search.test.js tests/clock.test.js tests/compose.test.js tests/daybook.test.js tests/days.test.js tests/fact-migration.test.js tests/facts.test.js tests/feed.test.js tests/growth.test.js tests/host-user.test.js tests/interest-exploration.test.js tests/knowing.test.js tests/load.test.js tests/memory.test.js tests/model.test.js tests/notify.test.js tests/observed.test.js tests/palette.test.js tests/partner-id.test.js tests/pass.test.js tests/persona-review.test.js tests/persona-standard.test.js tests/persona.test.js tests/phone.test.js tests/plasticity.test.js tests/poke.test.js tests/proactive.test.js tests/prompt.test.js tests/recall.test.js tests/recognition.test.js tests/relationship.test.js tests/reply.test.js tests/rhythm.test.js tests/selfwatch.test.js tests/sleep.test.js tests/split.test.js tests/sticker-library.test.js tests/sticker-usage.test.js tests/stickers.test.js tests/store-durability.test.js tests/store.test.js tests/summarize.test.js tests/topic-search.test.js tests/topics.test.js tests/ui.test.js tests/user-rhythm.test.js tests/vision.test.js tests/voice.test.js tests/workfeed.test.js
 ```
 
 零额外依赖，用 Node 内置 `node:test`。
 
+本轮（v0.7.454）：新增「伙伴的戳一戳也能删」。`tests/store.test.js` 新增两条：删戳只动聊天账（日账与摘要不许被一条戳牵连、已读水位退回前一条）、删戳不认非动作消息也不要求是最后一条；`tests/ui.test.js` 新增 5 处断言守住动作行的删除入口与确认窗文案（戳只给删除、不给重新生成与调整）。全量 1010/1010 通过（2026-10-01）。提醒：动作消息不进记忆是设计约束不是巧合，改这里时先把这句话读一遍。
+
+本轮（v0.7.453）：收「戳得动、话却还挂着未读」。上一版只让主动通道绕开“她有未读的话”，却没安排谁去读，那条未读就永远悬着；而戳与回戳走动作通道，不认未读，于是矛盾。`tests/ui.test.js` 两处断言改成守新契约：伙伴上场时 `hasUnseenUserMessage(store.getThread(agentId).messages)` 要先读掉并留 `proactive.saw-user` 记录。全量 1008/1008 通过（2026-10-01）。提醒：“读到”与“要不要开口”是两件事，别又棩成一件事。
+
+本轮（v0.7.452）：收「删除时弹出 Internal Server Error」。删除请求此前跑在伙伴的记忆重建队列里，而上一次删除刚排了一个带模型调用的重建（几十秒），后一次删除就排在它后面等超时，界面上只剩一句英文。改动：删除后的重建延后 45 秒并合并（抽到 `lib/rebuild-queue.js`，新增 `tests/rebuild-queue.test.js` 4 条：连续删除只留一个排期、日子合并、不同伙伴互不影响、取消不跑）；删除路由加耗时与异常记录；App 路由加统一 `app.onError` 把未接住的异常写进账本。全量 1008/1008 通过（2026-10-01）。提醒：这次靠日志时间线推断根因（服务端删除已落盘、响应没等到），已有耗时观测，复现时能直接看到等待了多久。
+
+本轮（v0.7.451）：收「删掉回复后账没走完」——撤回窗口、未读出口、主动让路三处。`tests/recall.test.js` 新增「没被看过的消息不受两分钟窗口约束：删完回复退回未读后随时能撤」「看过的消息过了两分钟还是不能撤」「没被看过的消息时间戳坏了也能收回」；`tests/proactive.test.js` 新增「她的话还没被看到时，主动开场要让路」「看过了、或者这轮已经接过了，就不挡主动开场」；`tests/ui.test.js` 两处断言换成守新契约（确认窗文案改成「回到未读、正常节奏里重新看到」，删除路由不得当场调用 `composeReply`/`deliverScheduledReply`，改为要求 `scheduleReply` 排期与 `hasUnseenUserMessage` 门禁）。全量 1004/1004 通过（2026-10-01）。提示：主动让路与重排节奏属行为层，得在聊天里实机验收。
+
+本轮（v0.7.450）：收「主动开口顶着人设套通用口吻」和「谁在等谁说反」两条实机问题。新增用例：`tests/compose.test.js` 的「已读未回三个窗口共用一份口径」——`readFollowupStage` 三档切分、时间拿不准（null/undefined）归“看很久”、姿态/手法菜单/末尾收口三处必须同调（看过很久不得再摆「打趣找人」「拿自己开涮」「嘴硬收场」，也不得再写「先把『她看了还没回』这件事接住」）；同名旧用例改两条断言——示例里的现成句子（「你人嘞」「溜哪儿去了嘛」）不得再进提示词，改为要求写明「不许照抄」；刚看到/看过很久两个窗口都不得再出现整套催场手法。`tests/prompt.test.js` 新增「标签主动消息」——主动那条带［这条是你主动找她说的，她没先开口］，她的回话和普通回复都不带。全量 999/999 通过（2026-10-01）。提醒：提示词只能压低概率，实际口吻得在聊天里实机验收。
+
+本轮（v0.7.439）：修复窄页面里发送图片超出气泡框的问题，消息图片最大宽度改为受气泡可用宽度限制；`tests/ui.test.js` 增加对应 CSS 契约断言。UI 专项 106/106、全量 956/956 通过（2026-09-30）。
+
 （注意：`node --test tests/` 在这个 Node 版本上会把目录当单个用例跑失败，要显式列文件。）
 
-本轮新增 `tests/background-adaptive.test.js`：覆盖双方气泡配色区分、浅/深色背景下最终文字对比度与无背景降级；并扩展 UI 静态检查，守住背景请求代次与旧回包隔离。
+本轮（v0.7.433）给常驻「立场纪律」补用例，写在 `tests/prompt.test.js`：覆盖纪律不分性格、不分有没有写过人设都对每个伙伴生效；纪律要摆在人格前面不被盖过；禁姿态句（「我认」「算我的」「对不起呀」），授权直讲自己的版本且有底气，禁「可能是我不对」这类两头堵，禁因对方不高兴就改口，以及「把事实弄对才是目的，顶回去本身不是」。单测跑 `node --test tests/prompt.test.js`。2026-09-29 全量 `node --test <tests/*.test.js>` 944/944 通过；Hana App 静态校验 0 error、1 条动态依赖提醒。注意：这一层只能降低概率，纪律对模型行为的实际影响要在聊天里实机验收，提示词保证不了行为归零。
+
+本轮（v0.7.413）新增 `tests/chat-search.test.js`：聊天时效触发与普通闲聊零额外调用、临近公开话题指代、私人哀伤不触发和私人词不外发、中文日期新鲜度及前五条过期后补查、网络失败不冒充核实、当轮提示词隔离，以及同步/异步共用接线。原有 `tests/topic-search.test.js` 验证必应 RSS 地址与搜索边界。2026-09-26 全量 `node --test <tests/*.test.js>` 881/881 通过；本机 Node fetch 必应 RSS 真实查询拿到 10 条近期结果，提示词保留 3 条完整来源；Hana App 静态校验 0 error、1 条动态依赖提醒。宿主 `ctx.network.fetch` 须在用户自行重启后实机验收。
+
+本轮新增 `tests/interest-exploration.test.js` 与搜索边界用例：覆盖好奇心阈值、长期兴趣轮换、60 条角度索引、发现过期/已分享、夜间例外不消耗发现、用户对话不进入搜索计划、外发查询拦截及 8 秒/1 MiB 网络边界。既有背景自适应与旧回包隔离测试继续保留。
 
 背景切换固定回归场景：伙伴甲 → 伙伴乙 → 伙伴甲；第二次同步发生在背景图片仍下载中时，最终仍必须自动铺回伙伴甲的那张背景。`tests/ui.test.js` 会检查“只有 `chatBgUrl` 已存在才允许同图短路”，防止重复同步把唯一下载请求判过期后页面停在默认背景。
 
@@ -186,7 +257,8 @@ node --test tests/badges.test.js tests/voice.test.js tests/actions.test.js tests
 |---|---|
 | `tests/compose.test.js` | 回复清洗：去掉模型偶尔套上的 HTML 段落壳、Markdown 围栏、常见前缀和完整 JSON 外壳；`[不回]` 整条标记识别；主动消息带入伙伴兴趣且不传未经验证的解释；睡醒回声优先于普通话题，共享窗外情境只作可选背景 |
 | `tests/facts.test.js` | 重要事实提取提示词、引用边界、来源校验、来源时间覆盖模型时间、重复事实去重与记忆块展示 |
-| `tests/recall.test.js` | 两分钟撤回窗口、用户消息限制、处理中/已回复保护、已读与未读分流、排期回复取消判定 | 
+| `tests/rebuild-queue.test.js` | 删除后的记忆重建排程：同一伙伴连着删只留一个定时器、延后合并日子、不同伙伴互不影响、取消后不跑、排期时会报等待时长 |
+| `tests/recall.test.js` | 撤回窗口只管已经被对方看到的话（看过的超时拦下并留占位，没看过的随时能无痕收回、不挂倒计时）；用户消息限制、处理中/已回复保护、已读与未读分流、排期回复取消判定 |
 | `tests/ui.test.js`（聊天头部） | 聊天现场不显示人格读取来源等内部开发状态；面对面那轮由 `playLiveTurn` 按后端给的节奏演出（等 ta 看到 → 未读收起 → 正在输入 → 按 `items[].gapMs` 一条条蹦），剩下的交给轮询补画，两边不重复画同一条；连续发送不被回复动画占住发送门，旧窗口请求只释放内部锁而不改新窗口按钮 | 
 | `tests/split.test.js` | 分条器：按标点切、末尾无标点残句不丢、成对符号内部不断、代码块整体不拆、句末逗号句号被吃掉而问号叹号保留、连续标点不拆散、一字回复可单独成条、条数上限并尾巴、空输入 |
 | `tests/rhythm.test.js` | 节奏器：对数时长随字数递增且增速递减、showAfterMs 严格递增、第一条不短于打字下限、未读时长落在区间、忙时更久、speed 缩放、空气泡列表 |
@@ -195,7 +267,7 @@ node --test tests/badges.test.js tests/voice.test.js tests/actions.test.js tests
 | `tests/days.test.js` | 一天从凌晨四点切：三点半算前一天、四点整新的一天、通宵一场不被劈成两天、跨月跨年、起点小时可覆盖、非法输入不炸、日子标签与日差 |
 | `tests/memory.test.js` | 分层记忆纯逻辑：近处按条数与字数双上限切且至少留一条、热身后约每 10 轮整理、溢出批次从最老开始、动作/硬撤回不进入记忆整理、重要事实与关系档案分层、日账取名新在后、空白条目被丢掉、摘要取材与条目字段、摘要按当前伙伴实名标记避免第一人称串位 |
 | `tests/store.test.js` | 落盘：消息追加重启不丢、持久化序号跨 500 条截断仍能过滤水位、摘要批次幂等、清聊天不清记忆、重要事实按真实来源和时间去重、未读只数伙伴发的且读完归零、新消息重新计未读、压过的消息不再待压、同日账是覆盖、日账可单天删、档案可写可读、摘要段数有上限、分伙伴设置互不干扰且有默认、动作文案与作息能存、全局静默与总闸默认、聊天窗头像开关默认关且重启不丢、伙伴移出/放回幂等且只隐藏不删数据、伙伴 id 带奇怪字符不会写到别处、关系账／性格／爱好各存一本重启还在、**自动那份与ta的来历各躺一格（没判过就是空、不详就不编）**、**起跑线单独躺一格（跟账本分开，撤了不影响真实聊出来的）**、knowing 文件坏了当没调过、清聊天不清这一层 |
-| `tests/topic-search.test.js` | 时效话题搜索：Google News RSS 地址编码、标题/摘要解析与清洗、外部素材不确定性提示、网络不可用/HTTP 失败/空结果静默降级 |
+| `tests/topic-search.test.js` | 时效话题搜索：必应 RSS 地址编码、标题/摘要解析与清洗、外部素材不确定性提示、网络不可用/HTTP 失败/空结果静默降级 |
 | `tests/topics.test.js` | 话题本：刚提到的不马上够格、发酵期不规律且心事比八卦久、到点才进 ready、同一件事只留一条且保留最早时间、标题比对能认同一件但不把"猫"和"猫粮"混成一件、说过进冷却、冷却过后可以再提而聊过的面（四次）用光才放下、擞太久被清、超量先丢没用的、等得越久越靠前、空本子不出事；模型输出：抠 JSON（含代码块）、空/垃圾输入返回空、非法 kind 归 other、最多三条、无标题条目丢掉；**常青/时效标记与搜索词，旧话题读取归一**；**返回形状钉住**；**角度账本：聊过的面记在话题上（最近在前）、同一个面换个说法不重复记、只留最近四条、没带角度就不编一个、自省说缺由头时冷却过半能提前放回来、老话题本没有那一栏也不炸** |
 | `tests/selfwatch.test.js` | 自省小本子（内部，用户看不见）：原因归类与说人话、一笔一笔往上加且动作认不出来当 skip、窗口内计数并挑出最常出问题的那一类（other/off 不算）、一类不够三次就什么都不改、太勤/挨太近就把落点往后挪、总撞睡觉就避开睡觉那段、总缺由头就把冷却过半的话题放回来、记录不够不跑且隔够一天才跑、小结写回去时清空待看那一叠且修正只留这一轮、小结只留最近五条、模型没写出来也照常往前走、自省提示词带上次数与人话且不露机制词、坏数据当空本子 |
 | `tests/proactive.test.js` | 主动那层：档位间隔低的比高的稀、落点在区间内随机、窗口判断支持跨零点、跨零点的静默之夜算前一天、全局静默与自己作息任一生效就算在睡、醒着时门开着、关掉主动就什么都不发、自家日上限到了就停、全局日上限到了都停、相邻两条最小间隔、睡觉只放一次破例且换一晚又能一次、由头优先（有话题带话、没话题才看档位允不允许戳）、到点才动手、暂存最多两条丢最老的、过期作废、最老先兑现、送出两边记账、同日累加、日上限三档与默认、老档位归一到最近一档；**睡醒状态回声：困着消息在有效时间内只回一次，已消费、过期或被更新状态拦住；** **说法去重（车轱辘话兑底）：标点空白与大小写归一、相似度 LCS 口径（一样＝1、不相干≈0、改几个字介于中间）、同一句换个说法算重复而新的一件事放行、过了窗口不算、时间戳认不得的不参与、空话不比** |
@@ -252,6 +324,8 @@ ta 们是纯函数，且是整个「活人感」里回归风险最高的部分�
 ```sh
 node --test tests/persona-standard.test.js tests/persona-review.test.js
 ```
+
+用户明确点播语音（`tests/voice.test.js`）：覆盖即时点播识别与长期偏好区分、点播绕过主动开关/关系限制/概率/额度/冷却/连续发送限制，以及点播不改动主动语音账本。运行单测：`node --test tests/voice.test.js`；全量测试仍用上面的显式文件清单。
 
 ## 不测什么
 
