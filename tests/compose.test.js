@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { cleanVoice, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNoReply, looksLikeAdTail, nightSpec, proactiveSpec } from "../lib/compose.js";
+import { cleanVoice, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNoReply, looksLikeAdTail, nightSpec, proactiveSpec, readFollowupStage } from "../lib/compose.js";
 
 test("渠道塞在末尾的广告尾巴剥掉，正常聊天里的加号不动", () => {
   // 实机撞到的那条：`+天天中彩票` 是外挂上去的
@@ -254,7 +254,8 @@ test("已读未回时给一库手法，打趣优先，不端新话题", () => {
   assert.match(spec.userText, /看到你上一条主动消息了/);
   assert.match(spec.userText, /打趣比委屈好/);
   assert.match(spec.userText, /戳一下/);
-  assert.match(spec.userText, /你人嘞/);
+  assert.match(spec.userText, /不许照抄/, "手法示例得写明不是台词");
+  assert.doesNotMatch(spec.userText, /你人嘞|溜哪儿去了嘛/, "示例里的现成句子不能给，模型会原样抄下去");
   assert.match(spec.userText, /无语\.jpg/, "图库没合适的就手打一个图名");
   assert.match(spec.userText, /是不是讨厌我/, "红线要写明不许把沉默当成拒绝");
   assert.match(spec.userText, /不追问她为什么不回/);
@@ -272,11 +273,46 @@ test("才看过没多久不催：这一轮别提「你没回」", () => {
   assert.match(spec.userText, /不要追问/);
   assert.match(spec.userText, /先不发/);
   assert.doesNotMatch(spec.userText, /可以轻轻逗一句/, "刚看到就别急着凑上去");
+  assert.doesNotMatch(spec.userText, /打趣找人|拿自己开涮|嘴硬收场/, "刚看到就别摆一库找人手法");
   assert.doesNotMatch(spec.userText, /别再加码/, "只发过一条还谈不上加码");
 });
 
-test("看过很久了就放下这事，不再提她没回", () => {
-  const spec = proactiveSpec({
+test("已读未回三个窗口共用一份口径：姿态、菜单、收口不能互相打架", () => {
+  assert.equal(readFollowupStage(5 * 60 * 1000), "just-now");
+  assert.equal(readFollowupStage(60 * 60 * 1000), "a-while");
+  assert.equal(readFollowupStage(8 * 3600 * 1000), "stale");
+  assert.equal(readFollowupStage(null), "stale", "时间拿不准当看很久，不编一个刚看到");
+  assert.equal(readFollowupStage(undefined), "stale");
+
+  const stale = proactiveSpec({
+    partnerName: "阿叙",
+    userName: "阿舟",
+    personaText: "克制，指令用陈述句",
+    followup: { count: 1, read: true, readAgeMs: 43 * 3600 * 1000, previousText: "开罐那事" },
+  });
+  assert.match(stale.userText, /可以放下了/);
+  assert.match(stale.userText, /不要把「她没回」当由头/, "收口得跟姿态同调");
+  assert.doesNotMatch(stale.userText, /先把「她看了还没回」这件事接住/, "说了放下就别再让她接这事");
+  assert.doesNotMatch(stale.userText, /打趣找人|拿自己开涮|嘴硬收场/);
+
+  const justNow = proactiveSpec({
+    partnerName: "阿叙",
+    userName: "阿舟",
+    followup: { count: 1, read: true, readAgeMs: 5 * 60 * 1000, previousText: "在忙不" },
+  });
+  assert.match(justNow.userText, /不要暗示你在等她回/);
+  assert.doesNotMatch(justNow.userText, /打趣找人|拿自己开涮|嘴硬收场/);
+
+  const aWhile = proactiveSpec({
+    partnerName: "小花",
+    userName: "阿舟",
+    followup: { count: 3, read: true, readAgeMs: 60 * 60 * 1000, previousText: "你咋不理我嘛" },
+  });
+  assert.match(aWhile.userText, /先把「她看了还没回」这件事接住/, "看过一阵才是该接这层关系的窗口");
+  assert.match(aWhile.userText, /打趣找人/);
+});
+
+test("看过很久了就放下这事，不再提她没回", () => {  const spec = proactiveSpec({
     partnerName: "小花",
     userName: "阿舟",
     followup: { count: 2, read: true, readAgeMs: 8 * 60 * 60 * 1000, previousText: "在忙不" },
@@ -284,6 +320,7 @@ test("看过很久了就放下这事，不再提她没回", () => {
   assert.match(spec.userText, /可以放下了/);
   assert.match(spec.userText, /别再加码/);
   assert.doesNotMatch(spec.userText, /可以轻轻逗一句/);
+  assert.doesNotMatch(spec.userText, /打趣找人|拿自己开涮|嘴硬收场/, "说了放下就别再把催场手法递过去");
 
   // 时间拿不准（老数据没有看过的时刻）也当「看很久了」处理，不编一个「刚看到」
   const unknown = proactiveSpec({

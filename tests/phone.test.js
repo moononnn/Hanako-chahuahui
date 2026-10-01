@@ -54,6 +54,20 @@ test("每段多长都在区间里，放下的那阵可以很久", () => {
   assert.ok(OFF_MAX_MS <= 20 * MIN, "放下手机最多二十分钟：一两小时不看手机是例外，不是常态");
 });
 
+test("回归：过期十几小时的 holding 不能直接拿来当现状用", () => {
+  // 实机 bug：/partners 路由写的是 settings.phone?.holding !== false，
+  // 把一个 untilMs 已过期 19 小时的 holding=true 当成“此刻拿着手机”。
+  // 结果所有人的兜底状态都卡在同一级，界面上齐刷刷一片。
+  const stored = { holding: true, untilMs: T0 - 19 * 60 * MIN };
+  assert.equal(stored.holding, true, "存下来的确实是 holding=true");
+
+  const now = advancePhone(stored, T0, fixed(0.5));
+  assert.ok(now.untilMs > T0, "推进后必须落在将来");
+  // 关键：读现状要读推进后的值，而不是存盘那一刻的值。
+  assert.equal(typeof now.holding, "boolean");
+  assert.equal(advancePhone(stored, T0, fixed(0.5)).holding, now.holding, "同一个时间点推进结果稳定");
+});
+
 test("现在拿没拿着、还有多久拿起来", () => {
   const holding = advancePhone(null, T0, fixed(0));
   assert.equal(isHolding(holding, T0 + MIN, fixed(0)), true);

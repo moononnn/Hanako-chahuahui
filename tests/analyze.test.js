@@ -6,6 +6,7 @@ import {
   applyVerdictToDraft,
   buildDerivativePrompt,
   buildDraftColorsPrompt,
+  buildRefillPrompt,
   buildReplaceTestPrompt,
   describePalette,
   findBannedWords,
@@ -205,6 +206,26 @@ test("草稿提示词：把「不写主语」和禁用词都写进去了", () =>
   assert.match(prompt, /不写主语/);
   assert.match(prompt, /温柔/);
   assert.match(prompt, /证据1/);
+});
+
+test("草稿提示词：每个色的池子都要留一条护着自己喜好的行为", () => {
+  const prompt = buildDraftColorsPrompt({
+    partnerName: "小花",
+    evidence: [{ id: 1, text: "她说累了 → 就闭嘴陪着" }],
+  });
+  assert.match(prompt, /护着自己喜欢的东西/);
+  assert.match(prompt, /被接不住的时候/);
+  assert.match(prompt, /不要写成对谁都通用的礼貌回避/, "护法要落在这个色自己的性子上");
+});
+
+test("补候选提示词：也要求留一条护着自己的做法，跟草稿口径一致", () => {
+  const prompt = buildRefillPrompt({
+    partnerName: "小花",
+    evidence: [{ id: 1, text: "她说累了 → 就闭嘴陪着" }],
+    color: { name: "护短" },
+  });
+  assert.match(prompt, /至少留一条/, "两个入口不能一个要求一个不要求");
+  assert.match(prompt, /被否定、被接不住时怎么护着/);
 });
 
 test("草稿色：位置限额、重名不要、空行为丢掉", () => {
