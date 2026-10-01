@@ -152,6 +152,7 @@ import {
 import { canAnswerPoke } from "./lib/poke.js";
 import { BADGE_GUIDE, badgeText, fallbackBadge, normalizeBadge, parseBadgeMarker } from "./lib/badges.js";
 import { effectiveVisionConfig, imageBytesMatchMime, isStrictBase64, normalizeVisionConfig } from "./lib/vision.js";
+import { prepareVisionFrames } from "./lib/gif-frames.js";
 import {
   RECOGNITION_QUESTIONS,
   applyRecognitionAnswer,
@@ -798,6 +799,12 @@ export function apply(ctx) {
   }
 
   async function describeImageOnce(ref, attachment, requestId) {
+    // 动图先在本地抽帧：只把 GIF 原样丢给模型的话，它解码出来的是静止的一帧，
+    // 动作过程和梗全丢。抽成几张按时间顺序排好的 PNG，它才读得出"动起来"是什么。
+    const prepared = await prepareVisionFrames(attachment);
+    const visionPrompt = prepared.animated
+      ? `请用简洁中文描述这张动图：以下 ${prepared.parts.length} 张图按时间顺序截取自同一个 GIF（原动画共 ${prepared.totalFrames} 帧）。请综合前后变化理解完整动作和梗，不要只描述第一帧；再补上主要对象、氛围、可见文字，不确定的内容请标明不确定。只输出图片说明。`
+      : "请用简洁中文描述这张图片：主要对象、动作、氛围、可见文字；不确定的内容请标明不确定。只输出图片说明。";
     const response = await ctx.models.stream({
       requestId,
       provider: ref.provider,
@@ -805,11 +812,11 @@ export function apply(ctx) {
       messages: [{
         role: "user",
         content: [
-          { type: "text", text: "请用简洁中文描述这张图片：主要对象、动作、氛围、可见文字；不确定的内容请标明不确定。只输出图片说明。" },
-          { type: "image", mimeType: attachment.mimeType, data: attachment.data.toString("base64") },
+          { type: "text", text: visionPrompt },
+          ...prepared.parts.map((part) => ({ type: "image", mimeType: part.mimeType, data: part.data.toString("base64") })),
         ],
       }],
-      maxTokens: 500,
+      maxTokens: prepared.animated ? 900 : 500,
       temperature: 0.2,
     });
     const raw = typeof response?.text === "function" ? await response.text() : "";
