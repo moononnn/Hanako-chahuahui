@@ -374,13 +374,34 @@ test("摘要段数有上限，超出丢最老的（长尾交给关系档案）",
   assert.equal(archive[0].text, "第8段");
 });
 
+test("新伙伴默认不主动，已经聊过的老伙伴维持原样", () => {
+  const fresh = freshStore();
+  assert.equal(fresh.store.getPartnerSettings("hanako").proactiveEnabled, false, "没聊过的新伙伴默认不主动");
+  assert.equal(fresh.store.getGlobalSettings().rhythmProactiveEnabled, false, "全新安装的总闸默认关");
+
+  // 造一个「住过这间屋子」的账本：这位 ta 已经有聊天记录
+  fs.writeFileSync(path.join(fresh.dir, "v2", "threads", "hanako.json"), JSON.stringify({ messages: [] }), "utf8");
+  const reopened = createStore(fresh.dir);
+  assert.equal(reopened.getPartnerSettings("hanako").proactiveEnabled, true, "一直在聊的 ta 不该被改默认值悄悄关掉");
+  assert.equal(reopened.getGlobalSettings().rhythmProactiveEnabled, true, "老账本的总闸维持原样");
+  assert.equal(reopened.getPartnerSettings("ta-new").proactiveEnabled, false, "老账本里新邀请的 ta 仍然默认不主动");
+
+  // 显式关过或开过的一律听她的，不再按住处推断
+  reopened.setPartnerSettings("hanako", { proactiveEnabled: false });
+  reopened.setGlobalSettings({ rhythmProactiveEnabled: false });
+  assert.equal(createStore(fresh.dir).getPartnerSettings("hanako").proactiveEnabled, false);
+  assert.equal(createStore(fresh.dir).getGlobalSettings().rhythmProactiveEnabled, false);
+});
+
 test("每位伙伴的设置互不干扰，且有默认值", () => {
   const { store } = freshStore();
   assert.equal(store.getPartnerSettings("hanako").tier, "sometimes");
-  assert.equal(store.getPartnerSettings("hanako").proactiveEnabled, true);
+  assert.equal(store.getPartnerSettings("hanako").proactiveEnabled, false, "新伙伴默认不主动，要不要 ta 来找她由她定");
   assert.equal(store.getPartnerSettings("hanako").sleep, null, "作息没定过就是 null，不由她设");
   store.setPartnerSettings("hanako", { tier: "clingy" });
   assert.equal(store.getPartnerSettings("hanako").tier, "clingy");
+  store.setPartnerSettings("hanako", { proactiveEnabled: true });
+  assert.equal(store.getPartnerSettings("hanako").proactiveEnabled, true, "她手动打开后就一直开着");
   assert.equal(store.getPartnerSettings("erin").tier, "sometimes");
 });
 

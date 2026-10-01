@@ -148,8 +148,8 @@
           <h3>按生活节拍主动关心</h3>
           <p>如果你明显晚于自己的平时节奏还没有出现，伙伴最多一天轻轻问一次，多个伙伴不会重复提醒。</p>
         </div>
-        <button class="switch" id="rhythm-proactive-switch" type="button" role="switch" aria-checked="true">
-          <span class="track"><span></span></span><span class="switch-label">允许</span>
+        <button class="switch" id="rhythm-proactive-switch" type="button" role="switch" aria-checked="false">
+          <span class="track"><span></span></span><span class="switch-label">关闭</span>
         </button>
       </article>
       <article class="setting-card compact">
@@ -533,14 +533,15 @@
       workfeedSwitch.querySelector(".switch-label").textContent = workfeedOn ? "打开" : "关闭";
       const rhythmOn = globalSettings.rhythmEnabled !== false;
       const styleOn = globalSettings.rhythmStyleEnabled !== false;
-      const proactiveOn = globalSettings.rhythmProactiveEnabled !== false;
-      for (const [id, on, onLabel, offLabel] of [
-        ["rhythm-switch", rhythmOn, "打开", "关闭"],
-        ["rhythm-style-switch", rhythmOn && styleOn, "参考", "不参考"],
-        ["rhythm-proactive-switch", rhythmOn && proactiveOn, "允许", "关闭"],
+      // 这一项是全局主动总闸，跟生活节拍分析各管各的：不因为节拍分析关着就跟着变灰。
+      const proactiveOn = globalSettings.rhythmProactiveEnabled === true;
+      for (const [id, on, disabled, onLabel, offLabel] of [
+        ["rhythm-switch", rhythmOn, false, "打开", "关闭"],
+        ["rhythm-style-switch", styleOn, !rhythmOn, "参考", "不参考"],
+        ["rhythm-proactive-switch", proactiveOn, false, "允许", "关闭"],
       ]) {
         const button = document.getElementById(id);
-        button.disabled = !rhythmOn && id !== "rhythm-switch";
+        button.disabled = disabled;
         button.classList.toggle("on", on);
         button.setAttribute("aria-checked", String(on));
         button.querySelector(".switch-label").textContent = on ? onLabel : offLabel;
@@ -1396,7 +1397,7 @@
         }, 1800);
       }
 
-      const contactCard = detailCard("主动来找你", "关掉后 ta 不会主动出现，频率档位会替你留着。");
+      const contactCard = detailCard("主动来找你", "关掉后 ta 不会主动出现，频率档位会替你留着。新来的伙伴默认也不主动，要不要 ta 来找你由你定。");
       const sw = document.createElement("button");
       sw.type = "button"; sw.className = `switch${s.proactiveEnabled === false ? "" : " on"}`; sw.setAttribute("role", "switch");
       sw.setAttribute("aria-checked", String(s.proactiveEnabled !== false));
