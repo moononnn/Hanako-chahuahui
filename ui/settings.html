@@ -447,39 +447,118 @@
 
     const AVATAR_TTL_MS = 5 * 60 * 1000;
 
+    const avatarInFlight = new Map();
+    const avatarUrls = new Set();
+    const retiredAvatarUrls = new Set();
+    let avatarPageHidden = false;
+
+    function releaseAvatarUrl(url) {
+      if (avatarUrls.delete(url)) URL.revokeObjectURL(url);
+      retiredAvatarUrls.delete(url);
+    }
+
+    function collectAvatarUrls() {
+      if (!retiredAvatarUrls.size) return;
+      const visible = new Set(Array.from(document.querySelectorAll("img"), (img) => img.getAttribute("src")));
+      for (const url of retiredAvatarUrls) if (!visible.has(url)) releaseAvatarUrl(url);
+    }
+
+    window.addEventListener("pagehide", (event) => {
+      if (event?.persisted) return; // 暂存页面还会恢复，不能提前销毁头像。
+      avatarPageHidden = true;
+      for (const url of avatarUrls) releaseAvatarUrl(url);
+      avatarCache.clear();
+    });
+
     async function loadAvatar(agentId) {
-      const cached = avatarCache.get(agentId);
-      if (cached && Date.now() - cached.at < AVATAR_TTL_MS) return cached.url;
-      let url = null;
-      try {
-        const res = await hana.api.fetch(`avatar/${encodeURIComponent(agentId)}`, { method: "GET", signal: AbortSignal.timeout(5000) });
-        if (res.ok) {
+      if (avatarPageHidden) return null;
+      const hit = avatarCache.get(agentId);
+      if (hit && Date.now() - hit.at < AVATAR_TTL_MS) return hit.url;
+      if (avatarInFlight.has(agentId)) return avatarInFlight.get(agentId);
+      const request = (async () => {
+        let url = null;
+        try {
+          const res = await hana.api.fetch(`avatar/${encodeURIComponent(agentId)}`, { method: "GET", signal: AbortSignal.timeout(5000) });
+          if (!res.ok) throw new Error("no avatar");
           const blob = await res.blob();
-          if (blob.size) url = URL.createObjectURL(blob);
+          if (!blob.size) throw new Error("empty avatar");
+          if (avatarPageHidden) return null;
+          url = URL.createObjectURL(blob);
+          avatarUrls.add(url);
+          await new Promise((resolve, reject) => {
+            const image = new Image();
+            const timer = setTimeout(() => reject(new Error("avatar decode timeout")), 5000);
+            image.onload = () => { clearTimeout(timer); resolve(); };
+            image.onerror = () => { clearTimeout(timer); reject(new Error("invalid avatar")); };
+            image.src = url;
+          });
+          if (avatarPageHidden) { releaseAvatarUrl(url); return null; }
+          if (hit?.url) retiredAvatarUrls.add(hit.url);
+          avatarCache.set(agentId, { at: Date.now(), url });
+          return url;
+        } catch {
+          if (url) releaseAvatarUrl(url);
+          return avatarPageHidden ? null : hit?.url || null;
         }
-      } catch { /* 首字兜底 */ }
-      avatarCache.set(agentId, { at: Date.now(), url });
-      return url;
+      })().finally(() => avatarInFlight.delete(agentId));
+      avatarInFlight.set(agentId, request);
+      return request;
+    }
+
+    function applyAvatarImage(box, url) {
+      const im = box.querySelector(".im");
+      const ph = box.querySelector(".ph");
+      if (!im) return;
+      if (url) {
+        if (im.getAttribute("src") !== url) im.src = url;
+        im.hidden = false;
+        if (ph) ph.hidden = true;
+      } else {
+        im.hidden = true;
+        im.removeAttribute("src");
+        if (ph) ph.hidden = false;
+      }
+    }
+
+    async function paintAvatar(box, agentId, fallbackText) {
+      if (!box || avatarPageHidden) return;
+      const ph = box.querySelector(".ph");
+      const letter = (fallbackText || "?").slice(0, 1);
+      if (ph && ph.textContent !== letter) ph.textContent = letter;
+      const want = String(agentId ?? "");
+      if (box.dataset.avatarWant !== want) applyAvatarImage(box, null);
+      box.dataset.avatarWant = want;
+      const hit = avatarCache.get(agentId);
+      if (hit?.url) applyAvatarImage(box, hit.url);
+      if (hit && Date.now() - hit.at < AVATAR_TTL_MS) {
+        collectAvatarUrls();
+        return;
+      }
+      const url = await loadAvatar(agentId);
+      if (avatarPageHidden || box.dataset.avatarWant !== want) return;
+      if (url) {
+        applyAvatarImage(box, url);
+        if (retiredAvatarUrls.size) {
+          for (const node of document.querySelectorAll("[data-avatar-want]")) {
+            if (node.dataset.avatarWant === want) applyAvatarImage(node, url);
+          }
+        }
+      }
+      collectAvatarUrls();
     }
 
     function avatar(agent, size = "normal") {
       const box = document.createElement("span");
       box.className = `avatar ${size}`;
       const ph = document.createElement("span");
-      ph.textContent = (agent?.name || "?").slice(0, 1);
+      ph.className = "ph";
       const img = document.createElement("img");
+      img.className = "im";
       img.alt = "";
       img.hidden = true;
       box.append(ph, img);
-      // 图是异步来的，节点此刻可能还挂在分离的片段上（伙伴详情就是先搭好、最后才整体挂进页面），
-      // 所以这里不判 isConnected：往没挂载的节点上填 src 无害，等它被挂上去图自己就出来了。
-      // 早期版本在这里判了，结果头像到得比挂载早，头永远停在首字。
-      void loadAvatar(agent?.id).then((url) => {
-        if (!url) return;
-        img.src = url;
-        img.hidden = false;
-        ph.hidden = true;
-      });
+      // 详情先搭好再整体挂载；暖缓存也在这个阶段同步填好。
+      void paintAvatar(box, agent?.id, agent?.name);
       return box;
     }
 

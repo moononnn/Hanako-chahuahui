@@ -825,7 +825,7 @@ test("提醒只走输入框上方的横幅：不再声明输入栏那一格，�
 test("好友列表名字下面只放最后一句：没聊过的那位就空着，不拿人格设定垫", () => {
   assert.match(
     panel,
-    /const preview = String\(p\.lastMessage\?\.text \?\? ""\)[\s\S]{0,80}?li\.querySelector\("\.hint"\)\.textContent = preview;/,
+    /const preview = String\(p\.lastMessage\?\.text \?\? ""\)[\s\S]*?if \(li\.__friendSignature !== signature\)[\s\S]*?li\.querySelector\("\.hint"\)\.textContent = preview;/,
     "有消息才写预览，没有就留空",
   );
   assert.doesNotMatch(panel, /\.identity/, "前端别再把伙伴的人格设定写进列表");
@@ -999,7 +999,7 @@ test("已读靠她真看到才盖章：拉一次记录不再顺手标已读", ()
   assert.match(panel, /function reportRead\(agentId = current\)/, "前端要有上报");
   assert.match(panel, /document\.visibilityState !== "visible" \|\| !document\.hasFocus\(\)/, "窗口没焦点不算看过");
   assert.match(panel, /lastReportedReadId/, "同一条不用重复报");
-  assert.match(panel, /reportRead\(agentId\);[\s\S]{0,120}?await loadPartners\(\)/, "打开会话这一刻才算读到");
+  assert.match(panel, /reportRead\(agentId\);[\s\S]{0,180}?void loadPartners\(\)\.catch\(/, "打开会话这一刻才算读到");
   assert.match(panel, /reportRead\(\);/, "盯回窗口时补一次");
 
   // 她能在窗口里打字，就说明前面那些话她看到了：发消息时把水位顺手补上
@@ -1239,8 +1239,11 @@ test("聊天窗头部那个头像是反复用的节点：换到没头像的伙�
     /box\.dataset\.avatarWant !== want\) return/,
     "图回来时已经换成别人了，这笔就作废，不许盖上去",
   );
-  assert.match(body, /im\.removeAttribute\("src"\)/, "这位没有头像：上一位的图要摘干净");
-  assert.match(body, /ph\.hidden = false/, "摘完得把首字露出来，不是留个空框");
+  assert.match(body, /box\.dataset\.avatarWant !== want\) applyAvatarImage\(box, null\)/, "换伙伴先摘掉上一位的图，不等网络回包");
+  const applyAt = panel.indexOf("function applyAvatarImage(");
+  const applyBody = panel.slice(applyAt, panel.indexOf("\n    }", applyAt));
+  assert.match(applyBody, /im\.removeAttribute\("src"\)/, "清图统一摘掉 src");
+  assert.match(applyBody, /ph\.hidden = false/, "摘完得把首字露出来，不是留个空框");
   assert.match(
     panelCss,
     /\.chat-av \.im\[hidden\][\s\S]{0,90}?display: none/,
