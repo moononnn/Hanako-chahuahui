@@ -440,24 +440,66 @@
      * 拉不到就不放图，退回一个字。
      */
     const AVATAR_TTL_MS = 5 * 60 * 1000;
-    /** agentId → { at, url }；拉不到也记一笔，免得每轮轮询都去敲一遍 */
+    /** 只缓存成功头像；同 id 的冷加载与刷新共用一笔请求。 */
     const avatarCache = new Map();
+    const avatarInFlight = new Map();
+    const avatarUrls = new Set();
+    const retiredAvatarUrls = new Set();
+    let avatarPageHidden = false;
+
+    function releaseAvatarUrl(url) {
+      if (avatarUrls.delete(url)) URL.revokeObjectURL(url);
+      retiredAvatarUrls.delete(url);
+    }
+
+    function collectAvatarUrls() {
+      if (!retiredAvatarUrls.size) return;
+      const visible = new Set(Array.from(document.querySelectorAll("img"), (img) => img.getAttribute("src")));
+      for (const url of retiredAvatarUrls) if (!visible.has(url)) releaseAvatarUrl(url);
+    }
+
+    window.addEventListener("pagehide", (event) => {
+      if (event?.persisted) return; // 暂存页面还会恢复，不能提前销毁头像。
+      avatarPageHidden = true;
+      for (const url of avatarUrls) releaseAvatarUrl(url);
+      avatarCache.clear();
+    });
 
     async function loadAvatar(agentId) {
+      if (avatarPageHidden) return null;
       const hit = avatarCache.get(agentId);
       if (hit && Date.now() - hit.at < AVATAR_TTL_MS) return hit.url;
-      let url = null;
-      try {
-        const res = await hana.api.fetch(`avatar/${encodeURIComponent(agentId)}`, { method: "GET" });
-        if (res.ok) {
+      if (avatarInFlight.has(agentId)) return avatarInFlight.get(agentId);
+      const request = (async () => {
+        let url = null;
+        try {
+          const res = await hana.api.fetch(`avatar/${encodeURIComponent(agentId)}`, { method: "GET", signal: AbortSignal.timeout(5000) });
+          if (!res.ok) throw new Error("no avatar");
           const blob = await res.blob();
-          if (blob.size > 0) url = URL.createObjectURL(blob);
+          if (!blob.size) throw new Error("empty avatar");
+          if (avatarPageHidden) return null;
+          url = URL.createObjectURL(blob);
+          avatarUrls.add(url);
+          // 新图能解码了才替换旧图，避免刷新时先抹掉已经加载好的脸。
+          await new Promise((resolve, reject) => {
+            const image = new Image();
+            const timer = setTimeout(() => reject(new Error("avatar decode timeout")), 5000);
+            image.onload = () => { clearTimeout(timer); resolve(); };
+            image.onerror = () => { clearTimeout(timer); reject(new Error("invalid avatar")); };
+            image.src = url;
+          });
+          if (avatarPageHidden) { releaseAvatarUrl(url); return null; }
+          if (hit?.url) retiredAvatarUrls.add(hit.url);
+          avatarCache.set(agentId, { at: Date.now(), url });
+          return url;
+        } catch {
+          if (url) releaseAvatarUrl(url);
+          // 失败不续 TTL、不记负缓存；旧图继续用，下一轮可重试。
+          return avatarPageHidden ? null : hit?.url || null;
         }
-      } catch { /* 没头像就算了，退回一个字 */ }
-      const prev = avatarCache.get(agentId)?.url;
-      if (prev && prev !== url) URL.revokeObjectURL(prev);
-      avatarCache.set(agentId, { at: Date.now(), url });
-      return url;
+      })().finally(() => avatarInFlight.delete(agentId));
+      avatarInFlight.set(agentId, request);
+      return request;
     }
 
     /**
@@ -1199,24 +1241,48 @@
      * 这次是替谁要的图：图回来的时候要是已经换成别人了（或者这位根本没有头像），
      * 就把上一张摘干净、露出首字 —— 不然换站到没头像的伙伴身上，会一直挂着上一位的脸。
      */
-    async function paintAvatar(box, agentId, fallbackText) {
-      if (!box) return;
-      const ph = box.querySelector(".ph");
+    function applyAvatarImage(box, url) {
       const im = box.querySelector(".im");
-      if (ph) ph.textContent = (fallbackText || "?").slice(0, 1);
-      const want = String(agentId ?? "");
-      box.dataset.avatarWant = want;
-      const url = await loadAvatar(agentId);
-      if (!im || !box.isConnected || box.dataset.avatarWant !== want) return;
+      const ph = box.querySelector(".ph");
+      if (!im) return;
       if (url) {
-        im.src = url;
+        if (im.getAttribute("src") !== url) im.src = url;
         im.hidden = false;
         if (ph) ph.hidden = true;
+      } else {
+        im.hidden = true;
+        im.removeAttribute("src");
+        if (ph) ph.hidden = false;
+      }
+    }
+
+    async function paintAvatar(box, agentId, fallbackText) {
+      if (!box || avatarPageHidden) return;
+      const ph = box.querySelector(".ph");
+      const letter = (fallbackText || "?").slice(0, 1);
+      if (ph && ph.textContent !== letter) ph.textContent = letter;
+      const want = String(agentId ?? "");
+      if (box.dataset.avatarWant !== want) applyAvatarImage(box, null);
+      box.dataset.avatarWant = want;
+      const hit = avatarCache.get(agentId);
+      // 暖缓存当场贴图，尚未挂载的消息节点也可先填好 src。
+      if (hit?.url) applyAvatarImage(box, hit.url);
+      if (hit && Date.now() - hit.at < AVATAR_TTL_MS) {
+        collectAvatarUrls();
         return;
       }
-      im.hidden = true;
-      im.removeAttribute("src");
-      if (ph) ph.hidden = false;
+      const url = await loadAvatar(agentId);
+      if (avatarPageHidden || box.dataset.avatarWant !== want) return;
+      if (url) {
+        applyAvatarImage(box, url);
+        // 刷新成功后让同一位伙伴的已挂载头像一起换图，再回收没人引用的旧 URL。
+        if (retiredAvatarUrls.size) {
+          for (const node of document.querySelectorAll("[data-avatar-want]")) {
+            if (node.dataset.avatarWant === want) applyAvatarImage(node, url);
+          }
+        }
+      }
+      collectAvatarUrls();
     }
 
     /**
@@ -1261,6 +1327,7 @@
       }, 3200);
     }
     let autoScrollAllowed = true;
+    let renderingAll = false;
     let bottomFeedbackTimer = null;
     const SCROLL_BOTTOM_GAP = 24;
 
@@ -1269,11 +1336,13 @@
     }
 
     function updateJumpBottom() {
+      if (renderingAll) return;
       const shouldShow = el.stream.scrollHeight > el.stream.clientHeight && !isAtBottom();
       el.jumpBottom.hidden = !shouldShow;
     }
 
     function scrollDown(force = false) {
+      if (renderingAll) return;
       if (!force && !autoScrollAllowed) {
         updateJumpBottom();
         return;
@@ -2256,6 +2325,7 @@
     function renderAll(list) {
       const previousAutoScroll = autoScrollAllowed;
       autoScrollAllowed = true;
+      renderingAll = true;
       try {
         invalidateRendering();
         el.stream.innerHTML = "";
@@ -2274,12 +2344,12 @@
         } else {
           const read = readUserIds(list);
           for (const m of list) renderMessage(m, { read: read.has(m.id), keepBottom: true });
-          scrollDown(true);
         }
         paintedWithAvatars = showMessageAvatars;
       } finally {
+        renderingAll = false;
         autoScrollAllowed = previousAutoScroll;
-        updateJumpBottom();
+        scrollDown(true);
       }
     }
 
@@ -2474,10 +2544,14 @@
     }
 
     function renderFriends() {
-      el.friends.innerHTML = "";
+      const existing = new Map(Array.from(el.friends.children, (li) => [li.dataset.partnerId, li]));
+      let index = 0;
       for (const p of partners) {
-        const li = document.createElement("li");
-        li.className = `friend${current === p.id ? " active" : ""}`;
+        let li = existing.get(p.id);
+        existing.delete(p.id);
+        if (!li) {
+        li = document.createElement("li");
+        li.className = "friend";
         li.draggable = true;
         li.dataset.partnerId = p.id;
         li.title = "拖动调整伙伴顺序";
@@ -2489,22 +2563,9 @@
             <div class="hint"></div>
           </div>
           <span class="badge" hidden></span>`;
-        li.querySelector(".name").textContent = p.name;
-        paintStateBadge(li.querySelector(".state-badge"), p.badge);
-        paintStatePin(li.querySelector(".state-pin"), p.badge);
-        void paintAvatar(li.querySelector(".avatar"), p.id, p.name);
-        // 名字下面只放最后一句：没聊过的伙伴就空着，不拿人格设定当占位
-        const preview = String(p.lastMessage?.text ?? "").replace(/\s+/g, " ").trim();
-        li.querySelector(".hint").textContent = preview;
-        const badge = li.querySelector(".badge");
-        const unread = Number(p.unread ?? 0);
-        if (SHOW_UNREAD_BADGES && unread > 0) {
-          badge.hidden = false;
-          badge.textContent = unread > 99 ? "99+" : String(unread);
-        }
         li.setAttribute("role", "button");
         li.tabIndex = 0;
-        li.setAttribute("aria-label", `${p.name}${badge.hidden ? "" : `，${badge.textContent} 条没看`}`);
+        // 事件只捕获稳定 id；打开时由 openPartner 从最新 partners 读取状态。
         const openThis = () => openPartner(p.id);
         li.addEventListener("dragstart", (event) => {
           draggedPartnerId = p.id;
@@ -2571,8 +2632,28 @@
             openThis();
           }
         });
-        el.friends.appendChild(li);
+        }
+        li.classList.toggle("active", current === p.id);
+        // 名字下面只放最后一句：没聊过就空着，不拿人格设定当占位。
+        const preview = String(p.lastMessage?.text ?? "").replace(/\s+/g, " ").trim();
+        const unread = SHOW_UNREAD_BADGES ? Number(p.unread ?? 0) : 0;
+        const signature = JSON.stringify([p.name, preview, unread, p.badge]);
+        if (li.__friendSignature !== signature) {
+          li.__friendSignature = signature;
+          li.querySelector(".name").textContent = p.name;
+          li.querySelector(".hint").textContent = preview;
+          paintStateBadge(li.querySelector(".state-badge"), p.badge);
+          paintStatePin(li.querySelector(".state-pin"), p.badge);
+          const badge = li.querySelector(".badge");
+          badge.hidden = !(unread > 0);
+          badge.textContent = unread > 0 ? (unread > 99 ? "99+" : String(unread)) : "";
+          li.setAttribute("aria-label", `${p.name}${badge.hidden ? "" : `，${badge.textContent} 条没看`}`);
+        }
+        void paintAvatar(li.querySelector(".avatar"), p.id, p.name);
+        if (el.friends.children[index] !== li) el.friends.insertBefore(li, el.friends.children[index] || null);
+        index += 1;
       }
+      for (const li of existing.values()) li.remove();
     }
 
     function showNoPartner() {
@@ -3154,7 +3235,7 @@
       clearPendingQuote();
       autosizeInput();
       const openSeq = ++openPartnerSeq;
-      ++threadViewSeq;
+      const viewSeq = ++threadViewSeq;
       ++imageChoiceSeq;
       closeMessageActions();
       // 还没完成初步认识的伙伴进不了聊天窗，先一起聊一遍。故意拦的：性格得自己过一道手。
@@ -3175,6 +3256,8 @@
       paintStatePin(el.chatAvatarStatePin, partner?.badge);
       el.chatAvatar.hidden = false;
       void paintAvatar(el.chatAvatar, agentId, partner?.name || agentId);
+      // 自己的脸先轻轻备好，第一条消息不用等到点击发送才开始取。
+      if (showMessageAvatars) void loadAvatar("__user");
       el.input.disabled = false;
       el.send.disabled = false;
       el.imageButton.disabled = !(partner?.imageCapability?.allowed);
@@ -3205,7 +3288,7 @@
       voiceStates.clear();
       try {
         const data = await api("GET", `thread/${agentId}`);
-        if (openSeq !== openPartnerSeq) return;
+        if (openSeq !== openPartnerSeq || current !== agentId || viewSeq !== threadViewSeq) return;
         currentMessages = data.messages || [];
         reconcilePendingImage(currentMessages);
         renderAll(currentMessages);
@@ -3219,10 +3302,10 @@
         void syncChatBackground(agentId, data.pref?.background ?? null);
         // 她真的看着这个窗：这一刻画到哪儿就算读到哪儿（不再拿「拉过一次」当看过）
         reportRead(agentId);
-        // 徒标跟着刷新
-        await loadPartners();
+        // 好友刷新独立进行，不能拖住线程打开，也不能把列表失败报成聊天打开失败。
+        void loadPartners().catch(() => {});
       } catch (error) {
-        if (openSeq === openPartnerSeq) setStatus(`打开失败：${error.message}`);
+        if (openSeq === openPartnerSeq && current === agentId && viewSeq === threadViewSeq) setStatus(`打开失败：${error.message}`);
       }
     }
 
