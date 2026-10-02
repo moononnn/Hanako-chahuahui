@@ -211,7 +211,7 @@ test("消息操作与投喂入口分开：操作悬停，投喂右键", () => {
   assert.match(settings, /id="msg-refine-switch"/);
   assert.match(settings, /重新生成、调整或删除最新一轮回复/);
   assert.match(settings, /messageRefine/);
-  assert.match(app, /messageRefine: Boolean\(store\.getGlobalSettings\(\)\.messageRefine\)/);
+  assert.match(app, /messageRefine: Boolean\(globalSettings\.messageRefine\)/);
   assert.match(app, /lastAssistant\?\.id !== messageId[\s\S]*只能调整最后一条伙伴回复/, "后端也要挡住旧回复编辑");
 });
 
@@ -1609,7 +1609,7 @@ test("每位伙伴一间房：设置页挑图，聊天窗按浓度铺上去", ()
   assert.match(app, /affectedPartners/);
   assert.doesNotMatch(app, /这张背景还被其他伙伴使用，先换掉再删/);
   assert.match(app, /app\.get\("\/backgrounds\/:agentId"/);
-  assert.match(app, /background: store\.getPartnerSettings\(row\.id\)\.background/, "背景元数据跟着轮询下发：设置页换完图，聊天窗自己跟上");
+  assert.match(app, /background: settings\.background/, "背景元数据跟着轮询下发：设置页换完图，聊天窗自己跟上");
   assert.match(app, /const bytes = base64\s*\n\s*\? Buffer\.from\(base64, "base64"\)/, "图直接收字节；本地路径那条留着备用");
 
   // 设置页：房间 tab；选图走浏览器自带的文件选择框（不欠宿主一个能力声明）

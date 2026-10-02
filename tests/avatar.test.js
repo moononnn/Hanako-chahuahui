@@ -110,6 +110,29 @@ test("扩展名表跟宿主一致（png 打头）", () => {
   assert.deepEqual(AVATAR_TYPES.map(([ext]) => ext), ["png", "jpg", "jpeg", "webp", "gif"]);
 });
 
+test("同一头像的并发冷读共用一次资源请求，不同伙伴不混用", async () => {
+  const ctx = makeCtx({
+    [`${ROOT}/user/avatars/user.png`]: PNG,
+    [`${ROOT}/agents/mio/avatars/agent.png`]: PNG,
+  });
+  const r = reader(ctx);
+  const result = await Promise.all(Array.from({ length: 20 }, () => r.getAvatar("user", null)));
+  assert.equal(ctx.asked.length, 1);
+  assert.ok(result.every((value) => value?.bytes.equals(PNG)));
+  await r.getAvatar("agent", "mio");
+  assert.equal(ctx.asked.length, 2);
+});
+
+test("没读到头像只短暂缓存，恢复后不必等五分钟", async () => {
+  const files = {};
+  const ctx = makeCtx(files);
+  const r = reader(ctx);
+  assert.equal(await r.getAvatar("user", null), null);
+  r.cache.get("user:").at -= 6000;
+  files[`${ROOT}/user/avatars/user.png`] = PNG;
+  assert.ok(await r.getAvatar("user", null));
+});
+
 // ── 没配头像：退到宿主自带的那张默认脸 ──
 
 const ASSETS = "D:/hana-resources/assets";

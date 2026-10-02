@@ -4890,12 +4890,14 @@ export function apply(ctx) {
 
       app.get("/partners", async (c) => {
         try {
-          const partners = (await listPartners()).map((row) => {
+          const rows = await listPartners();
+          const globalSettings = store.getGlobalSettings();
+          const partners = rows.map((row) => {
             const thread = store.getThread(row.id);
             const last = thread.messages[thread.messages.length - 1] ?? null;
             const settings = store.getPartnerSettings(row.id);
             const sleepNow = dozingNow(new Date(), settings.sleep);
-            const unread = store.unreadCount(row.id);
+            const unread = store.unreadCount(row.id, thread);
             // 手机在不在手里得先按流逝的时间推进到现在，不能直接读存的布尔值。
             // 以前这里只读 holding，untilMs 过期十几个小时了也照样当“拿着”，
             // 于是所有人的兜底状态都卡在同一级。
@@ -4909,20 +4911,20 @@ export function apply(ctx) {
             const badge = normalizeBadge(settings.badge) ?? fallbackBadge({
               sleeping: Boolean(sleepNow.dozing),
               awaiting: isAwaitingThread(thread.messages, settings.awaiting),
-              busy: Boolean(store.getPendingReply(row.id)),
+              busy: Boolean(thread.pendingReply),
               unread,
               lastMessage: last,
               holdingPhone: phone.holding,
               hasHistory,
             });
-            const vision = effectiveVisionConfig(store.getGlobalSettings().vision, settings.vision);
+            const vision = effectiveVisionConfig(globalSettings.vision, settings.vision);
             return {
               ...row,
               unread,
               badge,
               badgeText: badgeText(badge),
               // 背景元数据跟着轮询下发：她在设置页换完图，聊天窗最迟一轮就自己跟上
-              background: store.getPartnerSettings(row.id).background,
+              background: settings.background,
               imageCapability: {
                 allowed: Boolean(vision.model && vision.status === "verified"),
                 source: vision.source,
@@ -4942,8 +4944,8 @@ export function apply(ctx) {
             // 账本读到坏文件时 store 会把坏的挪走留档：这里捼一句，让界面能告诉她
             dataWarning: store.getCorruptNotice(),
             // 聊天窗要用的外观开关（跟轮询走，她在设置里改完最迟一轮就生效）
-            messageAvatars: Boolean(store.getGlobalSettings().messageAvatars),
-            messageRefine: Boolean(store.getGlobalSettings().messageRefine),
+            messageAvatars: Boolean(globalSettings.messageAvatars),
+            messageRefine: Boolean(globalSettings.messageRefine),
             // 聊天窗那条淡字前面的表情：跟叫法表同源，不在前端另拄一份
             actionStyles: ACTION_STYLES.map((s) => ({ id: s.id, emoji: s.emoji })),
           });
@@ -5033,11 +5035,13 @@ export function apply(ctx) {
           // 硬撤回的占位要说这位伙伴自己的名字，不写死某个人。
           // 名字拿不到（伙伴已移出、清单读不出来）就退回中性文案，不因此让整条线程拉不动。
           let recallLabel = "对方撤回了一条消息";
-          try {
-            const partners = await listPartners();
-            const hit = partners.find((row) => row.id === agentId);
-            if (hit?.name) recallLabel = `${hit.name}撤回了一条消息`;
-          } catch { /* 拿不到名字就用中性文案 */ }
+          if (thread.messages.some((message) => message?.role === "assistant" && message.recalled && message.recallMode === "hard")) {
+            try {
+              const partners = await listPartners();
+              const hit = partners.find((row) => row.id === agentId);
+              if (hit?.name) recallLabel = `${hit.name}撤回了一条消息`;
+            } catch { /* 拿不到名字就用中性文案 */ }
+          }
           // 这里不再盖章「已读」：拉一次记录不等于她看过（轮询也走这条路，
           // 窗口开着而人不在的时候，会把没看过的消息全标成已读）。
           // 真看过由前端在「可见且有焦点」时显式上报，见下面的 /read。
