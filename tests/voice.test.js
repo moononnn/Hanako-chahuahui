@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { protectKey } from "../lib/crypto.js";
+import { protectKey, unprotectKey, isProtectedKey, encryptionAvailable, encryptionStatus } from "../lib/crypto.js";
 import { canonicalGuide, closeRelationship } from "./helpers/adaptation.js";
 import {
   cleanVoiceText,
@@ -11,6 +11,7 @@ import {
   resolveVoicePolicy,
   normalizeVoiceModelConfig,
   voiceChoicesForModel,
+  voiceGroupsForModel,
   defaultVoiceIdForModel,
   buildT2aUrl,
   normalizeVoiceProfiles,
@@ -22,6 +23,11 @@ import {
   migratedVoiceProfileId,
   synthesizeVoice,
   audioDurationMs,
+  applyVoiceDelivery,
+  stripUnknownVoiceTags,
+  speakableChunks,
+  chunkTimings,
+  parseSubtitleFile,
 } from "../lib/voice.js";
 
 test("合成音频能在落盘前算出 WAV/MP3 时长", () => {
@@ -103,10 +109,14 @@ test("更早版本的单条全局朗读配置还能救回来一次", () => {
 });
 
 test("新建朗读模型的开箱模板带好协议和默认地址", () => {
-  assert.deepEqual(VOICE_PRESETS.map((item) => item.id), ["minimax", "mimo", "openai"]);
+  assert.deepEqual(VOICE_PRESETS.map((item) => item.id), ["minimax", "minimax-turbo", "mimo", "openai"]);
   assert.equal(VOICE_PRESETS[0].protocol, "t2a");
   assert.equal(VOICE_PRESETS[0].baseUrl, "https://api.minimaxi.com");
-  assert.equal(VOICE_PRESETS[1].baseUrl, "https://api.xiaomimimo.com/v1");
+  assert.equal(VOICE_PRESETS[2].baseUrl, "https://api.xiaomimimo.com/v1");
+  // 省一半的那个只是换了模型名，协议和地址得跟正片一致
+  assert.equal(VOICE_PRESETS[1].model, "speech-2.8-turbo");
+  assert.equal(VOICE_PRESETS[1].baseUrl, VOICE_PRESETS[0].baseUrl);
+  assert.equal(VOICE_PRESETS[1].protocol, "t2a");
 });
 
 test("新建条目生成的编号命中自定义前缀", () => {
@@ -156,14 +166,127 @@ test("OpenAI 兼容协议会把音色放进 audio.voice", async () => {
   assert.match(calls[0].url, /\/chat\/completions$/);
 });
 
-test("目录里没有的音色会落回该模型的默认音色，而不是发个无效值", async () => {
+test("乱填的音色会落回该模型的默认音色，而不是发个无效值", async () => {
   const { ctx, calls } = captureVoiceRequest({ data: { audio: "68656c6c6f" } });
   await synthesizeVoice(ctx, {
     text: "你好呀。",
-    voiceId: "female-shaonv",
+    voiceId: "这不是音色 id??",
     modelConfig: { protocol: "t2a", providerId: "minimax", baseUrl: "https://api.minimaxi.com", model: "speech-2.8-hd", apiKey: "plain-key" },
   });
   assert.equal(calls[0].body.voice_setting.voice_id, "Chinese (Mandarin)_Reliable_Executive");
+});
+
+test("自己克隆/设计出来的音色 ID 不会被换成默认嗓子", async () => {
+  const { ctx, calls } = captureVoiceRequest({ data: { audio: "68656c6c6f" } });
+  await synthesizeVoice(ctx, {
+    text: "你好呀。",
+    voiceId: "ttv-voice-2025060717322425-abc123",
+    modelConfig: { protocol: "t2a", providerId: "minimax", baseUrl: "https://api.minimaxi.com", model: "speech-2.8-hd", apiKey: "plain-key" },
+  });
+  assert.equal(calls[0].body.voice_setting.voice_id, "ttv-voice-2025060717322425-abc123");
+});
+
+test("合成请求带上语言识别与字幕开关", async () => {
+  const { ctx, calls } = captureVoiceRequest({ data: { audio: "68656c6c6f" } });
+  await synthesizeVoice(ctx, {
+    text: "你好呀。",
+    voiceId: "Chinese (Mandarin)_Warm_Girl",
+    modelConfig: { protocol: "t2a", providerId: "minimax", baseUrl: "https://api.minimaxi.com", model: "speech-2.8-hd", apiKey: "plain-key" },
+  });
+  assert.equal(calls[0].body.language_boost, "auto");
+  assert.equal(calls[0].body.subtitle_enable, true);
+  assert.equal(calls[0].body.subtitle_type, "word");
+});
+
+test("文字里的笑、叹气和小停顿会被翻译成官方记号", () => {
+  assert.equal(applyVoiceDelivery("哈哈哈你终于肯理我了"), "哈哈哈(laughs)你终于肯理我了");
+  assert.equal(applyVoiceDelivery("嘿嘿，我等着呢"), "嘿嘿(chuckle)，我等着呢");
+  assert.equal(applyVoiceDelivery("唉，你今天都不理我"), "(sighs)，你今天都不理我");
+  // 关掉就干净念，不能还偷偷加记号
+  assert.equal(applyVoiceDelivery("哈哈哈你终于肯理我了", { enabled: false }), "哈哈哈你终于肯理我了");
+});
+
+test("不认识的半角括号会被扯掉，写错一个标签整条合成就废了", () => {
+  // MiniMax 的记号是半角括号；中文圆括号它只当普通文字念出来，保持原样。
+  assert.equal(stripUnknownVoiceTags("嘿嘿(wow) (laughs) 好"), "嘿嘿 (laughs) 好");
+  assert.equal(stripUnknownVoiceTags("(laughs)"), "(laughs)");
+  assert.equal(stripUnknownVoiceTags("（小声）你好"), "（小声）你好");
+});
+
+test("官方字幕换了字段名也要认出来，词级明细优先", () => {
+  // 真机返回用的是 time_begin / time_end，逐词时间在 timestamped_words 里。
+  const raw = JSON.stringify([
+    {
+      text: "哟，终于",
+      time_begin: 0,
+      time_end: 1200,
+      timestamped_words: [
+        { word: "哟", time_begin: 0, time_end: 128 },
+        { word: "，", time_begin: 128, time_end: 170 },
+        { word: "终", time_begin: 170, time_end: 853 },
+      ],
+    },
+  ]);
+  assert.deepEqual(parseSubtitleFile(raw), [
+    { start: 0, end: 128, text: "哟" },
+    { start: 128, end: 170, text: "，" },
+    { start: 170, end: 853, text: "终" },
+  ]);
+});
+
+test("没有逐词明细就退回整段，老的字段名照旧认", () => {
+  const raw = JSON.stringify([{ text: "你好呀", begin_time: 0, end_time: 500 }]);
+  assert.deepEqual(parseSubtitleFile(raw), [{ start: 0, end: 500, text: "你好呀" }]);
+});
+
+test("叹词和停顿各归各，不互相挤掉", () => {
+  const out = applyVoiceDelivery("哈哈哈，我今天把屋子收拾了一遍，窗台那盆绿萝终于缓过来了，看着它我就高兴。");
+  assert.match(out, /\(laughs\)/);
+  assert.equal((out.match(/<#/g) || []).length, 1);
+});
+
+test("长句中间会留半拍停顿，短句不加", () => {
+  const long = "我今天把屋子收拾了一遍，窗台那盆绿萝终于缓过来了，看着它我就高兴。";
+  assert.match(applyVoiceDelivery(long), /<#0\.\d+#>/);
+  assert.doesNotMatch(applyVoiceDelivery("我来啦，等我一下。"), /<#/);
+  // 已经有停顿的别再插
+  assert.equal((applyVoiceDelivery(long).match(/<#/g) || []).length, 1);
+});
+
+test("原话切句后能按字数摊到时长上", () => {
+  const chunks = speakableChunks("我来了，你吃了吗？今天天气真好。");
+  assert.deepEqual(chunks.map((item) => item.text), ["我来了，你吃了吗？", "今天天气真好。"]);
+  const spans = chunkTimings(chunks, 6000);
+  assert.equal(spans[0].start, 0);
+  assert.equal(spans[spans.length - 1].end, 6000);
+  assert.ok(spans[0].end <= spans[1].start);
+  // 时长拿不到就不硬编时间，前端自然不高亮
+  assert.deepEqual(chunkTimings(chunks, 0), []);
+});
+
+test("字幕解析认 JSON 与 SRT，认不出来就说没有", () => {
+  assert.deepEqual(
+    parseSubtitleFile(JSON.stringify([{ begin_time: 0, end_time: 500, text: "你好" }])),
+    [{ start: 0, end: 500, text: "你好" }],
+  );
+  assert.deepEqual(
+    parseSubtitleFile("1\n00:00:00,000 --> 00:00:01,000\n你好呀\n"),
+    [{ start: 0, end: 1000, text: "你好呀" }],
+  );
+  assert.equal(parseSubtitleFile("随便一段看不懂的东西"), null);
+  assert.equal(parseSubtitleFile(""), null);
+});
+
+test("音色目录按语言分组，官方目录里新补的机甲音也在", () => {
+  const groups = voiceGroupsForModel({ protocol: "t2a" });
+  assert.ok(groups.length > 1);
+  assert.ok(groups.every((group) => group.id && group.label && group.voices.length));
+  assert.ok(groups.some((group) => group.voices.some((item) => item.id === "Robot_Armor")));
+  // 扁平目录和分组必须是同一份，不能对不上
+  assert.equal(
+    groups.flatMap((group) => group.voices.map((item) => item.id)).join("|"),
+    voiceChoicesForModel({ protocol: "t2a" }).map((item) => item.id).join("|"),
+  );
 });
 
 test("MiMo 使用 api-key，MiniMax 继续使用 Bearer", () => {
@@ -175,6 +298,25 @@ test("MiMo 使用 api-key，MiniMax 继续使用 Bearer", () => {
 test("已保护的 Key 再保存时保持原值，不重复套 DPAPI", async () => {
   const stored = "dpapi:already-protected";
   assert.equal(await protectKey(stored), stored);
+});
+
+test("系统加密用不上时要报出真实状态，不静默装没事", async () => {
+  const plain = "sk-plain-123";
+  const out = await protectKey(plain);
+  if (out.startsWith("dpapi:")) {
+    assert.equal(encryptionAvailable(), true, "加密成功时状态必须是成功的");
+    assert.equal(await unprotectKey(out), plain);
+  } else {
+    assert.equal(out, plain, "加密失败只能交出原值，不能变成乱码");
+    assert.equal(encryptionAvailable(), false);
+    assert.match(encryptionStatus().reason, /\S/, "失败必须留下原因");
+  }
+});
+
+test("判断一条 Key 到底有没有被系统加密保护", async () => {
+  assert.equal(isProtectedKey("dpapi:abc"), true);
+  assert.equal(isProtectedKey("sk-cp-abc"), false);
+  assert.equal(isProtectedKey(""), false);
 });
 
 test("音色列表跟着朗读模型切换，MiniMax 不再展示旧 female-shaonv", () => {
