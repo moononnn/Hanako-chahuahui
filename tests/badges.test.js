@@ -48,7 +48,7 @@ test("短暂状态优先于长期兜底状态", () => {
 });
 
 test("一个字都没说过的 ta 不给徽章：没数据就别拿默认值冒充 ta 的状态", () => {
-  // 实机：念念聊天记录为空，界面上照样显示「摸鱼中」，像 ta 已经在过日子了。
+  // 实机：某位伙伴聊天记录为空，界面上照样显示「摸鱼中」，像 ta 已经在过日子了。
   assert.equal(fallbackBadge({ hasHistory: false }), null);
   // 但只要有一句真实对话，兜底就照常工作。
   assert.equal(fallbackBadge({ hasHistory: true, holdingPhone: true }).id, "idle");
