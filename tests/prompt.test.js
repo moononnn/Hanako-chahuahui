@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { CHAT_HOUSE_STYLE, buildSystemPrompt, identityBlock, isClosingSignal, replyChoiceBlock, shouldQuietClose, threadToMessages } from "../lib/prompt.js";
+import { CHAT_HOUSE_STYLE, buildSystemPrompt, buildTeaseText, identityBlock, isClosingSignal, replyChoiceBlock, shouldQuietClose, threadToMessages } from "../lib/prompt.js";
 
 test("每轮回应都有正常回复、只发表情包和安静收尾三个出口", () => {
   const text = replyChoiceBlock({ userName: "阿舟" });
@@ -13,6 +13,50 @@ test("每轮回应都有正常回复、只发表情包和安静收尾三个出�
   assert.match(text, /直接问你的/);
   assert.match(text, /哈哈哈哈哈/);
   assert.match(text, /聊天的句号/);
+});
+
+test("放肆纪律是常驻块：不必先掂量伤不伤人，也不靠她先开火", () => {
+  const prompt = buildSystemPrompt({ partnerName: "小七", userName: "阿舟" });
+  assert.match(prompt, /不用先掂量/);
+  assert.match(prompt, /损的是那件事，不是她这个人/);
+  assert.match(prompt, /别忍着装大度/);
+  // 触发条件写的是关系和性子，不是「她先动手」
+  assert.doesNotMatch(prompt, /她先骂|她先开火/);
+  assert.match(prompt, /那是她划的线/);
+});
+
+test("放肆的档位跟关系走：还不熟就别放开，处得深才敢嘴臭", () => {
+  const early = buildTeaseText({ stage: 0 });
+  const mid = buildTeaseText({ stage: 1 });
+  const close = buildTeaseText({ stage: 2 });
+  assert.match(early, /还没到能随便损/);
+  assert.match(mid, /能互相开玩笑了/);
+  assert.match(close, /嘴臭也行/);
+  assert.notEqual(early, mid);
+  assert.notEqual(mid, close);
+  // 档位乱传不能抛，也不许偷偷升到最松那一档
+  assert.equal(buildTeaseText({ stage: undefined }), early);
+  assert.equal(buildTeaseText({ stage: 99 }), close);
+});
+
+test("放肆手法只给说明不给台词，且要求按自己性子挑", () => {
+  const text = buildTeaseText({ stage: 2 });
+  assert.match(text, /挑合自己性子的用/);
+  assert.match(text, /不搭的别用/);
+  assert.match(text, /笑了就是能/);
+  assert.match(text, /真恼了下一句收住/);
+});
+
+test("没给放肆料时不占位置，给了才拼进提示词", () => {
+  const bare = buildSystemPrompt({ partnerName: "小七", userName: "阿舟" });
+  const full = buildSystemPrompt({
+    partnerName: "小七",
+    userName: "阿舟",
+    teaseText: buildTeaseText({ stage: 2 }),
+  });
+  assert.equal(bare.includes("【你跟她能损到什么份上】"), false);
+  assert.ok(full.includes("【你跟她能损到什么份上】"));
+  assert.ok(full.indexOf("【你跟她能损到什么份上】") < full.length);
 });
 
 test("纯笑声可以识别成潜在收尾，但带内容的哈哈不能误判", () => {
