@@ -949,6 +949,20 @@ test("ta看到她的话要盖个 readAt：刷新还在，没看到就是没看�
   assert.equal(thread.messages.find((m) => m.id === two.id).readAt, at);
 });
 
+test("模型不可用时那条不算 ta 看到过：未读得一直挂着", () => {
+  const { store } = freshStore();
+  store.appendMessage("nova", { role: "user", text: "看这个", notice: { code: "MODEL_UNAVAILABLE", kind: "quota", text: "接不上话" } });
+  store.appendMessage("nova", { role: "user", text: "还在吗" });
+
+  const at = "2026-10-02T12:00:00.000Z";
+  const touched = store.markUserMessagesRead("nova", at);
+  assert.deepEqual(touched.length, 1, "只盖了后一条");
+  const thread = store.getThread("nova");
+  const first = thread.messages[0];
+  assert.equal(first.readAt, undefined, "ta 压根没收到这条，盖已读就是假收据");
+  assert.equal(thread.messages[1].readAt, at);
+});
+
 test("今日情境默认关：没打开就不往提示词里塞拾光记的日子", () => {
   const { store, dir } = freshStore();
   assert.equal(store.getGlobalSettings().daybookEnabled, false);
