@@ -30,13 +30,22 @@ import {
 import { hasPalette, isPaletteDone, normalizePalette, paletteToText } from "./lib/palette.js";
 import { createAvatarReader, looksLikeImage, toBytes } from "./lib/avatar.js";
 import { registerTavernImportService, renderImportedPersona } from "./lib/character-import.js";
-import { buildSystemPrompt, identityBlock, replyChoiceBlock, shouldQuietClose, threadToMessages } from "./lib/prompt.js";
+import { buildSystemPrompt, buildTeaseText, identityBlock, replyChoiceBlock, shouldQuietClose, threadToMessages } from "./lib/prompt.js";
 import { buildAmbientContextText, buildDaybookText, daybookHash, daybookQueryTopics, previousAssistantBeforeUser, readDaybook, shouldUseDaybook } from "./lib/daybook.js";
 import { spokenClock, timeBlock } from "./lib/clock.js";
-import { askUtility, generateReply, normalizeModelRef, chatModelOptions, visionModelOptions, resolveModelChoice } from "./lib/model.js";
+import {
+  askUtility,
+  classifyModelFailure,
+  generateReply,
+  normalizeModelRef,
+  chatModelOptions,
+  visionModelOptions,
+  resolveModelChoice,
+  withModelDeadline,
+} from "./lib/model.js";
 import { createStore, createDiagnostics } from "./lib/store.js";
 import { createThreadRebuildScheduler } from "./lib/rebuild-queue.js";
-import { protectKey } from "./lib/crypto.js";
+import { protectKey, isProtectedKey, encryptionStatus } from "./lib/crypto.js";
 import { listBackgrounds, readBackgroundBytes, writeBackground, removeBackgroundFile, normalizeOpacity, normalizeTone, isBackgroundFile, fileTypeOf } from "./lib/background.js";
 import { pruneStickerUsage, recordStickerUsage } from "./lib/sticker-usage.js";
 import {
@@ -67,7 +76,7 @@ import { migrateLegacyFacts } from "./lib/fact-migration.js";
 import { applyAdaptationCorrection, buildAdaptationCorrectionSpec, listAdaptationForUser, parseAdaptationCorrection, revokeAdaptationGuide } from "./lib/adaptation-correction.js";
 import { inferObservedGuide } from "./lib/observed.js";
 import { dayKey } from "./lib/days.js";
-import { advanceRelationship, disclosureRatio, mergeRelationship, relationshipNote, retractRelationshipSource, SEED_PICK_TIERS, SEED_TIER_IDS, seedByPick, seedFromTrace, traceSizeFromFiles, zeroSeed } from "./lib/relationship.js";
+import { advanceRelationship, disclosureRatio, getStage, mergeRelationship, relationshipNote, retractRelationshipSource, SEED_PICK_TIERS, SEED_TIER_IDS, seedByPick, seedFromTrace, traceSizeFromFiles, zeroSeed } from "./lib/relationship.js";
 import {
   adaptationCandidate,
   applyGuideOperation,
@@ -86,9 +95,11 @@ import {
   buildDraftMaterial,
   buildKnowingText,
   hasPersonality,
+  needsMotifs,
   needsNativeInterestRefresh,
   replaceBornHobbies,
   layerTagProblem,
+  motifsOf,
   normalizePersonality,
   parseDraftReply,
   personalityDraftSpec,
@@ -99,6 +110,7 @@ import {
   bornHobbySpec,
   canGrow,
   grownHobbySpec,
+  motifHobbySpec,
   nativeInterestSeed,
   parseHobbyReply,
   parseNativeHobbyReply,
@@ -123,6 +135,18 @@ import {
   readInterestLearning,
   scheduleExploration,
 } from "./lib/interest-exploration.js";
+import {
+  addSeeds,
+  emptySeedBook,
+  markSeedUsed,
+  parseSeedReply,
+  pickMotifForSeeds,
+  pickSeed,
+  readSeedBook,
+  recentSeedMotifs,
+  seedSpec,
+  usableSeeds,
+} from "./lib/topic-seeds.js";
 import {
   buildCatalog,
   buildStickerHint,
@@ -152,7 +176,16 @@ import {
 } from "./lib/sticker-library.js";
 import { canAnswerPoke } from "./lib/poke.js";
 import { badgeGuide, badgeText, fallbackBadge, normalizeBadge, parseBadgeMarker } from "./lib/badges.js";
-import { effectiveVisionConfig, imageBytesMatchMime, isStrictBase64, normalizeVisionConfig } from "./lib/vision.js";
+import {
+  classifyVisionFailure,
+  effectiveVisionConfig,
+  imageBytesMatchMime,
+  isStrictBase64,
+  normalizeVisionConfig,
+  partnerOfflineNotice,
+  shouldTryVisionFallback,
+  visionUnavailableNotice,
+} from "./lib/vision.js";
 import { prepareVisionFrames } from "./lib/gif-frames.js";
 import {
   RECOGNITION_QUESTIONS,
@@ -184,6 +217,19 @@ import {
   touchSession,
 } from "./lib/persona-review.js";
 import { activePanelSeenAt, applyPresence, PANEL_OPEN_MS, bannerText, mergeBatch, shouldAnnounce } from "./lib/notify.js";
+import {
+  MAX_SAY,
+  appendTurn,
+  applyTurn,
+  coCreateExpired,
+  coCreateProgress,
+  coCreateTurnSpec,
+  emptyCoCreate,
+  mergeDraft,
+  normalizeCoCreate,
+  parseTurnReply,
+  withIntent,
+} from "./lib/co-create.js";
 import {
   ACTION_STYLES,
   ACTION_VOICE,
@@ -242,7 +288,11 @@ import {
   VOICE_TIERS,
   activeVoiceModel,
   activeVoiceProfileId,
+  chunkTimings,
+  speakableChunks,
+  speakableText,
   voiceChoicesForModel,
+  voiceGroupsForModel,
   cleanVoiceText,
   isExplicitVoiceRequest,
   nextTextRuntime,
@@ -348,10 +398,15 @@ export function apply(ctx) {
   function globalSettingsView() {
     const global = store.getGlobalSettings();
     const maskVoice = (config) => config ? { ...config, apiKey: config.apiKey ? "********" : "" } : null;
+    const activeModel = global.voiceModel || {};
     return {
       ...global,
-      voiceModel: maskVoice(global.voiceModel),
+      voiceModel: maskVoice(activeModel),
       voiceProfiles: Object.fromEntries(Object.entries(global.voiceProfiles || {}).map(([id, profile]) => [id, { ...profile, config: maskVoice(profile.config) }])),
+      // 少一个必填项就等于一条也合成不出来；设置页直接把这件事说清楚。
+      voiceReady: Boolean(activeModel.baseUrl && activeModel.model && activeModel.apiKey),
+      // 系统加密用不上时 Key 就是明文躺着，界面得如实说，不能让她以为已经加密。
+      voiceKeyEncrypted: isProtectedKey(activeModel.apiKey),
       effectiveUserName: USER_NAME,
       myActionTail: actionTailFromTemplate(readMyTemplateEntry(global)),
     };
@@ -399,7 +454,7 @@ export function apply(ctx) {
   const GLOBAL_SETTING_KEYS = new Set([
     "model", "recognitionModel", "vision", "userNameOverride", "daybookEnabled", "workfeedEnabled",
     "globalGate", "quiet", "actionStyle", "messageAvatars", "messageRefine", "myActionTail",
-    "rhythmEnabled", "rhythmStyleEnabled", "rhythmProactiveEnabled", "rhythmResetAt", "voiceEnabled", "voiceProfiles", "voiceProfile",
+    "rhythmEnabled", "rhythmStyleEnabled", "rhythmProactiveEnabled", "rhythmResetAt", "voiceEnabled", "voiceDelivery", "voiceProfiles", "voiceProfile",
   ]);
   const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "vision", "voice", "partnerFeedEnabled"]);
 
@@ -442,6 +497,9 @@ export function apply(ctx) {
     }
     if (Object.prototype.hasOwnProperty.call(patch, "voiceEnabled")) {
       patch.voiceEnabled = patch.voiceEnabled === true;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "voiceDelivery")) {
+      patch.voiceDelivery = patch.voiceDelivery === true;
     }
     if (Object.prototype.hasOwnProperty.call(patch, "voiceProfiles")) {
       const current = store.getGlobalSettings();
@@ -487,6 +545,23 @@ export function apply(ctx) {
     if (!isValidPartnerId(agentId) || !/^m_[A-Za-z0-9_-]+$/.test(String(messageId ?? ""))) return null;
     const ext = format === "mp3" ? "mp3" : "wav";
     return path.join(voiceDir, agentId, `${messageId}.${ext}`);
+  }
+
+  /**
+   * 语音气泡跟着播放点亮的那几道标记。
+   * 官方给了词级时间戳就用词级；没有就按字数把总时长摊成分句级。
+   * 老消息没有 marks，界面上自然不点亮，不用回头改历史数据。
+   */
+  function normalizeVoiceMarks(text, timings, durationMs) {
+    const official = (Array.isArray(timings) ? timings : [])
+      .map((row) => ({ start: Number(row?.start), end: Number(row?.end), text: String(row?.text ?? "").trim() }))
+      .filter((row) => Number.isFinite(row.start) && Number.isFinite(row.end) && row.end > row.start && row.text)
+      .slice(0, 240);
+    if (official.length) return { kind: "word", marks: official };
+    const chunks = speakableChunks(text);
+    const spans = chunkTimings(chunks, durationMs);
+    if (!chunks.length || !spans.length) return { kind: "sentence", marks: [] };
+    return { kind: "sentence", marks: chunks.map((chunk, index) => ({ ...spans[index], text: chunk.text })) };
   }
 
   function effectivePartnerVoice(partnerSettings, globalSettings) {
@@ -550,6 +625,7 @@ export function apply(ctx) {
         text: decision.text,
         voiceId: decision.voiceId,
         modelConfig: globalSettings.voiceModel,
+        delivery: globalSettings.voiceDelivery !== false,
       });
       const thread = store.getThread(agentId);
       const trigger = generation.triggerMessageId
@@ -599,6 +675,7 @@ export function apply(ctx) {
           voiceId: decision.voiceId,
           format: generated.format,
           durationMs: Number.isFinite(generated.durationMs) ? generated.durationMs : null,
+          marks: normalizeVoiceMarks(decision.text, generated.timings, generated.durationMs),
           playedAt: null,
           createdAt: new Date().toISOString(),
         },
@@ -712,6 +789,10 @@ export function apply(ctx) {
 
   const ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
   const ATTACHMENT_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+  // 模型这会儿用不了时，给 ta 回头看的节奏：45 分钟一次、最多三次。
+  // 实测（2026-10-02 23:13~23:29）Codex 挂了十六分钟就恢复；原来那条“五分钟重试”是无底洞。
+  const MODEL_RETRY_DELAY_MS = 45 * 60 * 1000;
+  const MODEL_RETRY_LIMIT = 3;
   const attachmentsDir = path.join(ctx.dataDir, "v2", "attachments");
   fs.mkdirSync(attachmentsDir, { recursive: true });
 
@@ -827,6 +908,112 @@ export function apply(ctx) {
     }
   }
 
+  /**
+   * 识图的两条路。
+   *
+   * 首选配好的那个识图模型；它配额用完、凭据出事这类挂掉时，
+   * 先看宿主那条备用通道能不能看图——能看就让它看，总比让 ta 收一张“没能看清”强。
+   * 只有备用通道也看不了（模型只吃文字、或者它也挂了），才轮到界面提示。
+   */
+  async function describeImageWithFallback(modelRef, attachment) {
+    const ref = normalizeModelRef(modelRef);
+    if (!ref || !attachment?.data) throw new Error("识图模型不可用");
+    let firstError = null;
+    try {
+      return { note: await describeImage(ref, attachment), via: `${ref.provider}/${ref.model}` };
+    } catch (error) {
+      firstError = error;
+    }
+    // 只在「真挂」时才去动备用通道：超时、断网这类首选模型多半还在等，
+    // 换模型反而会让 ta 在两个视觉之间飘。
+    const kind = classifyModelFailure({ code: firstError?.code, message: firstError?.message, status: firstError?.status });
+    if (!shouldTryVisionFallback(kind)) throw firstError;
+    // 不猜备用通道用哪个模型：它不能指定模型，而目录里标 isCurrent 的那个是宿主焦点模型
+    // （实测是 codex/gpt-6.1-sol），跟 utility 实际走的（MiniMax）压根不是一回事。
+    // 猜错等于把这条路由封死，所以直接问一次：能看就拿回说明，看不了就老实提示。
+    diagnostics({ event: "vision.fallback.try", kind });
+    let note = "";
+    try {
+      note = await describeImageViaUtility(attachment);
+    } catch (error) {
+      diagnostics({ event: "vision.fallback.failed", kind, error: describeError(error) });
+      throw firstError;
+    }
+    return { note, via: "utility" };
+  }
+
+  /**
+   * ta 缓过来接上之前，先把漏掉的图补上。
+   *
+   * 昨晚识图没成的那条，早上 ta 补话时并没有重新看一眼图，只能照着「没能看清」接——
+   * 于是 ta 只能说“你得再发一次”，白让用户再发一遍。回复前补一次识图，
+   * ta 这回是真看得见。补不上就算了，不影响这一轮能不能说话。
+   */
+  async function backfillVisionNote(agentId, messages) {
+    const targets = (Array.isArray(messages) ? messages : [])
+      .filter((row) => row?.role === "user" && row?.attachment?.id && !row.visionNote && !row.recalled)
+      .slice(-2);
+    if (!targets.length) return 0;
+    const vision = effectiveVisionConfig(store.getGlobalSettings().vision, store.getPartnerSettings(agentId).vision);
+    if (!vision.model || vision.status !== "verified") return 0;
+    let filled = 0;
+    for (const row of targets) {
+      const stored = readAttachment(row.attachment.id, agentId);
+      if (!stored?.data) continue;
+      try {
+        const described = await describeImageWithFallback(vision.model, stored);
+        if (described.note) {
+          store.patchMessage(agentId, row.id, { visionNote: described.note, visionVia: described.via });
+          filled += 1;
+        }
+      } catch (error) {
+        diagnostics({ event: "vision.backfill.failed", agentId, messageId: row.id, error: describeError(error) });
+      }
+    }
+    if (filled) diagnostics({ event: "vision.backfill.ok", agentId, filled });
+    return filled;
+  }
+
+  /** 借宿主备用通道识图：它不能指定模型，用的就是目录里宿主当前那个。 */
+  async function describeImageViaUtility(attachment) {
+    const prepared = await prepareVisionFrames(attachment);
+    const prompt = prepared.animated
+      ? `请用简洁中文描述这张动图：以下 ${prepared.parts.length} 张图按时间顺序截取自同一个 GIF。请综合前后变化理解完整动作和梗，再补上主要对象、氛围、可见文字。只输出图片说明。`
+      : "请用简洁中文描述这张图片：主要对象、动作、氛围、可见文字；不确定的内容请标明不确定。只输出图片说明。";
+    const requestId = `chahuahui_vision_fallback_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    try {
+      const utility = await withModelDeadline(ctx, {
+        requestId,
+        timeoutMs: 60_000,
+        operation: "vision-fallback",
+        diagnostics,
+        run: () => ctx.models.utility({
+          requestId,
+          scope: "app",
+          systemPrompt: "你只负责看图说话，不做别的。",
+          messages: [{
+            role: "user",
+            content: [
+              { type: "text", text: prompt },
+              ...prepared.parts.map((part) => ({ type: "image", mimeType: part.mimeType, data: part.data.toString("base64") })),
+            ],
+          }],
+          maxTokens: prepared.animated ? 3600 : 2400,
+          temperature: 0.2,
+        }),
+      });
+      const text = String(utility?.text ?? "").trim();
+      if (!text) throw new Error("备用通道没有返回图片说明");
+      return text.slice(0, 4000);
+    } finally {
+      try {
+        await ctx.models.cancel(requestId);
+      } catch (error) {
+        diagnostics({ event: "models.cancel.failed", error: describeError(error) });
+      }
+    }
+  }
+
   async function describeImageOnce(ref, attachment, requestId) {
     // 动图先在本地抽帧：只把 GIF 原样丢给模型的话，它解码出来的是静止的一帧，
     // 动作过程和梗全丢。抽成几张按时间顺序排好的 PNG，它才读得出"动起来"是什么。
@@ -834,37 +1021,49 @@ export function apply(ctx) {
     const visionPrompt = prepared.animated
       ? `请用简洁中文描述这张动图：以下 ${prepared.parts.length} 张图按时间顺序截取自同一个 GIF（原动画共 ${prepared.totalFrames} 帧）。请综合前后变化理解完整动作和梗，不要只描述第一帧；再补上主要对象、氛围、可见文字，不确定的内容请标明不确定。只输出图片说明。`
       : "请用简洁中文描述这张图片：主要对象、动作、氛围、可见文字；不确定的内容请标明不确定。只输出图片说明。";
-    const response = await ctx.models.stream({
-      requestId,
-      provider: ref.provider,
-      model: ref.model,
-      messages: [{
-        role: "user",
-        content: [
-          { type: "text", text: visionPrompt },
-          ...prepared.parts.map((part) => ({ type: "image", mimeType: part.mimeType, data: part.data.toString("base64") })),
-        ],
-      }],
-      maxTokens: prepared.animated ? 900 : 500,
-      temperature: 0.2,
-    });
-    const raw = typeof response?.text === "function" ? await response.text() : "";
-    let text = "";
-    for (const line of String(raw).split(/\r?\n/)) {
+    // 预算给“思考 + 描述”合计：思考很重的模型（如 MiniMax M3.1 Flash）会把 500 吃光、正文留空。
+    // 拿到空正文就只在同一路把预算翻倍重试一次，不换模型也不换通道。
+    const base = prepared.animated ? 3600 : 2400;
+    let empty = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const id = attempt === 0 ? requestId : `chahuahui_image_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
       try {
-        const row = JSON.parse(line);
-        if (row.type === "error") throw new Error(row.message || "识图模型调用失败");
-        if (row.type === "text-delta") text += String(row.delta ?? "");
-        if (row.type === "done" && !text && Array.isArray(row.assistant?.content)) {
-          text = row.assistant.content.filter((part) => part?.type === "text").map((part) => part.text).join("");
+        const response = await ctx.models.stream({
+          requestId: id,
+          provider: ref.provider,
+          model: ref.model,
+          messages: [{
+            role: "user",
+            content: [
+              { type: "text", text: visionPrompt },
+              ...prepared.parts.map((part) => ({ type: "image", mimeType: part.mimeType, data: part.data.toString("base64") })),
+            ],
+          }],
+          maxTokens: attempt === 0 ? base : base * 2,
+          temperature: 0.2,
+        });
+        const raw = typeof response?.text === "function" ? await response.text() : "";
+        let text = "";
+        for (const line of String(raw).split(/\r?\n/)) {
+          try {
+            const row = JSON.parse(line);
+            if (row.type === "error") throw new Error(row.message || "识图模型调用失败");
+            if (row.type === "text-delta") text += String(row.delta ?? "");
+            if (row.type === "done" && !text && Array.isArray(row.assistant?.content)) {
+              text = row.assistant.content.filter((part) => part?.type === "text").map((part) => part.text).join("");
+            }
+          } catch (error) {
+            if (error instanceof SyntaxError) continue;
+            throw error;
+          }
         }
-      } catch (error) {
-        if (error instanceof SyntaxError) continue;
-        throw error;
+        if (!text.trim()) { empty = text; diagnostics({ event: "vision.retry.empty", attempt, maxTokens: base * (attempt + 1) }); continue; }
+        return text.trim().slice(0, 4000);
+      } finally {
+        try { await ctx.models.cancel(id); } catch { /* 释放失败不影响本次结果 */ }
       }
     }
-    if (!text.trim()) throw new Error("识图模型没有返回图片说明");
-    return text.trim().slice(0, 4000);
+    throw new Error("识图模型没有返回图片说明");
   }
 
   async function testVisionModel(modelRef) {
@@ -885,7 +1084,7 @@ export function apply(ctx) {
             { type: "image", mimeType: "image/png", data: imageData },
           ],
         }],
-        maxTokens: 40,
+        maxTokens: 800,
         temperature: 0,
       });
       const raw = typeof response?.text === "function" ? await response.text() : "";
@@ -1207,6 +1406,7 @@ export function apply(ctx) {
     userText,
     maxTokens,
     timeoutMs: options.timeoutMs ?? 120_000,
+    diagnostics,
   });
 
   /**
@@ -1234,7 +1434,7 @@ export function apply(ctx) {
     });
     let raw = "";
     try {
-      raw = await askCheap(spec.systemPrompt, spec.userText, 420, { timeoutMs: 20_000 });
+      raw = await askCheap(spec.systemPrompt, spec.userText, 420, { timeoutMs: 60_000 });
     } catch (error) {
       diagnostics({ event: "adaptation.reconcile.failed", agentId, sourceMessageId: stored.id, error: describeError(error) });
       return { ok: false, reason: "model-failed" };
@@ -1322,6 +1522,14 @@ export function apply(ctx) {
       now,
       currentContext: { lifeDay: dayKey(now), ...currentContext },
     });
+  }
+
+  /**
+   * 放肆的档位料：能损到什么份上，只跟关系到哪一步有关，
+   * 跟「她有没有先开火」无关——她不骂人，那扇门就不能指望她来推。
+   */
+  function teaseTextFor(agentId, knowing = store.getKnowing(agentId)) {
+    return buildTeaseText({ stage: getStage(effectiveRelationship(knowing)) });
   }
 
   function adaptationEvidence(agentId, guideIds = []) {
@@ -1633,7 +1841,7 @@ export function apply(ctx) {
   }
 
   /** 把一条主动消息送进她那个窗（她不在也照发，显示未读）。 */
-  async function deliverProactive(agentId, { partnerName, topic, hobby, discovery, exception, followup, wakeEcho, sceneEcho }) {
+  async function deliverProactive(agentId, { partnerName, topic, hobby, discovery, seed, exception, followup, wakeEcho, sceneEcho }) {
     await loadUserName();
     const memoryText = buildMemoryBlock(store.readMemory(agentId));
     // 主动开口也得是「ta 本人」在说话：跟面对面回复用同一份人格来源。
@@ -1643,7 +1851,10 @@ export function apply(ctx) {
     const persona = await getPersona(agentId);
     const personaText = renderPersona(persona, { partnerName, userName: USER_NAME, nameFallback: true });
     const shareableDiscovery = discoveryForProactiveMessage(discovery, { exception });
-    const shareableHobby = shareableDiscovery ? hobby : null;
+    const shareableSeed = exception ? null : seed ?? null;
+    const shareableHobby = shareableSeed
+      ? hobby ?? { id: shareableSeed.motifId, name: shareableSeed.motifName }
+      : shareableDiscovery ? hobby : null;
     const searchContext = shareableDiscovery ? formatSearchContext(shareableDiscovery.results) : "";
     const now = new Date();
     const currentTimeText = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日，${spokenClock(now)}`;
@@ -1689,7 +1900,7 @@ export function apply(ctx) {
           correction: topic?.correction ?? "",
           currentTimeText,
         })
-      : proactiveSpec({ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, stickerText, userRhythmText: userRhythm });
+      : proactiveSpec({ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, stickerText, userRhythmText: userRhythm });
 
     let raw = "";
     try {
@@ -1771,6 +1982,7 @@ export function apply(ctx) {
       exception: Boolean(exception),
       topicId: topic?.id ?? null,
       discoveryId: shareableDiscovery?.id ?? null,
+      seedId: shareableSeed?.id ?? null,
       interestId: shareableHobby?.id ?? shareableDiscovery?.interestId ?? null,
       interestName: shareableHobby?.name ?? shareableDiscovery?.interestName ?? null,
       interestObject: shareableHobby?.object ?? null,
@@ -1788,6 +2000,13 @@ export function apply(ctx) {
       const current = store.getProactiveState(agentId);
       store.setProactiveState(agentId, {
         interestLearning: markDiscoveryShared(current.interestLearning, shareableDiscovery.id, text, new Date()),
+      });
+    }
+    if (shareableSeed) {
+      // 发出去才算用过；空正文、低信号、重复措辞都在前面拦掉了，种子留着下次再端。
+      const current = store.getProactiveState(agentId);
+      store.setProactiveState(agentId, {
+        topicSeeds: markSeedUsed(readSeedBook(current.topicSeeds), shareableSeed.id, text, new Date()),
       });
     }
     diagnostics({
@@ -2283,6 +2502,22 @@ export function apply(ctx) {
         continue;
       }
 
+      // 兴趣先养护：母题不够就补，母题在手才谈得上长种子。
+      // 补母题以前只挂在 18~36 小时一次的探索节拍上，存量伙伴要等一天多才有话题；
+      // 提到这里，内部节流照旧管着频率。
+      await maybeTendHobbies(agentId).catch((error) => {
+        diagnostics({ event: "knowing.hobbies.tend.failed", agentId, error: describeError(error) });
+      });
+
+      // 种子是主粮，不等搜索那条 18~36 小时的节拍：库存低了就长，带个冷却就行。
+      const seedGrow = await growSeeds(agentId, { now }).catch((error) => {
+        diagnostics({ event: "interest.seeds.failed", agentId, error: describeError(error) });
+        return { added: 0, reason: describeError(error) };
+      });
+      if (seedGrow.added > 0) {
+        diagnostics({ event: "interest.seeds.ready", agentId, added: seedGrow.added, motif: seedGrow.motif });
+      }
+
       const learning = readInterestLearning(state.interestLearning, now);
       if (!learning.curiosity.startedAt || (!exploredThisTick && explorationDue(learning, now))) {
         if (learning.curiosity.startedAt) exploredThisTick = true;
@@ -2306,9 +2541,16 @@ export function apply(ctx) {
         ? book.topics.find((row) => row.id === followup.previousTopicId) ?? null
         : null;
       if (followup) followup.previousTopic = previousTopic;
-      // 带内容的主动话题只从兴趣探索的新发现里来；已读未回先处理关系反应。
-      const candidateDiscovery = followup?.read ? null : nextDiscovery(state.interestLearning, now);
+      // 带内容的主动话题：先用手上的种子（主力），没有再退回时效搜索的发现。
+      // 已读未回先处理关系反应。
       const knowing = store.getKnowing(agentId);
+      const seedBook = readSeedBook(state.topicSeeds, now);
+      const candidateSeed = followup?.read
+        ? null
+        : pickSeed(seedBook, { now, recentMotifIds: recentSeedMotifs(seedBook) });
+      const candidateDiscovery = followup?.read || candidateSeed
+        ? null
+        : nextDiscovery(state.interestLearning, now);
       const topic = null;
       const contactPolicy = contactPolicyFor(agentId, now, "proactive");
       const gate = gateCheck({
@@ -2322,9 +2564,12 @@ export function apply(ctx) {
       });
       // 夜间例外走独立留言提示词，不带兴趣发现，也不能把发现误记为已分享。
       const discovery = discoveryForProactiveMessage(candidateDiscovery, { exception: gate.exception });
-      const hobby = discovery
-        ? knowing.hobbies.find((row) => row.id === discovery.interestId) ?? { id: discovery.interestId, name: discovery.interestName }
-        : null;
+      const seed = gate.exception ? null : candidateSeed;
+      const hobby = seed
+        ? knowing.hobbies.find((row) => row.id === seed.motifId) ?? { id: seed.motifId, name: seed.motifName }
+        : discovery
+          ? knowing.hobbies.find((row) => row.id === discovery.interestId) ?? { id: discovery.interestId, name: discovery.interestName }
+          : null;
 
       const wakeEcho = gate.ok && !gate.exception && !followup?.read
         ? wakeEchoFor(thread.messages, { now: now.getTime(), consumedId: settings.wakeEcho?.sourceId ?? null })
@@ -2346,10 +2591,10 @@ export function apply(ctx) {
         continue;
       }
 
-      // 好奇心触发探索，但没有真实的新发现时，不从旧话题或静态兴趣里硬凑内容消息。
+      // 手上没有能聊的东西时，不从旧话题或静态兴趣里硬凑内容消息。
       const form = wakeEcho || followup?.read
         ? "word"
-        : discovery
+        : seed || discovery
           ? "word"
           : decideForm({ topic: null, selfSource: false, tier: settings.tier }).form;
 
@@ -2405,6 +2650,7 @@ export function apply(ctx) {
           topic,
           hobby,
           discovery,
+          seed,
           exception: Boolean(finalGate.exception),
           followup,
           wakeEcho,
@@ -2740,6 +2986,10 @@ export function apply(ctx) {
   /** 试过一次之后多久才允许再试（性格初稿与爱好共用这条节流） */
   const HOBBY_SEED_RETRY_MS = 6 * 60 * 60 * 1000;
   const DRAFT_RETRY_MS = 6 * 60 * 60 * 1000;
+  /** 话题种子：库存低于这个数就再去长一批 */
+  const SEED_LOW_WATER = 12;
+  /** 两次长种子之间至少隔这么久，别变成天天刷模型 */
+  const SEED_GROW_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 
   /**
    * 性格初稿：从 Hana 那边她自己配的人格文件里看一眼这个人是什么样。
@@ -2866,6 +3116,52 @@ export function apply(ctx) {
       return { born: hobbies.filter((row) => row.origin === "born").length };
     }
 
+    // 母题不够就补。
+    //
+    // 2026-10-04：以前判定的是「有没有兴趣」，而不管这些兴趣能不能出话题。
+    // 实际跑下来，一个伙伴手上全是碎片切口（楼道脚步、窗台干角那一类），
+    // 当人格底色很好，可一出题就只能给没人接得住的冷知识。
+    // 这里只补母题、不碰旧数据：旧的继续当底色用。
+    if (needsMotifs(knowing.hobbies)) {
+      const lastTry = Date.parse(store.getPartnerSettings(agentId).motifSeedTryAt ?? "") || 0;
+      if (Date.now() - lastTry < HOBBY_SEED_RETRY_MS) return { motif: 0, reason: "throttled" };
+      store.setPartnerSettings(agentId, { motifSeedTryAt: new Date().toISOString() });
+      const personalityText = nativeInterestSeed(knowing.personality);
+      if (!personalityText.trim()) {
+        diagnostics({ event: "knowing.hobbies.motif.no-material", agentId });
+        return { motif: 0, reason: "no-material" };
+      }
+      const takenObjects = await collectTakenSpots(agentId);
+      const spec = motifHobbySpec({
+        partnerName,
+        personalityText,
+        takenObjects,
+        existing: knowing.hobbies,
+      });
+      const raw = await askCheap(spec.systemPrompt, spec.userText, 420);
+      const rows = validateNativeHobbies(parseNativeHobbyReply(raw), { userName: USER_NAME, takenObjects, layer: "motif" });
+      if (!rows.length) {
+        diagnostics({ event: "knowing.hobbies.motif.empty", agentId, rawHead: String(raw ?? "").slice(0, 160) });
+        return { motif: 0, reason: "empty" };
+      }
+      let hobbies = knowing.hobbies;
+      for (const row of rows) {
+        hobbies = addHobby(hobbies, {
+          ...row,
+          origin: "born",
+          layer: "motif",
+          schemaVersion: 2,
+          generationVersion: "motif-v1",
+          source: "generated",
+        });
+      }
+      const added = motifsOf(hobbies).length - motifsOf(knowing.hobbies).length;
+      if (!added) return { motif: 0, reason: "no-room" };
+      store.saveKnowing(agentId, { ...knowing, hobbies });
+      diagnostics({ event: "knowing.hobbies.motif", agentId, added, names: rows.map((row) => row.name).join("、") });
+      return { motif: added };
+    }
+
     if (!canGrow({ relationship: effectiveRelationship(knowing), hobbies: knowing.hobbies })) {
       return { grown: 0, reason: "not-yet" };
     }
@@ -2906,6 +3202,34 @@ export function apply(ctx) {
     return { grown: 1 };
   }
 
+  /**
+   * 给一位伙伴补一批话题种子。
+   *
+   * 2026-10-04：以前内容型主动消息只有一个来源——沿兴趣联网搜一个「新发现」，
+   * 一次探索 18~36 小时才出一条，而伙伴一天可能开口七八次，剩下的只能拿戳一戳填。
+   * 种子走的是另一条路：母题本身就有的厚度，不联网，一次长几条，攒成库存。
+   */
+  async function growSeeds(agentId, { now = new Date() } = {}) {
+    const knowing = store.getKnowing(agentId);
+    const motifs = motifsOf(knowing.hobbies);
+    if (!motifs.length) return { added: 0, reason: "no-motif" };
+    const state = store.getProactiveState(agentId);
+    const book = readSeedBook(state.topicSeeds, now);
+    if (usableSeeds(book, { now }).length >= SEED_LOW_WATER) return { added: 0, reason: "enough" };
+    const last = Date.parse(book.lastGrowAt ?? "") || 0;
+    if (last && now.getTime() - last < SEED_GROW_COOLDOWN_MS) return { added: 0, reason: "cooling" };
+    const motif = pickMotifForSeeds(motifs, book);
+    if (!motif) return { added: 0, reason: "no-motif" };
+    const spec = seedSpec({ motif, existing: book, now });
+    const raw = await askCheap(spec.systemPrompt, spec.userText, 420);
+    const rows = parseSeedReply(raw);
+    if (!rows.length) return { added: 0, reason: "empty" };
+    const { book: next, added } = addSeeds(book, rows, { motif, now });
+    if (!added) return { added: 0, reason: "duplicate" };
+    store.setProactiveState(agentId, { topicSeeds: next });
+    return { added, motif: motif.name };
+  }
+
   /** 有好奇心时才沿着长期兴趣找一个新角度；搜索结果只短期留存，供主动分享使用。 */
   async function maybeExploreInterest(agentId, partnerName, now = new Date()) {
     let state = store.getProactiveState(agentId);
@@ -2940,7 +3264,7 @@ export function apply(ctx) {
         book: learning,
         now,
       });
-      const rawPlan = await askCheap(spec.systemPrompt, spec.userText, 180, { timeoutMs: 20_000 });
+      const rawPlan = await askCheap(spec.systemPrompt, spec.userText, 180, { timeoutMs: 60_000 });
       const plan = parseExplorationPlan(rawPlan);
       if (!plan) return retryLater("no-new-angle");
       const fetcher = typeof ctx.network?.fetch === "function" ? ctx.network.fetch.bind(ctx.network) : null;
@@ -3124,6 +3448,10 @@ export function apply(ctx) {
   async function composeReply(agentId, { repliedTo = null, mayPass = false, currentMessageId = null, excludeMessageId = null, replaceMessageId = null, isCurrent = null } = {}) {
     await loadUserName();
     const startedAt = Date.now();
+    // 先把上次没看清的图补上：ta 这会儿要回话，得真看见那张图，而不是照着「没能看清」猜。
+    if (await backfillVisionNote(agentId, store.pendingMessages(agentId))) {
+      // 补完要重取一次，否则这轮上下文里还是那份没有说明的旧消息
+    }
     const pending = store.pendingMessages(agentId).filter((row) => row?.id !== excludeMessageId);
     const windowed = splitForContext(pending).recent;
     // 回复目标必须是这轮实际看进去的最后一条用户消息；否则连发时会把已经覆盖的话误判成漏回。
@@ -3280,6 +3608,8 @@ export function apply(ctx) {
       replyText: replyChoiceBlock({ userName: USER_NAME }),
       // 这一句只说关系走到哪儿了（有人话、不给分数）；有起跑线时额外说不必重新自我介绍
       note: relationshipNote(effectiveRelationship(knowing), knowing.relationSeed),
+      // 能损到什么份上：只跟关系档位有关，跟她说没说什么无关
+      teaseText: teaseTextFor(agentId, knowing),
       userName: USER_NAME,
     });
     // 表情包进上下文不能只剩"[表情]"两个字：从本地翻出标签，把"她发的是哪张"说成人话。
@@ -3307,25 +3637,38 @@ export function apply(ctx) {
       agentRef: await agentDefaultModel(agentId),
     });
 
-    let generated = await generateReply(ctx, {
-      systemPrompt,
-      messages,
-      diagnostics,
-      maxTokens: 900,
-      modelRef: choice ? { provider: choice.provider, model: choice.model } : null,
-      catalog: modelCatalog,
-    });
+    let generated = null;
+    // 「模型这会儿用不了」不是生成失败，是这一轮根本不该发生：
+    // 不换模型顶嘴（那会换掉 ta 的嗓子和记性），也不当失败重试。
+    const callModel = async (system = systemPrompt) => {
+      try {
+        return await generateReply(ctx, {
+          systemPrompt: system,
+          messages,
+          diagnostics,
+          maxTokens: 900,
+          modelRef: choice ? { provider: choice.provider, model: choice.model } : null,
+          catalog: modelCatalog,
+        });
+      } catch (error) {
+        if (error?.code === "MODEL_UNAVAILABLE") {
+          diagnostics({ event: "chat.model.unavailable", agentId, kind: error.kind ?? "provider", model: error.model ?? null });
+          return { unavailable: true, kind: error.kind ?? "provider" };
+        }
+        throw error;
+      }
+    };
+    generated = await callModel();
+    if (generated.unavailable) {
+      return { ok: false, reason: "unavailable", kind: generated.kind, generationMs: Date.now() - startedAt };
+    }
     const voiceRisk = inspectVoice(generated.text);
     if (voiceRisk.level === "retry") {
       diagnostics({ event: "chat.output.retry", agentId, reason: voiceRisk.reason, tail: voiceRisk.tail });
-      const retried = await generateReply(ctx, {
-        systemPrompt: `${systemPrompt}\n\n刚才的输出末尾疑似混入了无关字符。请只重新输出要说给对方的自然正文，不要解释格式。`,
-        messages,
-        diagnostics,
-        maxTokens: 900,
-        modelRef: choice ? { provider: choice.provider, model: choice.model } : null,
-        catalog: modelCatalog,
-      });
+      const retried = await callModel(`${systemPrompt}\n\n刚才的输出末尾疑似混入了无关字符。请只重新输出要说给对方的自然正文，不要解释格式。`);
+      if (retried.unavailable) {
+        return { ok: false, reason: "unavailable", kind: retried.kind, generationMs: Date.now() - startedAt };
+      }
       const retryRisk = inspectVoice(retried.text);
       diagnostics({ event: "chat.output.retry.result", agentId, level: retryRisk.level, reason: retryRisk.reason });
       if (retryRisk.level !== "retry") generated = retried;
@@ -3516,6 +3859,17 @@ export function apply(ctx) {
       });
       turn.generationMs = made.generationMs;
       if (!made.ok) {
+        if (made.reason === "unavailable") {
+          // 模型配额/凭据这类挂掉：不拿别的模型顶嘴（那是换 ta 的嗓子和记性），
+          // 也不排五分钟重试（额度得等几小时，重试一万次也一样）。就把情况说清楚。
+          turn.status = "error";
+          turn.error = { message: "模型这会儿用不了", kind: made.kind ?? "provider" };
+          const patched = await attachOfflineNotice(turn.agentId, turn.userMessageId, made.kind);
+          store.clearPendingReplyIf(turn.agentId, turn.userMessageId);
+          scheduleTurnCleanup(turn);
+          diagnostics({ event: "turn.unavailable", agentId: turn.agentId, messageId: turn.userMessageId, kind: made.kind, patched });
+          return;
+        }
         if (made.reason === "silent" || made.reason === "stale") {
           turn.status = "ready";
           turn.bubbles = [];
@@ -3799,15 +4153,19 @@ export function apply(ctx) {
       let dueAt = Date.parse(pending?.dueAt ?? "");
       let mode = pending?.mode ?? "recovered";
       // 兼容修复前已经挂住的消息：旧账本没有 pendingReply，只能认末尾未读的用户话。
+      //
+      // 挂着 MODEL_UNAVAILABLE 提示的不算：那类消息按设计永远不被标已读（盖了就是假收据），
+      // 拿它当「还有话没接」会每五分钟重试一轮，实测凌晨刷了四轮（2026-10-02 23:13~23:29）。
+      // 要等 ta 缓过来接，走 scheduleModelRetry 那条有上限的排期，不走这条无底洞。
       if (!Number.isFinite(dueAt)) {
-        if (tail.some((row) => !row.readAt && !row.unreadResetAt && !row.recalled)) {
+        if (tail.some((row) => !row.readAt && !row.unreadResetAt && !row.recalled && !row.notice)) {
           dueAt = Date.now();
           mode = "legacy-recovered";
         }
       }
       if (!Number.isFinite(dueAt)) continue;
       const replyTargetMessageId = targetMessageId
-        ?? tail.find((row) => !row.readAt && !row.unreadResetAt && !row.recalled)?.id
+        ?? tail.find((row) => !row.readAt && !row.unreadResetAt && !row.recalled && !row.notice)?.id
         ?? null;
       scheduleReplyAt(
         partner.id,
@@ -3818,6 +4176,44 @@ export function apply(ctx) {
         pending?.wakeNight ? { wakeNight: pending.wakeNight, wakeKind: pending.wakeKind ?? null } : null,
       );
       diagnostics({ event: "reply.recovered", agentId: partner.id, dueAt, mode });
+    }
+  }
+
+  /**
+   * ta 这会儿接不上话：把情况挂到触发的那条消息上。
+   *
+   * 挂在那条上而不是新发一条，是因为那句「未读」和这句「接不上话」得指同一件事；
+   * 新发一条 ta 的话反而像 ta 真的说过什么，而 ta 这会儿一个字都没说出来。
+   *
+   * 同时排一次慢的、有上限的回头看：模型那阵子可能几分钟就恢复（实测 23:13 挂、23:29 就好了），
+   * 放着不管就是让她干等一轮。间隔拉长到 45 分钟、只给三次机会，既不会刷屏，也不会永远不接。
+   */
+  async function attachOfflineNotice(agentId, messageId, kind) {
+    const target = String(messageId ?? "").trim();
+    if (!target) return false;
+    try {
+      const partners = await listPartners().catch(() => []);
+      const name = partners.find((row) => row.id === agentId)?.name ?? "";
+      const text = partnerOfflineNotice(kind || "provider", name);
+      const thread = store.getThread(agentId);
+      const row = thread.messages.find((item) => item?.id === target);
+      const tries = Number(row?.modelRetryCount ?? 0) + 1;
+      store.patchMessage(agentId, target, {
+        notice: { code: "MODEL_UNAVAILABLE", kind: kind || "provider", text },
+        modelRetryCount: tries,
+      });
+      if (tries <= MODEL_RETRY_LIMIT) {
+        const dueAt = new Date(Date.now() + MODEL_RETRY_DELAY_MS).toISOString();
+        store.setPendingReply(agentId, { dueAt, mode: "model-retry", messageId: target, triggerMessageId: target });
+        scheduleReplyAt(agentId, Date.now() + MODEL_RETRY_DELAY_MS, "model-retry", target, null, null);
+        diagnostics({ event: "model.retry.scheduled", agentId, messageId: target, tries, dueAt });
+      } else {
+        diagnostics({ event: "model.retry.exhausted", agentId, messageId: target, tries });
+      }
+      return true;
+    } catch (error) {
+      diagnostics({ event: "offline.notice.failed", agentId, messageId: target, error: describeError(error) });
+      return false;
     }
   }
 
@@ -3847,6 +4243,14 @@ export function apply(ctx) {
     });
     if (!made.ok) {
       if (made.reason === "stale") return { ok: false, reason: "stale" };
+      if (made.reason === "unavailable") {
+        // 同 runTurn：把「ta 接不上话」挂到触发的那条上，不重试、不换模型。
+        const target = pending?.messageId ?? null;
+        const patched = await attachOfflineNotice(agentId, target, made.kind);
+        store.clearPendingReply(agentId);
+        diagnostics({ event: "reply.unavailable", agentId, messageId: target, kind: made.kind, patched });
+        return { ok: false, reason: "unavailable" };
+      }
       if (made.reason === "silent" || made.reason === "passed") {
         store.clearPendingReplyIf(agentId, pending?.messageId ?? null);
         return { ok: true, silent: made.reason === "silent", passed: made.reason === "passed" };
@@ -4760,6 +5164,7 @@ export function apply(ctx) {
         wakeText,
         passText: "",
         note,
+        teaseText: buildTeaseText({ stage: merged.stage }),
         userName: USER_NAME,
       });
       const replies = [];
@@ -4877,7 +5282,7 @@ export function apply(ctx) {
 
       // 伙伴级路由共用一扇门，避免某个新入口忘记单独校验 agentId。
       app.use("*", async (c, next) => {
-        const match = c.req.path.match(/^\/(?:thread|attachment|voice|settings\/partner|memory|topics|action|knowing|background|backgrounds|sticker|avatar|recognition|persona-review|adaptation)\/([^/]+)/);
+        const match = c.req.path.match(/^\/(?:thread|attachment|voice|settings\/partner|memory|topics|action|knowing|background|backgrounds|sticker|avatar|recognition|persona-review|adaptation|co-create)\/([^/]+)/);
         if (match) {
           let agentId = match[1];
           try { agentId = decodeURIComponent(agentId); } catch { agentId = ""; }
@@ -5491,17 +5896,30 @@ export function apply(ctx) {
         }
         let attachment = null;
         let visionNote = "";
+        let visionVia = "";
+        let visionNotice = null;
         if (isImage) {
           const vision = effectiveVisionConfig(store.getGlobalSettings().vision, store.getPartnerSettings(agentId).vision);
           if (!vision.model || vision.status !== "verified") {
             return c.json({ ok: false, error: { code: "VISION_UNAVAILABLE", message: "当前伙伴没有通过测试的识图模型，暂时不能发送图片" } }, 403);
           }
+          // 存图和识图分两步，失败的处理完全不同：
+          // 存不下是真的收不了（图片太大、格式不对），这时候回错误、整条不落；
+          // 存下了却没看清（图在，ta 这会儿看不见），消息照落、气泡照摆，只欠 ta 一句交代。
           try {
             attachment = saveAttachment({ ...imageInput, agentId });
-            visionNote = await describeImage(vision.model, attachment);
           } catch (error) {
-            if (attachment?.id) removeAttachment(attachment.id);
-            return c.json({ ok: false, error: { code: "VISION_FAILED", message: error?.message || "图片暂时没识别出来，请稍后再试" } }, 502);
+            return c.json({ ok: false, error: { code: "ATTACHMENT_REJECTED", message: error?.message || "这张图暂时收不下" } }, 400);
+          }
+          try {
+            const described = await describeImageWithFallback(vision.model, attachment);
+            visionNote = described.note;
+            visionVia = described.via;
+          } catch (error) {
+            const kind = classifyVisionFailure(error);
+            diagnostics({ event: "vision.failed", agentId, attachmentId: attachment.id, kind, error: describeError(error) });
+            const partnerRow = (await listPartners().catch(() => [])).find((row) => row.id === agentId);
+            visionNotice = { code: "MODEL_UNAVAILABLE", kind, text: visionUnavailableNotice(kind, partnerRow?.name ?? "") };
           }
         }
         let stickerSignalText = "";
@@ -5535,7 +5953,8 @@ export function apply(ctx) {
           ...(clientMessageId ? { clientMessageId } : {}),
           ...(quote ? { quote } : {}),
           ...(isSticker ? { kind: "sticker", bubbles: userBubbles } : {}),
-          ...(attachment ? { attachment: { id: attachment.id, name: attachment.name, mimeType: attachment.mimeType, size: attachment.size }, visionNote } : {}),
+          ...(attachment ? { attachment: { id: attachment.id, name: attachment.name, mimeType: attachment.mimeType, size: attachment.size }, visionNote, ...(visionVia ? { visionVia } : {}) } : {}),
+          ...(visionNotice ? { notice: visionNotice } : {}),
         });
         // 明确偏好先只做本地候选预筛：普通聊天不额外叫模型，候选也必须绑定已落盘的用户消息 id。
         const adaptationHint = adaptationCandidate(messageText);
@@ -5558,6 +5977,14 @@ export function apply(ctx) {
         // 不撤的话会在她正题后面跟着冒一句客套话。连戳合并那套照旧。
         if (cancelPendingActionReply(agentId)) {
           diagnostics({ event: "action.answer.cancelled", agentId });
+        }
+
+        // 模型这会儿用不了：消息已经存下来了，这一轮不安排回复。
+        // ta 没读到 → 那句「未读」就一直挂着，等 ta 自己缓过来（额度回来、网络好了）再接。
+        // 这里不硬塞一个延迟重试：那时候兴许她已经睡了，或者压根没人再去点那张图。
+        if (visionNotice) {
+          diagnostics({ event: "turn.unavailable", agentId, messageId: stored.id, kind: visionNotice.kind });
+          return c.json({ ok: true, messageId: stored.id, mode: "unavailable", notice: visionNotice, recall: recallEligibility(stored) });
         }
 
         // 手机在不在ta手里是ta自己的事，不看她；这里只把ta那份状态推进到现在
@@ -5733,6 +6160,7 @@ export function apply(ctx) {
             models,
             visionModels,
             voiceChoices: voiceChoicesForModel(store.getGlobalSettings().voiceModel),
+            voiceGroups: voiceGroupsForModel(store.getGlobalSettings().voiceModel),
             voiceTiers: VOICE_TIERS,
             voicePresets: VOICE_PRESETS,
             hiddenPartners: hidden.map(({ id, name, unavailable = false }) => ({ id, name, unavailable })),
@@ -5811,6 +6239,10 @@ export function apply(ctx) {
               if (profile.config?.apiKey && profile.config.apiKey !== "********") profile.config.apiKey = await protectKey(profile.config.apiKey);
               else profile.config.apiKey = currentProfiles[id]?.config?.apiKey || "";
             }
+            const enc = encryptionStatus();
+            if (!enc.ok && globalPatch.voiceProfiles) {
+              diagnostics({ event: "voice.key.plain", reason: enc.reason });
+            }
           }
           store.setGlobalSettings(globalPatch);
           // 今日情境从关到开：清掉「今天已经露过」的记账。
@@ -5827,6 +6259,7 @@ export function apply(ctx) {
             ok: true,
             global: globalSettingsView(),
             voiceChoices: voiceChoicesForModel(store.getGlobalSettings().voiceModel),
+            voiceGroups: voiceGroupsForModel(store.getGlobalSettings().voiceModel),
           });
         } catch (error) {
           return c.json({ ok: false, error: describeError(error) }, 400);
@@ -6898,6 +7331,133 @@ export function apply(ctx) {
         } catch (error) {
           return c.json({ ok: false, error: describeError(error) }, 500);
         }
+      });
+
+      // ── 「跟我聊着捏」：从一句轮廓聊出一份画像 ──
+      //
+      // 旁边几条的分工：自动分析是「她交材料、模型出成稿」，中间插不上手；
+      // 「认识 ta」是七道固定的题，追问绕着题转。这一条是她在场、模型跟着她的构思问，
+      // 一边问一边把她说的话翻成「什么情况 → 怎么做」，实时摆出来给她看。
+      //
+      // 纪律照 persona-review：协商期间只动 co-create-session.json，点「成型」才写 palette，
+      // 写之前把旧版存进 history，退得回来。
+
+      /** 读过期的会话当没读过：过期就明说失效，不假装还能接着聊。 */
+      const readCoCreate = (agentId) => {
+        const session = normalizeCoCreate(store.getCoCreateSession(agentId));
+        if (!session.agentId || coCreateExpired(session)) return null;
+        return session;
+      };
+
+      app.get("/co-create/:agentId", (c) => {
+        const agentId = String(c.req.param("agentId") ?? "").trim();
+        if (!agentId) return c.json({ ok: false, error: { message: "要带伙伴编号" } }, 400);
+        const raw = store.getCoCreateSession(agentId);
+        const session = readCoCreate(agentId);
+        return c.json({
+          ok: true,
+          session,
+          progress: coCreateProgress(session?.draft ?? {}),
+          // 盘上还留着、但已经过期：跟「从来没开过」分开说
+          expired: Boolean(raw && !session),
+        });
+      });
+
+      /** 开一场。已经有一场没结束的就接着那一场，不新开。 */
+      app.post("/co-create/:agentId/open", (c) => {
+        const agentId = String(c.req.param("agentId") ?? "").trim();
+        if (!agentId) return c.json({ ok: false, error: { message: "要带伙伴编号" } }, 400);
+        try {
+          const existing = readCoCreate(agentId);
+          if (existing) {
+            return c.json({ ok: true, resumed: true, session: existing, progress: coCreateProgress(existing.draft) });
+          }
+          const fresh = emptyCoCreate(agentId);
+          store.saveCoCreateSession(agentId, fresh);
+          diagnostics({ event: "co-create.open", agentId });
+          return c.json({ ok: true, resumed: false, session: fresh, progress: coCreateProgress(fresh.draft) });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 500);
+        }
+      });
+
+      /**
+       * 说一句。回一句追问，同时把这一轮的草稿存下。
+       *
+       * 不带 text 就是「她还没开口」，让模型给开场。草稿解析不出来时不动手上的那份，
+       * 不能因为一轮读失败就把已经聊出来的东西抹了。
+       */
+      app.post("/co-create/:agentId/say", async (c) => {
+        const agentId = String(c.req.param("agentId") ?? "").trim();
+        if (!agentId) return c.json({ ok: false, error: { message: "要带伙伴编号" } }, 400);
+        let body = {};
+        try { body = await c.req.json(); } catch { body = {}; }
+        const say = String(body?.text ?? "").trim().slice(0, MAX_SAY);
+        try {
+          const session = readCoCreate(agentId);
+          if (!session) {
+            return c.json({ ok: false, code: "session-gone", error: { message: "上次那场已经过期了，ta 的画像一个字都没动，重新开一场就好" } }, 409);
+          }
+          const withSay = say ? withIntent(appendTurn(session, "user", say), say) : session;
+          const partnerName = await partnerNameOf(agentId);
+          const spec = coCreateTurnSpec({ partnerName, userName: USER_NAME, session: withSay });
+          // 要交整份草稿，输出预算得宽；短额度会被思考模型吃光，正文空着回来
+          const raw = await askRecognition(spec.systemPrompt, spec.userText, 2400);
+          const turn = parseTurnReply(raw);
+          const draft = turn.draft ? mergeDraft(withSay.draft, turn.draft) : withSay.draft;
+          const next = applyTurn(appendTurn(withSay, "model", turn.reply), { draft, done: turn.done });
+          store.saveCoCreateSession(agentId, next);
+          diagnostics({ event: "co-create.say", agentId, unparsed: turn.unparsed, colors: draft.colors.length });
+          return c.json({
+            ok: true,
+            session: next,
+            progress: coCreateProgress(draft),
+            unparsed: turn.unparsed,
+          });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 500);
+        }
+      });
+
+      /** 成型：把这一份写进 ta 的画像。写之前先存旧版，退得回来。 */
+      app.post("/co-create/:agentId/commit", async (c) => {
+        const agentId = String(c.req.param("agentId") ?? "").trim();
+        if (!agentId) return c.json({ ok: false, error: { message: "要带伙伴编号" } }, 400);
+        try {
+          const session = readCoCreate(agentId);
+          if (!session) {
+            return c.json({ ok: false, code: "session-gone", error: { message: "这场已经过期了，什么也没写进 ta 的画像" } }, 409);
+          }
+          const palette = normalizePalette({ ...session.draft, source: "reshaped" });
+          if (!isPaletteDone(palette)) {
+            return c.json({ ok: false, error: { message: "这个盘还是空的，至少得留一个色、一条行为，或者留一段自画像" } }, 400);
+          }
+          const knowing = store.getKnowing(agentId);
+          const saved = store.saveKnowing(
+            agentId,
+            commitChange(knowing, { ...knowing, palette }, { reason: "跟我聊着捏：成型" }),
+          );
+          store.clearCoCreateSession(agentId);
+          // 自动分析那份草稿跟这一份是同一个槽，定了稿就清掉，不然下次进去看着像没定过
+          store.clearPaletteDraft(agentId);
+          diagnostics({
+            event: "co-create.commit",
+            agentId,
+            colors: palette.colors.length,
+            rows: palette.derivatives.filter((row) => row.on).length,
+          });
+          return c.json({ ok: true, palette, revision: saved.revision, history: historyRows(saved) });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 500);
+        }
+      });
+
+      /** 收摊：这一场扔掉，画像一个字没动。 */
+      app.post("/co-create/:agentId/drop", (c) => {
+        const agentId = String(c.req.param("agentId") ?? "").trim();
+        if (!agentId) return c.json({ ok: false, error: { message: "要带伙伴编号" } }, 400);
+        store.clearCoCreateSession(agentId);
+        return c.json({ ok: true });
       });
 
       // ── 先聊个大概：待认识清单 / 出草稿 / 读草稿 / 定稿 ──
