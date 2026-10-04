@@ -9,6 +9,75 @@ const navigation = fs.readFileSync(new URL("../ui/navigation.html", import.meta.
 const settings = fs.readFileSync(new URL("../ui/settings.html", import.meta.url), "utf8");
 const app = fs.readFileSync(new URL("../index.js", import.meta.url), "utf8");
 
+test("识图也有第二条路：首选真挂了才换，备用通道看不了图才轮提示", () => {
+  // 首选识图失败后走 describeImageWithFallback，成功则带出 via
+  assert.match(app, /async function describeImageWithFallback\(modelRef, attachment\)/);
+  assert.match(app, /return \{ note: await describeImage\(ref, attachment\), via: `\$\{ref\.provider\}\/\$\{ref\.model\}` \}/);
+  assert.match(app, /if \(!shouldTryVisionFallback\(kind\)\) throw firstError/);
+  // 备用通道用哪个模型猜不出来（目录里 isCurrent 的是宿主焦点模型，不是 utility 那个），
+  // 所以不预判「它看不了图」，直接问一次：能看就拿回说明。
+  assert.doesNotMatch(app, /visionFallbackModel|备用通道模型看不了图/);
+  assert.match(app, /diagnostics\(\{ event: "vision\.fallback\.try", kind \}\);\s*\n\s*let note = "";/);
+  assert.match(app, /async function describeImageViaUtility\(attachment\)/);
+  assert.match(app, /run: \(\) => ctx\.models\.utility\(\{/);
+  // 走备用通道识图成功，就不再挂提示（visionNotice 只在真没识出来时才有）
+  assert.match(app, /const described = await describeImageWithFallback\(vision\.model, attachment\);[\s\S]{0,200}?visionNote = described\.note;[\s\S]{0,120}?visionVia = described\.via;/);
+  // 这次是用哪条路看的，记在这条消息上（刷新后也查得到）
+  assert.match(app, /\.\.\.\(visionVia \? \{ visionVia \} : \{\}\)/);
+});
+
+test("模型不可用：不拿别的模型顶嘴，挂提示、慢速重试有上限", () => {
+  // 聊天回复那条：provider/配额类错误不当失败重试，改成 unavailable 往上报
+  assert.match(app, /if \(error\?\.code === "MODEL_UNAVAILABLE"\)/);
+  assert.match(app, /return \{ ok: false, reason: "unavailable", kind: generated\.kind, generationMs/);
+  assert.match(app, /chat\.model\.unavailable/);
+  // 实时回合：挂提示、清待答、return，不进五分钟重试
+  assert.match(app, /if \(made\.reason === "unavailable"\) \{[\s\S]{0,700}?attachOfflineNotice\(turn\.agentId, turn\.userMessageId, made\.kind\)[\s\S]{0,300}?return;/);
+  // 排队回复：同一套处理
+  assert.match(app, /if \(made\.reason === "unavailable"\) \{[\s\S]{0,400}?attachOfflineNotice\(agentId, target, made\.kind\)/);
+  // 提示是挂在那条触发消息上（跟「未读」指同一件事），不是伪造 ta 说的话
+  assert.match(app, /async function attachOfflineNotice\(agentId, messageId, kind\)/);
+  assert.match(app, /store\.patchMessage\(agentId, target, \{\s*\n\s*notice: \{ code: "MODEL_UNAVAILABLE"/);
+  // 回头看要有上限：45 分钟一次、最多三次
+  assert.match(app, /const MODEL_RETRY_DELAY_MS = 45 \* 60 \* 1000;/);
+  assert.match(app, /const MODEL_RETRY_LIMIT = 3;/);
+  assert.match(app, /if \(tries <= MODEL_RETRY_LIMIT\)/);
+  assert.match(app, /modelRetryCount: tries/);
+});
+
+test("挂着不可用提示的消息不得被「末尾未读就重试」那条兼容逻辑再捡起来", () => {
+  // 实测事故（2026-10-02 23:13~23:29）：这类消息按设计永不标已读，
+  // 兼容逻辑见末尾未读就每五分钟重试一轮，凌晨刷了四轮。
+  assert.match(app, /!row\.recalled && !row\.notice\)\)/);
+  assert.match(app, /!row\.unreadResetAt && !row\.recalled && !row\.notice\)\?\.id/);
+  assert.doesNotMatch(app, /tail\.some\(\(row\) => !row\.readAt && !row\.unreadResetAt && !row\.recalled\)\)/);
+});
+
+test("ta 回话前先把上次没看清的图补上", () => {
+  assert.match(app, /async function backfillVisionNote\(agentId, messages\)/);
+  // 只补真缺说明的：已经有 visionNote 的不重复花钱
+  assert.match(app, /row\?\.attachment\?\.id && !row\.visionNote && !row\.recalled/);
+  // 补不上不阻断这一轮
+  assert.match(app, /diagnostics\(\{ event: "vision\.backfill\.failed"/);
+  // 补完要重取上下文，否则这轮拿的还是那份没说明的旧消息
+  assert.match(app, /if \(await backfillVisionNote\(agentId, store\.pendingMessages\(agentId\)\)\) \{[\s\S]{0,200}?\n\s*\}\s*\n\s*const pending = store\.pendingMessages\(agentId\)/);
+});
+
+test("模型不可用：消息照落、保持未读、只弹一条提示", () => {
+  // 后端：识图挂掉不再整条 502，附件留下，消息落下并带上 notice，这一轮不安排回复
+  assert.match(app, /visionNotice = \{ code: "MODEL_UNAVAILABLE", kind, text: visionUnavailableNotice\(kind, partnerRow\?\.name \?\? ""\) \}/);
+  assert.match(app, /\.\.\.\(visionNotice \? \{ notice: visionNotice \} : \{\}\)/);
+  assert.match(app, /if \(visionNotice\) \{[\s\S]{0,400}mode: "unavailable", notice: visionNotice/);
+  // 落消息前那一步的失败（图片存不下）才回错误，两类失败不能混为一谈
+  assert.match(app, /code: "ATTACHMENT_REJECTED"/);
+  assert.doesNotMatch(app, /code: "VISION_FAILED"/);
+  // 界面：历史重开摆得出来，发出去那一刻也摆得出来
+  assert.match(panel, /function noticeBubble\(text\)/);
+  assert.match(panel, /row\.className = "row notice"/);
+  assert.match(panel, /if \(m\.notice\?\.text\) row\.insertAdjacentElement\("afterend", noticeBubble\(m\.notice\.text\)\)/);
+  assert.match(panel, /if \(started\.notice\?\.text\) row\.insertAdjacentElement\("afterend", noticeBubble\(started\.notice\.text\)\)/);
+});
+
 test("伙伴投喂：只画在 ta 读过的那条上，只读没菜单，轮询能补挂件", () => {
   assert.match(panel, /function renderPartnerFeed\(col, message\)/);
   assert.match(panel, /function visiblePartnerFeedItems\(message\)/);
@@ -433,6 +502,33 @@ test("认识 ta：完成后回到刚认识的伙伴，不被上次伙伴覆盖",
   assert.match(panel, /const preferredPartnerId = obState\.partner\?\.id;[\s\S]*?await bootChat\(preferredPartnerId\)/);
 });
 
+test("跟我聊着捏：三条路里的第三条，能聊、能看实时画像、能成型", () => {
+  const css = fs.readFileSync(new URL("../ui/assets/panel.css", import.meta.url), "utf8");
+  assert.match(panel, /obChooseMode\("talk"\)/);
+  assert.match(panel, /const talk = obNode\("button", "ob-pick", "跟我聊着捏"\)/);
+  assert.match(panel, /async function obStartTalk\(partner\)/);
+  assert.match(panel, /function obRenderTalk\(\)/);
+  // 三个接口都接上：开一场 / 说一句 / 成型
+  assert.match(panel, /co-create\/\$\{encodeURIComponent\(partner\.id\)\}\/open/);
+  assert.match(panel, /co-create\/\$\{encodeURIComponent\(partnerId\)\}\/say/);
+  assert.match(panel, /co-create\/\$\{encodeURIComponent\(partnerId\)\}\/commit/);
+  // 回包带代次：她收了层、或者又说了新的一句，回来的那份不能盖回去
+  assert.match(panel, /obState\.talkSeq !== seq/);
+  assert.match(panel, /obState\.talkInput = ""/);
+  // 草稿全程挂在 obState 上，重建界面不丢
+  assert.match(panel, /obState\.talkDraft = data\?\.session\?\.draft/);
+  // 定稿那道门跟后端同一把尺：有色配活行为，或者至少一段自画像
+  assert.match(panel, /function canCommitTalk\(\)/);
+  assert.match(panel, /colors\.length > 0 && live\) \|\| portrait/);
+  // 从对谈里点「先放着」是收层，会话留在盘上，下次进来接着聊
+  assert.match(panel, /obState\.modeChoice \|\| obState\.running \|\| obState\.loadingDraft \|\| obState\.mode === "talk"/);
+  assert.match(panel, /obEl\.back\.textContent = "先放着"/);
+  // 对谈那一屏左边聊天右边画像，卡片得宽一点
+  assert.match(panel, /classList\.toggle\("ob-card-wide", obState\.mode === "talk"\)/);
+  assert.match(css, /grid-template-columns: minmax\(0, 1fr\) minmax\(0, 300px\)/);
+  assert.match(css, /\.ob-card-wide/);
+});
+
 test("认识 ta：快速路线和认真采访都能进，认真路线支持多选与自由输入", () => {
   assert.match(panel, /先聊个大概/);
   assert.match(panel, /认真认识 ta/);
@@ -530,7 +626,15 @@ test("伙伴语音设置分成表达方式与全局朗读模型", () => {
   assert.doesNotMatch(app, /GLOBAL_SETTING_KEYS[\s\S]{0,400}?"voiceModel"/, "全局设置不再单独收 voiceModel");
   assert.match(settings, /const pickedVoice = voiceChoices\.some/, "试听要使用当前模型下的合法音色");
   assert.match(settings, /这条朗读模型还没给 ta 选过声音/, "没给这条模型选过音色时要说明白");
-  assert.match(settings, /body: JSON\.stringify\(\{ voiceId: voiceId, modelConfig: globalSettings\.voiceModel/, "试听请求要带当前合法音色");
+  assert.match(settings, /body: JSON\.stringify\(\{ voiceId: savedVoiceId \|\| voiceId, modelConfig: globalSettings\.voiceModel/, "试听请求要带当前选中的音色");
+  assert.match(settings, /voiceGroups = data\.voiceGroups/, "音色目录要按语言分组下发");
+  assert.match(settings, /粘贴自己克隆\/设计的音色 ID/, "自己克隆或设计的音色要能直接填 ID");
+  assert.match(settings, /上面那条朗读模型还缺必填项/, "朗读配置缺项时要当场说清楚，不能等没声音才发现");
+  assert.match(settings, /id="voice-ready-hint"/, "全局语音开关旁要有缺项提示");
+  assert.match(settings, /id="voice-delivery-switch"/, "声音里的情绪要能开关");
+  assert.match(settingsCss, /\.voice-group > summary/, "音色分组要能折叠");
+  assert.match(settingsCss, /\.voice-chip\.on/, "选中的音色要有明确的选中样式");
+  assert.match(panelCss, /\.voice-mark\.on/, "跟着播放点亮的原话要有样式");
 });
 
 test("语音消息采用播放胶囊，转文字独立成普通气泡", () => {
@@ -726,9 +830,10 @@ test("起跑线：自动量那边的痕迹，也能自己定从哪儿算，只�
   assert.match(app, /seedStale\(knowing\.relationSeed, seedLastTry\)/, "该重量的就重量一份（量不出东西也有节流）");
   assert.doesNotMatch(app, /session:list/, "量会话那条路 v2 应用走不通，别写");
   assert.match(app, /note: relationshipNote\(effectiveRelationship\(knowing\), knowing\.relationSeed\)/, "回复那一句也要带上起跑线");
-  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, stickerText, userRhythmText: userRhythm \}\)/, "主动消息只带与当前消息类型相符的兴趣发现，同时带上本人人格");
+  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, stickerText, userRhythmText: userRhythm \}\)/, "主动消息只带与当前消息类型相符的兴趣发现，同时带上本人人格");
   assert.match(app, /async function maybeExploreInterest[\s\S]*?searchTimelyTopic\(fetcher, \{ title: plan\.focus, searchQuery: plan\.searchQuery \}, \{\s*privateTerms: \[USER_NAME, partnerName\],\s*\}\)/, "探索由稳定兴趣生成新角度；已知称呼外发前过滤");
-  assert.match(app, /const candidateDiscovery = followup\?\.read \? null : nextDiscovery\(state\.interestLearning, now\)/, "主动话题只从短期兴趣发现中选择");
+  assert.match(app, /const candidateSeed = followup\?\.read[\s\S]{0,140}?pickSeed\(seedBook, \{ now, recentMotifIds: recentSeedMotifs\(seedBook\) \}\)/, "主动话题先用手上的种子");
+  assert.match(app, /const candidateDiscovery = followup\?\.read \|\| candidateSeed[\s\S]{0,90}?nextDiscovery\(state\.interestLearning, now\)/, "种子在手时不再另找时效发现");
   assert.match(app, /discoveryForProactiveMessage\(candidateDiscovery, \{ exception: gate\.exception \}\)/, "夜间例外不得绑定或消耗兴趣发现");
   assert.match(app, /const shareableDiscovery = discoveryForProactiveMessage\(discovery, \{ exception \}\)/, "最终发送门变化为夜间例外时，也必须保护待分享发现");
   assert.match(app, /if \(shareableDiscovery\) \{[\s\S]{0,250}?markDiscoveryShared\(current\.interestLearning, shareableDiscovery\.id/, "只在实际采用兴趣分享消息后消耗发现");
@@ -894,7 +999,7 @@ test("醒来还是睡着都是ta自己的事，不看她打不打开窗口", () 
     "递出去不演的那些（手机不在手）才只记一个时刻；skip 那套已经删了",
   );
   assert.doesNotMatch(app, /plan\.skip/, "不再有「掷骰子决定理不理」这回事");
-  assert.match(app, /function deliverScheduledReply\(agentId(?:, generation[^)]*)?\)[\s\S]{0,2800}?announceArrival/, "到点落库后要喊她一声");
+  assert.match(app, /function deliverScheduledReply\(agentId(?:, generation[^)]*)?\)[\s\S]{0,4200}?announceArrival/, "到点落库后要喊她一声");
   assert.match(app, /if \(plan\.mode === "hand"\) \{/, "已读延迟只有醒着那条还按老节奏算");
   assert.doesNotMatch(
     app,
@@ -1143,7 +1248,8 @@ test("等回音也过主动硬门并在真实发送后记配额，暂存意图�
   assert.match(app, /const finalGate = autonomousGateNow\(agentId, "proactive"\)[\s\S]{0,1200}?noteSent\(/, "proactive 必须在全局锁内二次过门并记账");
   assert.match(awaitingBody, /withGlobalAutonomousLane[\s\S]{0,700}?autonomousGateNow\(agentId, "awaiting"\)/, "awaiting 必须在全局锁内二次过门");
   assert.match(app, /staged: \[pending\.intent, \.\.\.pending\.rest\]/, "gate 拦住时旧暂存意图要显式写回");
-  assert.match(app, /const candidateDiscovery = followup\?\.read \? null : nextDiscovery\(state\.interestLearning, now\)/, "临门只有兴趣探索的新发现能作为主动话题");
+  assert.match(app, /const candidateSeed = followup\?\.read[\s\S]{0,140}?pickSeed\(seedBook, \{ now, recentMotifIds: recentSeedMotifs\(seedBook\) \}\)/, "临门先端手上的种子，种子也就那一份");
+  assert.match(app, /const candidateDiscovery = followup\?\.read \|\| candidateSeed[\s\S]{0,90}?nextDiscovery\(state\.interestLearning, now\)/, "临门只剩种子或时效发现二选一");
   assert.match(app, /discoveryForProactiveMessage\(candidateDiscovery, \{ exception: gate\.exception \}\)/, "夜间例外不得消耗兴趣发现");
   assert.match(app, /const shareableDiscovery = discoveryForProactiveMessage\(discovery, \{ exception \}\)/, "发送阶段再次按最终例外状态过滤发现");
   assert.match(app, /if \(shareableDiscovery\) \{[\s\S]{0,250}?markDiscoveryShared\(current\.interestLearning, shareableDiscovery\.id/, "例外和未采用发现都不落已分享状态");
@@ -1307,7 +1413,9 @@ test("伙伴每轮都能按性格安静收尾，且异步排期不把这个结�
   assert.match(app, /store\.setPendingReply\(agentId, \{[\s\S]{0,160}?mode: `live-\$\{plan\.mode\}`[\s\S]{0,160}?messageId: stored\.id/, "实时生成启动前也要落恢复凭证");
   assert.match(app, /async function recoverPendingReplies\(\)/, "重启后要恢复挂起的回复");
   assert.match(app, /const tail = messages\.slice\(lastAssistant \+ 1\)\.filter\(\(row\) => row\?\.role === "user"\)/, "旧排期只看伙伴最近一次回复后的尾部消息");
-  assert.match(app, /tail\.find\(\(row\) => !row\.readAt && !row\.unreadResetAt && !row\.recalled\)/, "删除后明确恢复未读的原话不能被旧账恢复流程自动重回");
+  // 候选条件后来多了一道「挂着不可用提示的不算」（防每五分钟重试刷屏），
+  // 这里守的还是原意：unreadResetAt（删除后恢复未读）必须被排除在外。
+  assert.match(app, /tail\.find\(\(row\) => !row\.readAt && !row\.unreadResetAt && !row\.recalled[^)]*\)/, "删除后明确恢复未读的原话不能被旧账恢复流程自动重回");
   assert.match(app, /reply\.recovered\.unread-reset/, "旧排期如果还指着被删除的原话，要清掉而不是重发");
   assert.match(panel, /if \(m\.proactive \|\| m\.nudge \|\| \["action", "tavern-opening"\]\.includes\(m\.kind\)\) continue;[\s\S]{0,120}?if \(m\.repliedTo\)/, "主动消息即使带脏 repliedTo 也不能把用户原话算已读");
   assert.match(app, /repliedTo === targetMessageId/, "恢复前要识别已落盘的同一条回复，避免关机时重复生成");

@@ -84,6 +84,13 @@ test("图片说明与文字之间是真换行，不把反斜杠 n 喂给模型",
   assert.equal(rows[0].content, "你看这个\n［图片说明：一只圆宝］");
 });
 
+test("图在但当时没看清：上下文里得说清楚，别让 ta 当成空图", () => {
+  const rows = threadToMessages([
+    { role: "user", text: "你看这个", attachment: { id: "img_a" }, visionNote: "" },
+  ]);
+  assert.equal(rows[0].content, "你看这个\n［对方发来一张图片，但当时这边没能看清它的内容］");
+});
+
 test("表情包进上下文：没传查标签的口子时，行为跟以前一样", () => {
   const rows = threadToMessages([
     { role: "user", kind: "sticker", text: "[表情]", bubbles: [encodeStickerBubble("local_ab")] },
