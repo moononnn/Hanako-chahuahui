@@ -98,15 +98,15 @@ test("识图失败按原因分类：配额、连接、其他分开", () => {
 });
 
 test("提示文案说清三件事：谁接不上、为什么、发出去的还在", () => {
-  const quota = visionUnavailableNotice("quota", "阿远");
-  assert.match(quota, /^阿远这会儿接不上话了/);
+  const quota = visionUnavailableNotice("quota", "叙叙");
+  assert.match(quota, /^叙叙这会儿接不上话了/);
   assert.match(quota, /额度/);
   assert.match(quota, /存下来/);
   // 不许说「ta 会自己来接上」：没人排回复，这句是空承诺。
   // 得指一条她真能做的事——额度回来再发一次。
   assert.match(quota, /再发一次/);
   assert.doesNotMatch(quota, /自己来接上/);
-  const network = visionUnavailableNotice("network", "阿远");
+  const network = visionUnavailableNotice("network", "叙叙");
   assert.match(network, /没连上/);
   assert.match(network, /再发一次/);
   assert.doesNotMatch(network, /额度/);
@@ -119,20 +119,20 @@ test("提示文案说清三件事：谁接不上、为什么、发出去的还�
 });
 
 test("ta 接不上话时的那条：说清谁、为什么、发出去的在", () => {
-  const quota = partnerOfflineNotice("quota", "阿远", { random: () => 0 });
-  assert.match(quota, /^阿远这会儿也说不出话/);
+  const quota = partnerOfflineNotice("quota", "叙叙", { random: () => 0 });
+  assert.match(quota, /^叙叙这会儿也说不出话/);
   assert.match(quota, /额度用完/);
   assert.match(quota, /存着|记着/);
   assert.match(quota, /不用重发|自然会接|会自己来接上/);
-  const provider = partnerOfflineNotice("provider", "阿远", { random: () => 0 });
+  const provider = partnerOfflineNotice("provider", "叙叙", { random: () => 0 });
   assert.match(provider, /模型那边用不了/);
   // 这一条不是 ta 说的话（ta 一个字都没说出来），所以不许写成 ta 的自述
-  assert.doesNotMatch(provider, /不是阿远不想理你|我这会儿发不出声/);
+  assert.doesNotMatch(provider, /不是叙叙不想理你|我这会儿发不出声/);
   const transient = partnerOfflineNotice("transient", "", { random: () => 0 });
   assert.match(transient, /^ta这会儿接不上话/);
   assert.doesNotMatch(transient, /它/);
   // 认不出来的 kind 走临时那档，不空、不报错
-  assert.match(partnerOfflineNotice("别的", "阿远", { random: () => 0 }), /阿远/);
+  assert.match(partnerOfflineNotice("别的", "叙叙", { random: () => 0 }), /叙叙/);
   // 备选句挑得到，不至于永远同一句
-  assert.notEqual(partnerOfflineNotice("quota", "阿远", { random: () => 0.99 }), quota);
+  assert.notEqual(partnerOfflineNotice("quota", "叙叙", { random: () => 0.99 }), quota);
 });

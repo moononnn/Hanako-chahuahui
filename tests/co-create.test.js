@@ -240,9 +240,9 @@ test("这一轮的提示词带着她的起头、草稿、缺口和刚说的那�
   session = appendTurn(session, "user", "跟来看书的怪人");
   session = applyTurn(session, { draft, done: false });
 
-  const spec = coCreateTurnSpec({ partnerName: "阿舟", userName: "那位用户", session });
+  const spec = coCreateTurnSpec({ partnerName: "阿舟", userName: "儿儿", session });
   assert.match(spec.systemPrompt, /阿舟/);
-  assert.match(spec.systemPrompt, /那位用户/);
+  assert.match(spec.systemPrompt, /儿儿/);
   assert.match(spec.userText, /一个在图书馆上班的姐姐，嘴硬心软/);
   assert.match(spec.userText, /底色「嘴硬」/);
   assert.match(spec.userText, /她刚说的/);
@@ -252,12 +252,12 @@ test("这一轮的提示词带着她的起头、草稿、缺口和刚说的那�
 });
 
 test("她还没开口时给的是开场指令，不是空白", () => {
-  const spec = coCreateTurnSpec({ partnerName: "阿舟", userName: "那位用户", session: emptyCoCreate("a") });
+  const spec = coCreateTurnSpec({ partnerName: "阿舟", userName: "儿儿", session: emptyCoCreate("a") });
   assert.match(spec.userText, /她还没开口/);
   assert.match(spec.userText, /还什么都没有/);
 });
 
 test("提示词里明写形容词要当追问起点", () => {
-  const spec = coCreateTurnSpec({ partnerName: "阿舟", userName: "那位用户", session: emptyCoCreate("a") });
+  const spec = coCreateTurnSpec({ partnerName: "阿舟", userName: "儿儿", session: emptyCoCreate("a") });
   assert.match(spec.systemPrompt, /形容词是问题，不是答案/);
 });
