@@ -1,5 +1,57 @@
 # TESTING · 茶话会
 
+本轮（v0.7.470，朗读字幕与停顿真正接通）：2026-10-04 基线 **1134/1134**，新增 3 条 `tests/voice.test.js` 回归，全量 **1137/1137** 通过。voice 专项 43/43；voice + ui + load + store + model 合并 263/263。
+
+起因：上轮 v0.7.468 留的「没有真实调用过 MiniMax」这条口径边界被实听撞上——高亮和停顿都没感觉。本轮用本机真实 Key（`custom-musfatex-ihmpj`，`speech-2.8-hd`）跑通实测，暴露两处真错：① 官方字幕时间戳字段是 `time_begin` / `time_end`，逐词明细在 `timestamped_words`，旧代码只认 `begin_time` / `end_time`，整份字幕解析为零条；② 字幕文件在阿里云 OSS（实测 `minimax-algeng-chat-tts.oss-cn-wulanchabu.aliyuncs.com`），不在 `network.allowedHosts`，`ctx.network.fetch` 按白名单直接拒。两条叠加使「原话跟着点亮」从未拿到词级时间，一直退到分句级平均摊——她那句 43 字原话只切 2 段，看着像没在跟。
+
+改了什么：`lib/voice.js` 新增 `subtitleStamp(row, side)`，start 认 `time_begin / begin_time / start / begin`、end 认 `time_end / end_time / end`；`parseSubtitleFile` 优先取 `timestamped_words` 的逐词时间、无明细才退回整段；`applyVoiceDelivery` 停顿时长 0.25 → 0.35 秒，叹词与停顿不再互相挤（原 `tagged` 命中即跳过停顿，与「最多一个叹词、一个短停顿」的设计注释不符）。`manifest.json` 的 `network.allowedHosts` 补 `*.aliyuncs.com`。
+
+实测口径：带 `<#0.35#>` 比不带长 756ms；`哈哈哈(laughs)你终于肯理我了` 比 `哈哈哈你终于肯理我了` 长 972ms（叹词进了音频，未被当文字念）；解析真实字幕得 39 条词级标记，跨度 43→7491ms（音频 7956ms），词拼接长度 / 原文长度 = 0.91，高于前端点亮的 0.6 门槛。
+
+新增覆盖：① 真机字幕样本（`time_begin` + `timestamped_words`）解析成逐词标记；② 无逐词明细时按 `begin_time` / `end_time` 退回整段；③ 长句同时带叹词与停顿，且停顿只插一次。
+
+口径边界：本轮只验证到「解析得出、字段认得出、时长差可量化」，**听觉上的自然度与逐词点亮仍须重载后由玥儿实听验收**。改的是 App 文件与 manifest，v2 无热重载，需重启宿主或 App Manager reload 才生效；新加的域名若触发权限确认需她点。未发布。
+
+本轮（v0.7.468，朗读能力对齐 MiniMax 新接口）：2026-10-04 基线 **1087/1087**，新增 14 条回归（`tests/voice.test.js` 12 条 + 2 条 Key 加密状态），全量 **1101/1101** 通过。
+
+**第二段：朗读 Key 其实一直是明文落盘**。用户自己填好 Key 并测试通过后回头核对，发现 `app-data/chahuahui/v2/state.json` 里 `custom-musfatex-ihmpj` 的 `apiKey` 是 125 字符明文（前缀 `sk-cp-`），全文件搜不到一处 `dpapi:`。回查全机 `app-data` 与 `plugin-data`，没有任何一处真的落过 `dpapi:` 凭据，说明 `lib/crypto.js` 的 `protectKey` 在 App 运行时从未成功过（v2 App 沙箱里起不了 `powershell.exe` 子进程），一直在走 `catch` 里的静默降级。早前「保存后是加密落盘」的说法只来自读代码，没有实测支撑，本轮更正。`protectKey` 不再静默：新增 `encryptionAvailable()` / `encryptionStatus()` 记录真实结果与原因，保存时写一条 `voice.key.plain` 诊断，`globalSettingsView` 下发 `voiceKeyEncrypted`，设置页 Key 胶囊显示「已保存 · 未加密」、全局语音区给出明文存放说明，README 隐私段写明位置与风险并给出「介意就删掉重填」的出路。v2 App 目前没有宿主级凭据接口可用（`ctx.storage` 是自管键值仓库，非加密），真加密需要宿主暴露通道，未擅自自造方案。
+
+改了什么：`lib/voice.js` 换成按语言分组的音色目录（中文 34 / 粤语 6 / 日语 8 / 韩语 8 / 英语 10 / 其他 8，共 74 条，补上官方目录里一直没收录的 `Robot_Armor`），扁平目录由分组派生、两者必须对得上；克隆与音色设计出来的自定义 `voice_id` 不再被换成默认嗓子，但乱填的（比如带问号）仍回落默认；`applyVoiceDelivery` 只按原文里的明确线索加一个叹词加一个短停顿，其余一律不加，开关关掉就干净念；合成请求补上 `language_boost`、`subtitle_enable`、`subtitle_type`，官方给了词级字幕就去取、取不到就按字数把时长摊成分句级；`speakableText` 先截断再插记号，标签不会被截在中间。`store.js` / `index.js` 补 `voiceDelivery` 开关与缺项提示（`voiceReady`）。
+
+新增覆盖：① 模板列表多出「省一半」且协议地址一致；② 自定义 `ttv-voice-…` 原样发出、乱填的落回默认；③ 请求带语言识别与字幕开关；④ 三类情绪线索各自映射到正确记号、开关关掉不再插；⑤ 不认识的半角括号被扯掉、中文圆括号保持原样（MiniMax 只把半角当记号）；⑥ 长句插一次停顿、短句不插、已有停顿不重复；⑦ 切句后按字数摊时长、首尾对齐、无时长就返回空；⑧ 字幕解析认 JSON 与 SRT、认不出来返回 null；⑨ 分组目录与扁平目录完全一致且含机甲音。`tests/ui.test.js` 同步改了两条因设计变更失效的断言（试听请求带 `savedVoiceId || voiceId`、预设 id 列表），并补了分组、自定义 ID、缺项提示、情绪开关、折叠与点亮样式的守卫。
+
+静态校验：`validate-app.mjs --dir <chahuahui> --json` 返回 `ok:true`、`errors 0 / warnings 1`，唯一 warning 是动态依赖静态无法证明的常规提示。两个页面的内联 module 脚本都用 `node --check` 过了一遍（settings 2671 行、panel 4632 行，均 OK；随后设置页又改了一轮，同法重校通过）。
+
+口径边界：这一轮**没有真实调用过 MiniMax**（本机那条朗读配置的 API Key 是空的），所以以下都还没被验证：`subtitle_file` 是否在 `api.minimaxi.com` 同一域名下（不在的话取不到，会安静退成分句级点亮，不影响语音）、`speech-2.8-turbo` 在国内站是否可用、叹词记号在国产音色上的实际效果。代码对这些都做了降级，不会因为拿不到就发不出声音。真实恢复须在填好 Key、重载后试听核对。未发布。备份：`L:\哈娜的工作台\_chahuahui-backups\v0.7.467-2026-10-04-voice-upgrade\`。
+
+本轮（v0.7.467，放肆纪律）：2026-10-03 基线 **1087/1087**（上轮 v0.7.466 收尾），新增 4 条 `tests/prompt.test.js` 回归，全量 **1091/1091** 通过。新增覆盖四件事：① 放肆纪律是常驻块，不写人设的伙伴也带，且守住触发条件必须写成关系和性子（断言提示词里不出现「她先骂 / 她先开火」这类要靠对方先动手的说法）；② 三档许可各不相同（不熟 / 能开玩笑 / 放心损嘴臭也行），stage 传 undefined 不抛且落在最低档、传 99 封顶在最高档、不许偷偷升到最松；③ 手法只给说明不给台词，并要求按自己性子挑、不搭的别用、看她真实反应调；④ 没给放肆料时提示词里不出现那一块，给了才拼进去。命令：`node --test tests/prompt.test.js`；全量：`$tests = Get-ChildItem tests -Filter '*.test.js' -File | ForEach-Object FullName; node --test @tests`。
+
+静态校验：`validate-app.mjs --dir <chahuahui> --json` 本轮返回非空结构化结果，`ok:true`、`errors 0 / warnings 1`，唯一 warning 是打包脚本自带的「动态依赖静态无法证明」常规提示。上轮记录说该脚本没有 CLI/导出入口，本轮实测有，特此更正。
+
+口径边界：这一轮**只验证了提示词确实被拼进去了**，没有真实模型样本。伙伴是不是真的敢损、损完会不会自己缩回去道歉、嘴臭会不会滑成伤人，都还没被验证过；需要重载后真聊几轮才有结论，不能拿测试全绿当成「已经敢损」。未改伙伴档案、未写回 Hana、未调用真实模型、未发布，`manifest.json` / `README.md` / `PENDING_CHANGES.md` / `PROJECT_LOG.md` 版本行已对齐 0.7.467。备份：`L:\哈娜的工作台\_chahuahui-backups\v0.7.467-2026-10-03-tease\`。
+
+本轮（v0.7.466，后台短任务思考预算兼容）：2026-10-03 修改前全量 **1075/1075**；最终新增 12 条模型与主入口回归，使用备份的旧 `index.js` / `lib/model.js` 在隔离目录跑同一份最终模型用例：37 条中 **9 条失败**；修后模型专项 **37/37**，全量 **1087/1087**。真实故障基线来自 Hana 调用账本：MiniMax-M3.1-Flash-Preview 的探索任务 180 个输出额度全部为思考，其他后台任务还出现 400/400、500/500，正文为空；App 外层把空正文统一包装成 provider 错误。
+
+共享 `askUtility` 保留宿主 utility 通道，不读取目录焦点、不指定或替换模型、不向 SDK 塞未支持的思考参数。小任务总输出额度下限为 8192；明确空正文仅同路重试一次，追加预算最高 16384，已有更高额度不缩小。8192 是兼容初值，**没有被当成所有模型的成功保证**。两次请求共用一份总时限，各用新请求编号；不透明 provider 错误、鉴权、限额、内容拦截及超时原样失败，不盲目重试。只有 trim 后非空正文才返回成功；诊断记录预算、尝试次数、正文长度和错误码，不记录输入正文。仅将后台探索和相处理解两个任务的原 20 秒总等待调整为 60 秒，默认 120 秒保持，前台聊天搜索的 10 秒时限保持；防止后台预算调整后又先被旧超时截断，不拉长前台等待。普通回复的原有 utility 兜底也复用同一预算/空正文检查，并原样保留完整 messages；哪些错误允许兜底的原逻辑不变。失败不改变主动节奏和消息配额。
+
+新增回归覆盖 180/400/500 预算基线、保留较大额度、原提示词/输入/通道、禁猜焦点与禁切模型、空正文/缺 text、明确空正文恢复、重试编号与上限、provider/鉴权/限额/敏感错误不重试、总超时取消、主入口诊断、仅后台延长等待的接线、原回复兜底的完整上下文与非空正文门禁。专项命令：`node --test tests/model.test.js`；Windows 全量：`$tests = Get-ChildItem tests -Filter '*.test.js' -File | ForEach-Object FullName; node --test @tests`。隔离假宿主测试不读写真实聊天，不代表真实 MiniMax 新额度已成功，也不代表主动文字已经送达。真实恢复须在受管 reload 后核对 `models.utility.ok`、`interest.exploration.ready` 和实际主动消息记录。未更改全局模型设置、伙伴档案或历史数据，未发布。
+
+运行时验证：2026-10-03 22:05:32 通过 `extension_manager(kind: app, action: reload)` 从正式磁盘代码重新加载；宿主日志明确记录 `v0.7.466 已装载` 与 loader `v0.7.466 loaded`，之后 inspect 为 host=on / agent=on。`index.js`、`lib/model.js`、模型测试脚本语法通过，manifest/README/账本版本对齐。当前打包的 `scripts/validate-app.mjs` 没有 CLI/导出入口，本轮未宣称它产生静态校验报告；没有拿静默退出0当成验证成功。新代码已装载，但本轮尚无新额度的真实 utility 成功样本，不能宣称主动文字已恢复。
+
+本轮（v0.7.465，堵住五分钟重试的无底洞 + 回话前补识图）：2026-10-03 全量 **1075/1075** 通过，修改前 v0.7.464 基线 **1073/1073**。事故回放：2026-10-02 23:13~23:29，Codex 挂了十六分钟，同一条消息被 `legacy-recovered` 兼容逻辑每五分钟捡起来重试一轮，共四轮（`reply.unavailable` → `reply.recovered` → …），期间 0.7.462 那道「不可用消息不标已读」的门一直生效（每轮 `reply.read touched:0`），两者叠加就成了无底洞。新增 3 条：`tests/ui.test.js` 一条守住 `MODEL_UNAVAILABLE` 提示的消息不再进 `legacy-recovered` 的候选（`!row.recalled && !row.notice`），一条守住回头看有上限（`MODEL_RETRY_DELAY_MS = 45 * 60 * 1000`、`MODEL_RETRY_LIMIT = 3`、`modelRetryCount` 累加），一条守住 ta 回话前补识图（只补真缺 `visionNote` 的、补不上不阻断、补完要重取上下文）。旧用例「删除后恢复未读的原话不能被旧账恢复流程自动重回」的正则按新候选条件放宽为 `!row\.recalled[^)]*`，原意（排除 `unreadResetAt`）不变。`node --check` 与 Hana App 静态校验 0 errors；本轮未调用真实模型。
+
+文档事故与恢复：同轮用 PowerShell `Set-Content` 改 `manifest.json` / `README.md` 的版本行时把这两个文件的中文写成了 mojibake（`Get-Content -Raw` 读无 BOM 的 UTF-8 源码时按本地代码页解码，`Set-Content` 又写了一遍），并额外写入 BOM。恢复方式：用 `gh api` 拉仓库 `moononnn/Hanako-chahuahui` 的 v0.7.458 基线（`manifest.json`、`README.md`），经 Node 一次性脚本写回（`fs.writeFileSync(..., "utf8")` 并做写后校验），只替换版本行与测试数字行。校验：`JSON.parse` 通过、App 静态校验 0 errors、中文正常、全量测试通过，其余文件扫描 mojibake 均为 0。教训：改源码与文档一律用编辑工具或 Node 写文件，不用 `Set-Content`。
+
+本轮（v0.7.464，备用识图路被自己封死的修法）：2026-10-02 全量 **1073/1073** 通过。实机复现：23:39 发图时诊断里出现 `vision.fallback.unavailable reason=备用通道模型看不了图`——根因是拿 `ctx.models.list()` 里标 `isCurrent` 的条目去推断 utility 通道用哪个模型，而宿主目录里 `isCurrent` 是 `openai-codex/gpt-6.1-sol`（Hana 焦点模型），utility 实际走 MiniMax，两者不是一回事，判空就把这条路由封死了。改法是删掉 `visionFallbackModel` 与那次目录拉取：utility 不能指定模型，也没法从目录反推它的身份，所以不预判，真挂时直接问一次——能看就拿回说明，看不了才抛回去走提示。`tests/vision.test.js` 用一条反向断言守住这个坑（`lib/vision.js` 里不许再出现 `visionFallbackModel` / `pickFromCatalog` / “备用通道模型看不了图”），`tests/ui.test.js` 改为断言“无条件试 utility、不预判”。这条改动的实际效果仍要等下一次 Codex 限额时实机验；验的时候看诊断里有没有 `vision.fallback.try` 与 `vision.fallback.failed` 两条。
+
+本轮（v0.7.463，识图也走备用通道）：2026-10-02 全量 **1073/1073** 通过，修改前 v0.7.462 基线 **1070/1070**。新增 3 条：`tests/vision.test.js` 两条覆盖“只在真挂时换视觉”（配额/凭据/provider 换，超时与断网不换，避免 ta 在两套描述之间晃）与“备用通道能不能识图看目录里宿主当前那个收不收图片”（收图就选它，只吃文字返回 null，空目录返回 null），后者曾因 `pickFromCatalog` 只带出 `provider/model`、原条目在 `raw` 上而恒为 null，修改前失败、修改后通过；`tests/ui.test.js` 一条守住接线：首选失败走 `describeImageWithFallback`、带出 `via`、备用通道看不了图才 `throw firstError`、走备用通道成功后不再挂 `visionNotice`、本次用哪双眼睛记在消息的 `visionVia` 上。这里验的是选路与接线；备用通道真能读图的实测要等 Codex 限额时在实机上看，隔离测试用的是假宿主，不算真调过模型。
+
+本轮（v0.7.462，模型挂掉时不拿别的模型顶替 ta 开口）：2026-10-02 全量 **1070/1070** 通过，修改前 v0.7.461 基线 **1063/1063**。真实触发：Codex 5 小时限额耗尽时 `gpt-6-luna` 流回 `APP_MODEL_PROVIDER_ERROR`，旧代码直接从 `ctx.models.utility({scope:"app"})` 借了 MiniMax-M3.1-Flash-Preview 顶上去（`via:"utility"`），同一位伙伴在两个模型之间跳，语气和记性都露馅。新增 6 条：`tests/model.test.js` 四条覆盖失败分类（配额/凭据/provider → 不兜底，超时与连接断了 → 照旧兜底，认不出来的按临时算以免哑掉）、provider 与配额两种报错都不许碰 utility、临时故障仍然借、正常回包不碰；`tests/vision.test.js` 一条守住 ta 接不上话那条文案说清「谁、为什么、发出去的在」，且不许写成 ta 的自述（ta 一个字都没说出来）；`tests/ui.test.js` 一条守住接线：`composeReply` 把 `MODEL_UNAVAILABLE` 转成 `reason:"unavailable"`、实时回合与排队回复两条路都走 `attachOfflineNotice` 挂提示并 return、五分钟重试不适用于这类、`tests/ui.test.js` 旧断言里「到点落库要喊她一声」的字符距离上限从 2800 放宽到 4200（新增的 unavailable 分支把距离撑长了，契约本身未改）。`node --check` 通过 index.js / lib/model.js / lib/vision.js；Hana App 静态校验 0 errors。没调用真实模型；真实限额时的观感（提示挂在原消息下面、未读是否照旧挂着）待实机验收。
+
+本轮（v0.7.461，提示文案补上可对号的方向）：2026-10-02 全量 **1063/1063** 通过。实测发现 codex 识图失败只回一句 `The model provider could not complete the request.`，里面没有配额/限流字样，`classifyVisionFailure` 判为 `unknown`，于是提示只会说「没能看清」。改的是 `lib/vision.js` 的 unknown 分支文案（类比真实报错，只改末版）；`tests/vision.test.js` 补一条断言：unknown 必须给出「多半是模型或网络」这个方向且仍不许出现「它」。修改前该断言失败，修改后通过。`node --check lib/vision.js` 通过，Hana App 静态校验 0 errors。真实观感（提示气泡那句读起来顺不顺）待实机验收。
+
+本轮（v0.7.460，模型不可用时消息不再一起发不出去）：2026-10-02 全量 **1063/1063** 通过，修改前 v0.7.459 基线 **1058/1058**。新增 5 条：`tests/vision.test.js` 两条守住识图失败按原因分三类（配额/连接/其他）、提示文案说清「谁接不上、为什么、发出去的还在」且不承诺「ta 会自己来接上」（没人排回复时那是空承诺）、文案里不出现「它」；`tests/poke.test.js` 一条守住图在但当时没看清时，模型上下文要明说「没能看清它的内容」，不能让 ta 当成空图；`tests/store.test.js` 一条守住 `markUserMessagesRead` 跳过带 `MODEL_UNAVAILABLE` 的消息——ta 压根没收到那条，盖已读就是假收据，未读得一直挂着；`tests/ui.test.js` 一条守住后端不再返回 `VISION_FAILED`（改成 `ATTACHMENT_REJECTED` 只挡存不下图的硬失败）、消息带 `notice` 落盘、这一轮走 `mode: "unavailable"` 不安排回复，界面历史与实时两条路都摆出提示气泡。`node --check` 通过 index.js / lib/store.js / lib/vision.js / lib/prompt.js；Hana App 静态校验 0 errors、1 条常规动态依赖 warning。没调用模型、没发真实消息；真实掉配额时的观感（提示气泡长什么样、「未读」挂着不动）待实机验收。
+
 本轮（v0.7.459，切聊天与头像加载优化）：2026-10-02 全量 **1058/1058** 通过，修改前 v0.7.458 基线 **1017/1017**。新增 `loading-store.test.js`、`loading-routes.test.js`、`ui-loading.test.js`，并补头像读者测试，共新增 41 条。实际执行前端内联函数，覆盖同头像并发合并、暖缓存同步贴图、刷新与解码失败保旧图且可重试、解码限时、切人旧回包隔离、图片 URL 延后回收、页面暂存与关闭、批量重画异常复位、好友节点复用与拖拽/键盘/无障碍、移除再加入、自己的头像开聊预热、列表失败不拖累聊天。后台覆盖文件变化/删除/同大小编辑/坏账本/权限失败、缓存独立副本与 32 位上限、彻底删除后不恢复、读写后即时更新、未读快照复用、重复轮询不写全局设置及按需取撤回称呼。
 
 修前复验：对修改前 UI 副本执行同一套六个关键场景，**6/6 失败**；冷头像 20 请求、1000 消息 3005 次高度读取、20 次不变列表轮询仍重建节点。修后：冷头像 **1 请求**（暖缓存 0）、1000 消息 **3 次高度读取**、20 次不变轮询 **0 次内容/节点写入**。这些是隔离 DOM/API 测试，不是实际 WebView 帧耗时。合成后台账本对比（6 位伙伴各 500 条，25 轮）：正文读取 **450 → 6 次**，一次测量 **586.75 → 109.71ms**，不是个人实际聊天延迟，也不据此判断硬盘健康。修改前后台新增用例失败 8 条，其中权限注入是新缓存设计的防护用例，不能倒推旧版实际吞过权限错误。
