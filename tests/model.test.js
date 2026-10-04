@@ -1,9 +1,145 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
 
-import { askUtility, withModelDeadline, parseNdjson, pickFromCatalog, normalizeModelRef, chatModelOptions, resolveModelChoice, modelKey } from "../lib/model.js";
+import {
+  askUtility,
+  classifyModelFailure,
+  generateReply,
+  withModelDeadline,
+  parseNdjson,
+  pickFromCatalog,
+  normalizeModelRef,
+  chatModelOptions,
+  resolveModelChoice,
+  modelKey,
+} from "../lib/model.js";
 
 const ndjson = (...events) => events.map((e) => JSON.stringify(e)).join("\n");
+
+// 真实基线：MiniMax 短任务的 180/400/500 输出全部耗在思考上；
+// 假宿主复现同一预算条件，不读取或写入真实聊天，也不冒充真实模型验收。
+function utilityCtx(run) {
+  const requests = [];
+  return {
+    requests,
+    models: {
+      utility: async (request) => {
+        requests.push(request);
+        return run(request, requests.length);
+      },
+      cancel: async () => {},
+      list: async () => { throw new Error("不能拿当前焦点反推后台模型"); },
+      stream: async () => { throw new Error("不能静默切换模型或通道"); },
+    },
+  };
+}
+
+test("utility：180/400/500 小预算保留思考余量，仍使用原宿主通道", async () => {
+  for (const maxTokens of [180, 400, 500]) {
+    const ctx = utilityCtx(async (request) => {
+      if (request.maxTokens < 8192) throw Object.assign(new Error("The auxiliary model provider could not complete the request."), { code: "APP_MODEL_PROVIDER_ERROR" });
+      return { text: '{"query":"公开主题"}' };
+    });
+    const text = await askUtility(ctx, { systemPrompt: "只给短 JSON", userText: "测试输入", maxTokens });
+    assert.equal(text, '{"query":"公开主题"}');
+    assert.equal(ctx.requests.length, 1);
+    assert.equal(ctx.requests[0].maxTokens, 8192);
+    assert.equal(ctx.requests[0].scope, "app");
+    assert.equal(ctx.requests[0].systemPrompt, "只给短 JSON");
+    assert.deepEqual(ctx.requests[0].messages, [{ role: "user", content: "测试输入" }]);
+    assert.equal("provider" in ctx.requests[0], false);
+    assert.equal("model" in ctx.requests[0], false);
+    assert.equal("thinking" in ctx.requests[0], false, "utility 不接受的参数不能乱塞");
+  }
+});
+
+test("utility：已足够的预算不缩小，不虚增成无限上限", async () => {
+  const ctx = utilityCtx(async () => ({ text: "好" }));
+  await askUtility(ctx, { userText: "测试", maxTokens: 12000 });
+  assert.equal(ctx.requests[0].maxTokens, 12000);
+});
+
+test("utility：空正文只在同一路增加预算重试一次，每次使用新编号", async () => {
+  const seen = [];
+  const ctx = utilityCtx(async (_request, attempt) => ({ text: attempt === 1 ? "  " : "  可用正文  " }));
+  assert.equal(await askUtility(ctx, { userText: "测试", maxTokens: 180, diagnostics: (row) => seen.push(row) }), "可用正文");
+  assert.deepEqual(ctx.requests.map((row) => row.maxTokens), [8192, 16384]);
+  assert.notEqual(ctx.requests[0].requestId, ctx.requests[1].requestId);
+  assert.ok(seen.some((row) => row.event === "models.utility.retry" && row.reason === "empty"));
+  assert.ok(seen.some((row) => row.event === "models.utility.ok" && row.attempt === 2));
+  assert.ok(!JSON.stringify(seen).includes("测试"), "诊断不记录输入原话");
+});
+
+test("utility：宿主明说空正文才增加预算，不把所有 provider 错误当预算不足", async () => {
+  const ctx = utilityCtx(async (_request, attempt) => {
+    if (attempt === 1) throw Object.assign(new Error("模型未回复正文，请检查思考内容或稍后重试。"), { code: "LLM_EMPTY_RESPONSE" });
+    return { text: "恢复" };
+  });
+  assert.equal(await askUtility(ctx, { userText: "测试" }), "恢复");
+  assert.deepEqual(ctx.requests.map((row) => row.maxTokens), [8192, 16384]);
+});
+
+test("utility：重复空正文是失败，最多两次，不返回空串假成功", async () => {
+  const ctx = utilityCtx(async () => ({ text: "" }));
+  await assert.rejects(askUtility(ctx, { userText: "测试" }), { code: "MODEL_EMPTY_RESPONSE" });
+  assert.equal(ctx.requests.length, 2);
+});
+
+test("utility：16384 已到重试上限时空正文立即失败", async () => {
+  const ctx = utilityCtx(async () => ({ text: "" }));
+  await assert.rejects(askUtility(ctx, { userText: "测试", maxTokens: 16384 }), { code: "MODEL_EMPTY_RESPONSE" });
+  assert.equal(ctx.requests.length, 1);
+});
+
+test("utility：鉴权、限额、内容拦截、超时及模糊 provider 错误原样失败且不重试", async () => {
+  for (const [code, message] of [
+    ["APP_MODEL_PROVIDER_ERROR", "The auxiliary model provider could not complete the request."],
+    ["401", "invalid api key"], ["429", "rate limit"],
+    ["1026", "input new_sensitive (1026)"], ["MODEL_TIMEOUT", "timeout"],
+  ]) {
+    const error = Object.assign(new Error(message), { code });
+    const ctx = utilityCtx(async () => { throw error; });
+    await assert.rejects(askUtility(ctx, { userText: "测试" }), (actual) => actual === error);
+    assert.equal(ctx.requests.length, 1, code);
+  }
+});
+
+test("utility：重试共用总耗时上限，耗尽后不得发第二次请求", async () => {
+  const ctx = utilityCtx(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    return { text: "" };
+  });
+  await assert.rejects(askUtility(ctx, { userText: "测试", timeoutMs: 10 }), { code: "MODEL_TIMEOUT" });
+  assert.equal(ctx.requests.length, 1);
+});
+
+test("utility：没有 text 的回包也不能当成成功", async () => {
+  const ctx = utilityCtx(async () => ({ reasoning_content: "内部思考" }));
+  await assert.rejects(askUtility(ctx, { userText: "测试" }), { code: "MODEL_EMPTY_RESPONSE" });
+  assert.equal(ctx.requests.length, 2);
+});
+
+test("utility：主入口统一传诊断，仅延长后台任务，前台搜索仍有短时限", async () => {
+  const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  const start = source.indexOf("  const askCheap =");
+  assert.ok(start >= 0);
+  const diagnostics = () => {};
+  const ask = vm.runInNewContext(source.slice(start, source.indexOf("  /**", start)) + "\naskCheap;", {
+    ctx: {}, askUtility: (_ctx, input) => input, diagnostics,
+  });
+  for (const timeoutMs of [10000, 20000]) {
+    const input = await ask("简短任务", "测试", 180, { timeoutMs });
+    assert.equal(input.timeoutMs, timeoutMs);
+    assert.equal(input.diagnostics, diagnostics);
+    assert.equal(input.maxTokens, 180, "最终预算由共享 utility 入口调整");
+  }
+  assert.equal((await ask("", "", 400)).timeoutMs, 120000);
+  assert.match(source, /raw = await askCheap\(spec\.systemPrompt, spec\.userText, 420, \{ timeoutMs: 60_000 \}\)/);
+  assert.match(source, /rawPlan = await askCheap\(spec\.systemPrompt, spec\.userText, 180, \{ timeoutMs: 60_000 \}\)/);
+  assert.match(source, /ask: \(prompt, text\) => askCheap\(prompt, text, 180, \{ timeoutMs: 10_000 \}\)/);
+});
 
 test("模型请求到 deadline 会 cancel 并退出等待", async () => {
   const calls = [];
@@ -121,6 +257,127 @@ test("模型目录缺少 provider 或 model 时返回 null，不瞎猜", () => {
   assert.equal(pickFromCatalog({ models: [{ name: "x" }] }), null);
   assert.equal(pickFromCatalog({ models: [] }), null);
   assert.equal(pickFromCatalog(null), null);
+});
+
+// ── 失败分类：哪些能拿备用模型顶一下，哪些不能 ───────────────────
+
+test("配额、凭据/provider 挂掉不能兜底，超时和连接断了才能", () => {
+  assert.equal(classifyModelFailure({ message: "You've hit your usage limit" }), "quota");
+  assert.equal(classifyModelFailure({ code: "429", message: "rate limit" }), "quota");
+  assert.equal(classifyModelFailure({ message: "The model provider could not complete the request." }), "provider");
+  assert.equal(classifyModelFailure({ code: "APP_MODEL_PROVIDER_ERROR", message: "中断" }), "provider");
+  assert.equal(classifyModelFailure({ code: "MODEL_TIMEOUT" }), "transient");
+  assert.equal(classifyModelFailure({ message: "fetch failed" }), "transient");
+  // 认不出来的按临时算：宁可照旧兜底，也不因为没见过的报错就哑掉
+  assert.equal(classifyModelFailure({ message: "某种没见过的毛病" }), "transient");
+  assert.equal(classifyModelFailure({}), "transient");
+});
+
+/** 假宿主：stream 回指定的流，utility 记一笔（用它判断有没有去借别的模型）。 */
+function fakeCtx(raw, { utilityText = "借来的声音" } = {}) {
+  const seen = { utility: 0, stream: 0 };
+  return {
+    seen,
+    models: {
+      cancel: async () => {},
+      stream: async () => {
+        seen.stream += 1;
+        return { text: async () => raw };
+      },
+      utility: async () => {
+        seen.utility += 1;
+        return { text: utilityText };
+      },
+    },
+  };
+}
+
+test("provider 挂掉时不借别的模型顶嘴，直接报模型不可用", async () => {
+  const raw = ndjson({ type: "error", requestId: "r", code: "APP_MODEL_PROVIDER_ERROR", message: "The model provider could not complete the request." });
+  const ctx = fakeCtx(raw);
+  await assert.rejects(
+    generateReply(ctx, {
+      systemPrompt: "",
+      messages: [],
+      modelRef: { provider: "openai-codex", model: "gpt-6-luna" },
+      catalog: { models: [{ provider: "openai-codex", model: "gpt-6-luna" }] },
+    }),
+    { code: "MODEL_UNAVAILABLE", kind: "provider" },
+  );
+  assert.equal(ctx.seen.utility, 0, "不许拿另一个模型的嘴替 ta 说话");
+});
+
+test("配额用完同样不兜底", async () => {
+  const raw = ndjson({ type: "error", requestId: "r", code: "429", message: "usage limit reached" });
+  const ctx = fakeCtx(raw);
+  await assert.rejects(
+    generateReply(ctx, {
+      systemPrompt: "",
+      messages: [],
+      modelRef: { provider: "openai-codex", model: "gpt-6-luna" },
+      catalog: { models: [{ provider: "openai-codex", model: "gpt-6-luna" }] },
+    }),
+    { code: "MODEL_UNAVAILABLE", kind: "quota" },
+  );
+  assert.equal(ctx.seen.utility, 0);
+});
+
+test("超时这类临时故障仍然借 utility 顶一下", async () => {
+  const ctx = fakeCtx("");
+  const out = await generateReply(ctx, {
+    systemPrompt: "",
+    messages: [],
+    modelRef: { provider: "openai-codex", model: "gpt-6-luna" },
+    catalog: { models: [{ provider: "openai-codex", model: "gpt-6-luna" }] },
+  });
+  assert.equal(out.via, "utility");
+  assert.equal(ctx.seen.utility, 1);
+});
+
+test("回复的原有 utility 兜底也留出思考预算，完整上下文不被压成一条", async () => {
+  const messages = [
+    { role: "user", content: [{ type: "text", text: "第一条" }] },
+    { role: "assistant", content: [{ type: "text", text: "已有回复" }] },
+    { role: "user", content: [{ type: "text", text: "第二条" }] },
+  ];
+  const ctx = utilityCtx(async (request) => {
+    assert.equal(request.maxTokens, 8192);
+    assert.equal(request.messages, messages);
+    return { text: "恢复原有备用回复" };
+  });
+  ctx.models.stream = async () => ({ text: async () => "" });
+  const out = await generateReply(ctx, {
+    systemPrompt: "保留人格", messages,
+    modelRef: { provider: "test", model: "test" }, maxTokens: 900,
+    catalog: { models: [{ provider: "test", model: "test" }] },
+  });
+  assert.equal(out.via, "utility");
+  assert.equal(out.text, "恢复原有备用回复");
+  assert.equal(ctx.requests[0].systemPrompt, "保留人格");
+});
+
+test("回复的 utility 兜底重复空正文仍失败，不返回空答案", async () => {
+  const ctx = utilityCtx(async () => ({ text: "" }));
+  ctx.models.stream = async () => ({ text: async () => "" });
+  await assert.rejects(generateReply(ctx, {
+    systemPrompt: "", messages: [{ role: "user", content: "测试" }],
+    modelRef: { provider: "test", model: "test" },
+    catalog: { models: [{ provider: "test", model: "test" }] },
+  }), { code: "MODEL_EMPTY_RESPONSE" });
+  assert.equal(ctx.requests.length, 2);
+});
+
+test("正常回包不碰 utility", async () => {
+  const raw = ndjson({ type: "text-delta", delta: "在呢" }, { type: "done", requestId: "r", stopReason: "stop" });
+  const ctx = fakeCtx(raw);
+  const out = await generateReply(ctx, {
+    systemPrompt: "",
+    messages: [],
+    modelRef: { provider: "openai-codex", model: "gpt-6-luna" },
+    catalog: { models: [{ provider: "openai-codex", model: "gpt-6-luna" }] },
+  });
+  assert.equal(out.via, "stream:openai-codex/gpt-6-luna");
+  assert.equal(ctx.seen.utility, 0);
 });
 
 // ── 模型选择（全局默认 + 每位伙伴单独压一个）────────────────────
