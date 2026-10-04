@@ -194,6 +194,23 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 .voice-model-presets small { color: var(--ink-soft); font-size: 12px; }
 .voice-model-presets button { border: 0; padding: 4px 11px; border-radius: 999px; background: var(--mint-soft); color: var(--mint-deep); font-size: 12px; cursor: pointer; transition: background 160ms ease; }
 @media (hover: hover) and (pointer: fine) { .voice-model-presets button:hover { background: #d8ebe2; } }
+/* 音色按语言折叠：一眼能扫完，不铺开成 70 个按钮墙 */
+.voice-picker { display: grid; gap: 8px; width: 100%; }
+.voice-group { border: 1px solid var(--line-soft); border-radius: var(--r-md); background: rgba(255, 253, 248, .7); }
+.voice-group > summary { cursor: pointer; list-style: none; padding: 8px 12px; font-size: 12.5px; color: var(--ink-soft); border-radius: var(--r-md); }
+.voice-group > summary::-webkit-details-marker { display: none; }
+.voice-group > summary::after { content: "›"; float: right; transition: transform 160ms ease; }
+.voice-group[open] > summary::after { transform: rotate(90deg); }
+@media (hover: hover) and (pointer: fine) { .voice-group > summary:hover { color: var(--mint-deep); } }
+.voice-grid { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 12px; }
+.voice-chip { border: 1px solid transparent; background: var(--mint-soft); color: var(--mint-deep); font-size: 12px; padding: 4px 10px; border-radius: 8px; cursor: pointer; transition: background 160ms ease, border-color 160ms ease; }
+.voice-chip.on { background: var(--mint); color: #fff; font-weight: 600; }
+@media (hover: hover) and (pointer: fine) { .voice-chip:not(.on):hover { background: #d8ebe2; } }
+.voice-custom { display: flex; gap: 8px; align-items: center; }
+.voice-custom input { flex: 1 1 auto; min-width: 0; }
+/* 缺必填项时的那句话：不能只靠她自己试出来 */
+.detail-field-note.warn, .setting-hint { color: var(--blush, #c9737a); }
+.setting-hint { margin: 8px 0 0; font-size: 12.5px; }
 .inline-field { display: grid; gap: 4px; }
 .inline-field > span { color: var(--ink-soft); font-size: 12px; }
 .inline-field input, .voice-model-fields select { width: 100%; box-sizing: border-box; }

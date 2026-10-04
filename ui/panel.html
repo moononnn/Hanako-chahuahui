@@ -1531,6 +1531,23 @@
     /** 已画过的未读小字也要跟着后端状态走，读到后收起。 */
     const tickNodes = new Map();
 
+    /**
+     * 「ta 这会儿接不上话」那条提示。
+     *
+     * 摆成居中的一条，不是 ta 的气泡——那不是 ta 说的话，是这边的情况说明。
+     * 它紧贴着发出去那条摆：那句「未读」还立着，两件事一起看才对——
+     * 消息确实存下来了，ta 也确实还没接上。
+     */
+    function noticeBubble(text) {
+      const row = document.createElement("div");
+      row.className = "row notice";
+      const box = document.createElement("div");
+      box.className = "notice-bubble";
+      box.textContent = text;
+      row.appendChild(box);
+      return row;
+    }
+
     function paintTick(node, read) {
       if (!node) return;
       if (read) {
@@ -2174,12 +2191,29 @@
       const transcriptText = document.createElement("div");
       transcriptText.className = "bubble voice-transcript";
       transcriptText.hidden = true;
-      transcriptText.textContent = m.voice?.text || m.text || "";
+      // 跟着播放点亮的那几道标记；老消息没有 marks，就安安静静显示整段。
+      const marks = Array.isArray(m.voice?.marks?.marks) ? m.voice.marks.marks.filter((row) => row && row.text) : [];
+      const joined = marks.map((row) => row.text).join("");
+      const plainText = m.voice?.text || m.text || "";
+      const usableMarks = marks.length > 1 && joined.length >= plainText.length * 0.6 ? marks : [];
+      if (usableMarks.length) {
+        transcriptText.classList.add("voice-marked");
+        usableMarks.forEach((row) => {
+          const span = document.createElement("span");
+          span.className = "voice-mark";
+          span.textContent = row.text;
+          transcriptText.appendChild(span);
+        });
+      } else {
+        transcriptText.textContent = plainText;
+      }
       transcriptLine.appendChild(transcriptText);
       rendered.col.appendChild(transcriptLine);
+      let autoOpened = false;
       transcript.addEventListener("click", () => {
         transcriptText.hidden = !transcriptText.hidden;
         transcript.textContent = transcriptText.hidden ? "转文字" : "收起文字";
+        autoOpened = false;
       });
 
       if (m.voice?.status === "ready") {
@@ -2201,6 +2235,25 @@
           duration.textContent = formatVoiceDuration(audio.duration * 1000);
         });
         if (!m.voice?.durationMs) void loadAudio().catch(() => {});
+        const spans = usableMarks.length ? [...transcriptText.querySelectorAll(".voice-mark")] : [];
+        let activeMark = -1;
+        let markFrame = 0;
+        const paintMark = (index) => {
+          if (index === activeMark) return;
+          if (spans[activeMark]) spans[activeMark].classList.remove("on");
+          activeMark = index;
+          if (spans[activeMark]) spans[activeMark].classList.add("on");
+        };
+        const syncMark = () => {
+          const at = audio.currentTime * 1000;
+          let index = -1;
+          for (let i = 0; i < usableMarks.length; i += 1) {
+            if (at >= usableMarks[i].start && at < usableMarks[i].end) { index = i; break; }
+          }
+          paintMark(index);
+          markFrame = requestAnimationFrame(syncMark);
+        };
+        const stopMark = () => { if (markFrame) { cancelAnimationFrame(markFrame); markFrame = 0; } };
         play.addEventListener("click", async () => {
           unplayed.hidden = true;
           if (!m.voice?.playedAt) {
@@ -2210,13 +2263,20 @@
           if (!audio.paused) { audio.pause(); return; }
           try {
             if (!audio.src) await loadAudio();
+            // 第一次播放时自动把原话摆出来，后面的同步才有东西可点亮。
+            if (transcriptText.hidden && usableMarks.length && !autoOpened) {
+              transcriptText.hidden = false;
+              transcript.textContent = "收起文字";
+              autoOpened = true;
+            }
             box.classList.add("is-playing");
             icon.textContent = "Ⅱ";
+            if (usableMarks.length) { paintMark(-1); syncMark(); }
             await audio.play();
           } catch { setStatus("这条语音暂时播不出来"); }
         });
-        audio.addEventListener("ended", () => { box.classList.remove("is-playing"); icon.textContent = "▶"; });
-        audio.addEventListener("pause", () => { if (audio.ended || audio.currentTime === 0) { box.classList.remove("is-playing"); icon.textContent = "▶"; } });
+        audio.addEventListener("ended", () => { box.classList.remove("is-playing"); icon.textContent = "▶"; stopMark(); paintMark(-1); });
+        audio.addEventListener("pause", () => { stopMark(); if (audio.ended || audio.currentTime === 0) { box.classList.remove("is-playing"); icon.textContent = "▶"; } });
       } else {
         play.disabled = true;
         transcript.disabled = true;
@@ -2286,6 +2346,7 @@
           renderPartnerFeed(col, m);
         }
         if (isLatestUserMessage(m)) bindMessageActions(row, m);
+        if (m.notice?.text) row.insertAdjacentElement("afterend", noticeBubble(m.notice.text));
       } else {
         if (m.voice && !Array.isArray(opts.assistantPieces)) {
           voiceStates.set(m.id, `${m.voice.status || ""}:${m.voice.format || ""}:${m.voice.durationMs || ""}:${m.voice.playedAt || ""}`);
@@ -3534,6 +3595,9 @@
           tickNodes.set(started.messageId, tickEl);
           bindMessageActions(row, { id: started.messageId, role: "user", text, kind: sticker ? "sticker" : undefined });
         }
+        // 后端说模型这会儿用不了：消息收下了，但这一轮没人接得上。
+        // 提示紧贴这条摆出来，那行「未读」还立着——她一眼能看懂「没丢，也没人接」。
+        if (started.notice?.text) row.insertAdjacentElement("afterend", noticeBubble(started.notice.text));
         // 后端只在「面对面（手机在手，包括打盹）」时才给回合；给了就演实时那套。
         // 没给（手机不在手，只排队）就什么都不演，回复由轮询慢慢补。
         if (started.turnId) void playLiveTurn(agentId, turnSeq, started, tickEl);
@@ -3762,6 +3826,13 @@
         recognitionPrompt: "",
         localName: "",
         localDescription: "",
+        talkTurns: [],
+        talkDraft: null,
+        talkProgress: null,
+        talkSending: false,
+        talkError: "",
+        talkInput: "",
+        talkSeq: 0,
       };
     }
 
@@ -3852,8 +3923,215 @@
       obState.modeChoice = false;
       if (mode === "recognition") {
         void obStartRecognition(partner);
+      } else if (mode === "talk") {
+        void obStartTalk(partner);
       } else {
         void obStartFor(partner);
+      }
+    }
+
+    /** 一位伙伴定稿之后的收场：接着认识下一位，或者回聊天去。 */
+    async function obAfterSettled() {
+      obQueue.shift();
+      if (obQueue.length) {
+        obStage = 5;
+        obRender();
+        return;
+      }
+      const preferredPartnerId = obState.partner?.id;
+      obClose();
+      await bootChat(preferredPartnerId);
+    }
+
+    // ── 跟我聊着捏 ────────────────────────────────────────
+    //
+    // 跟旁边两条的分工：自动分析是她交材料、模型出成稿，中间插不上手；
+    // 「认真认识 ta」是七道固定的题。这一条是她在场、模型跟着她的构思问，
+    // 一边问一边把她说的话翻成「什么情况 → 怎么做」，实时摆在右边给她看。
+    // 会话存在盘上，点「先放着」下次进来接着聊；点「成型」才真写进 ta 的画像。
+
+    async function obStartTalk(partner) {
+      obOpen();
+      obEl.body.replaceChildren();
+      obEl.title.textContent = `正在打开和「${partner.name}」的对谈…`;
+      obEl.sub.textContent = "先把你脑子里那个大概的样子说一句就行。";
+      try {
+        const data = await api("POST", `co-create/${encodeURIComponent(partner.id)}/open`);
+        const session = data?.session ?? null;
+        obState = {
+          ...emptyObState(),
+          partner,
+          mode: "talk",
+          talkTurns: Array.isArray(session?.turns) ? session.turns : [],
+          talkDraft: session?.draft ?? null,
+          talkProgress: data?.progress ?? null,
+        };
+        obRender();
+      } catch (error) {
+        obState = { ...emptyObState(), partner, modeChoice: true, error: `对谈没打开：${error.message}` };
+        obRender();
+      }
+    }
+
+    /** 一份草稿能不能定稿。跟后端那道门用同一把尺：有色配活行为，或者至少一段自画像。 */
+    function canCommitTalk() {
+      const draft = obState?.talkDraft;
+      if (!draft) return false;
+      const colors = Array.isArray(draft.colors) ? draft.colors : [];
+      const live = (Array.isArray(draft.derivatives) ? draft.derivatives : []).some((row) => row.on !== false);
+      const portrait = (Array.isArray(draft.portrait) ? draft.portrait : []).some((row) => row && row.text);
+      return (colors.length > 0 && live) || portrait;
+    }
+
+    function obRenderTalk() {
+      const partner = obState.partner;
+      obEl.title.textContent = `跟「${partner.name}」聊着捏`;
+      obEl.sub.textContent = "你说个大概就行，缺的地方我来问。";
+      obEl.step.textContent = "跟我聊着捏";
+      obEl.back.hidden = false;
+      obEl.back.textContent = "先放着";
+      obEl.next.hidden = true;
+
+      const wrap = obNode("div", "ob-talk");
+
+      // 左：对话。她说的话先摆上去不等人，模型回来了再整份替换。
+      const log = obNode("div", "ob-talk-log");
+      const turns = Array.isArray(obState.talkTurns) ? obState.talkTurns : [];
+      if (!turns.length) {
+        log.appendChild(obNode("p", "ob-talk-hint", "先说说 ta 大概是什么样的人。一个词、一句话都行，想到哪儿说到哪儿，不用一次写全。"));
+      }
+      for (const row of turns) {
+        const bubble = obNode("div", `ob-talk-bubble ${row.role === "model" ? "from-ta" : "from-me"}`);
+        bubble.textContent = row.text;
+        log.appendChild(bubble);
+      }
+      if (obState.talkSending) log.appendChild(obNode("p", "ob-talk-hint", "在想…"));
+      wrap.appendChild(log);
+
+      // 右：现在的样子。她说什么，这里就长出什么。
+      const side = obNode("div", "ob-talk-side");
+      side.appendChild(obNode("b", "ob-talk-head", "现在的样子"));
+      const draft = obState.talkDraft ?? {};
+      const colors = Array.isArray(draft.colors) ? draft.colors : [];
+      const derivatives = Array.isArray(draft.derivatives) ? draft.derivatives : [];
+      const portrait = Array.isArray(draft.portrait) ? draft.portrait : [];
+      if (!colors.length && !portrait.length) {
+        side.appendChild(obNode("p", "ob-talk-empty", "还什么都没有。你说一句，这里就开始长。"));
+      }
+      for (const role of ["base", "main", "accent"]) {
+        for (const color of colors.filter((row) => row.role === role)) {
+          const block = obNode("div", "ob-talk-color");
+          block.appendChild(obNode("b", "", `${ROLE_TEXT[role] ?? ""}「${color.name}」`));
+          const rows = derivatives.filter((row) => row.colorId === color.id && row.on !== false);
+          if (!rows.length) block.appendChild(obNode("p", "ob-talk-empty", "还没有行为"));
+          for (const row of rows) block.appendChild(obNode("p", "ob-talk-row", row.text));
+          side.appendChild(block);
+        }
+      }
+      for (const row of portrait) {
+        if (!row || !row.text) continue;
+        const block = obNode("div", "ob-talk-color");
+        block.appendChild(obNode("b", "", `自画像${row.title ? ` · ${row.title}` : ""}`));
+        block.appendChild(obNode("p", "ob-talk-row", row.text));
+        side.appendChild(block);
+      }
+      const gaps = Array.isArray(obState.talkProgress?.gaps) ? obState.talkProgress.gaps : [];
+      if (gaps.length) {
+        const box = obNode("div", "ob-talk-gaps");
+        box.appendChild(obNode("b", "", "还差什么"));
+        for (const gap of gaps) box.appendChild(obNode("p", "ob-talk-gap", gap));
+        side.appendChild(box);
+      }
+      wrap.appendChild(side);
+      obEl.body.appendChild(wrap);
+
+      const row = obNode("div", "ob-talk-input");
+      const input = document.createElement("textarea");
+      input.className = "ob-rec-input ob-talk-textarea";
+      input.rows = 2;
+      input.placeholder = "想到什么说什么…（回车发送，Shift+回车换行）";
+      input.value = obState.talkInput ?? "";
+      input.addEventListener("input", () => { obState.talkInput = input.value; });
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          void obSendTalk();
+        }
+      });
+      const send = obNode("button", "ob-pick", obState.talkSending ? "说着…" : "说");
+      send.type = "button";
+      send.disabled = Boolean(obState.talkSending);
+      send.addEventListener("click", () => void obSendTalk());
+      row.append(input, send);
+      obEl.body.appendChild(row);
+
+      const commit = obNode("button", "ob-pick", "就这样，成型");
+      commit.type = "button";
+      commit.disabled = Boolean(obState.talkSending) || !canCommitTalk();
+      commit.addEventListener("click", () => void obCommitTalk());
+      obEl.body.appendChild(commit);
+
+      if (obState.talkError) obEl.body.appendChild(obNode("p", "ob-warn", obState.talkError));
+      try { input.focus(); } catch { /* 抢不到焦点就算了 */ }
+    }
+
+    /**
+     * 说一句。
+     *
+     * 请求带代次：她中途收了层、或者又说了新的一句，回来的那份已经过期，丢掉。
+     * 不丢的话，会把新的那一轮又盖回旧的。
+     */
+    async function obSendTalk() {
+      if (obState?.mode !== "talk" || obState.talkSending) return;
+      const say = String(obState.talkInput ?? "").trim();
+      if (!say) return;
+      const seq = ++obState.talkSeq;
+      const partnerId = obState.partner.id;
+      obState.talkSending = true;
+      obState.talkError = "";
+      obState.talkInput = "";
+      obState.talkTurns = [...(obState.talkTurns ?? []), { role: "user", text: say }];
+      obRenderTalk();
+      try {
+        const data = await api("POST", `co-create/${encodeURIComponent(partnerId)}/say`, { text: say });
+        if (obState?.mode !== "talk" || obState.talkSeq !== seq) return;
+        obState.talkTurns = Array.isArray(data?.session?.turns) ? data.session.turns : obState.talkTurns;
+        obState.talkDraft = data?.session?.draft ?? obState.talkDraft;
+        obState.talkProgress = data?.progress ?? obState.talkProgress;
+        obState.talkSending = false;
+        if (data?.unparsed) obState.talkError = "这一轮它没接住，你再说一句、或者说具体一点。";
+        obRenderTalk();
+      } catch (error) {
+        if (obState?.mode !== "talk" || obState.talkSeq !== seq) return;
+        obState.talkSending = false;
+        obState.talkError = `没接上：${error.message}`;
+        obRenderTalk();
+      }
+    }
+
+    /** 成型：写进 ta 的画像。写之前后端会先把旧版存一条，退得回来。 */
+    async function obCommitTalk() {
+      if (obState?.mode !== "talk" || obState.talkSending) return;
+      if (!canCommitTalk()) {
+        obState.talkError = "还太空了。至少得有一个色配一条行为，或者一段自画像。";
+        obRenderTalk();
+        return;
+      }
+      const seq = ++obState.talkSeq;
+      const partnerId = obState.partner.id;
+      obState.talkSending = true;
+      obState.talkError = "";
+      obRenderTalk();
+      try {
+        await api("POST", `co-create/${encodeURIComponent(partnerId)}/commit`);
+        if (obState?.mode !== "talk" || obState.talkSeq !== seq) return;
+        await loadPartners();
+        await obAfterSettled();
+      } catch (error) {
+        if (obState?.mode !== "talk" || obState.talkSeq !== seq) return;
+        obState.talkSending = false;
+        obState.talkError = `没写进去：${error.message}`;
+        obRenderTalk();
       }
     }
 
@@ -3992,6 +4270,9 @@
     function obRender() {
       if (!obState) return;
       obEl.body.replaceChildren();
+      // 对谈那一屏左边聊天右边画像，卡片得宽一点；别的屏照旧
+      const card = obEl.root.querySelector(".ob-card");
+      if (card) card.classList.toggle("ob-card-wide", obState.mode === "talk");
 
       if (obState.mode === "local-create") {
         obEl.title.textContent = "新增茶话会角色";
@@ -4022,7 +4303,7 @@
 
       if (obState.modeChoice) {
         obEl.title.textContent = `先和「${obState.partner.name}」认识一下`;
-        obEl.sub.textContent = "想快一点，还是坐下来认真聊一遍？之后两条路还能接着补。";
+        obEl.sub.textContent = "想省事一点，还是自己捏？三条路之后都能接着补。";
         obEl.step.textContent = "选择认识方式";
         obEl.back.hidden = false;
         obEl.back.textContent = "先回去聊";
@@ -4034,7 +4315,15 @@
         const deep = obNode("button", "ob-pick", "认真认识 ta");
         deep.type = "button";
         deep.addEventListener("click", () => obChooseMode("recognition"));
-        obEl.body.append(quick, deep);
+        const talk = obNode("button", "ob-pick", "跟我聊着捏");
+        talk.type = "button";
+        talk.addEventListener("click", () => obChooseMode("talk"));
+        obEl.body.append(quick, deep, talk);
+        return;
+      }
+
+      if (obState.mode === "talk") {
+        obRenderTalk();
         return;
       }
 
@@ -4625,15 +4914,7 @@
         }
         const portrait = (obState.portrait ?? []).filter((row) => row.title && String(row.text).trim());
         await api("POST", "onboarding/save", { agentId: obState.partner.id, colors, derivatives, portrait });
-        obQueue.shift();
-        if (obQueue.length) {
-          obStage = 5;
-          obRender();
-          return;
-        }
-        const preferredPartnerId = obState.partner?.id;
-        obClose();
-        await bootChat(preferredPartnerId);
+        await obAfterSettled();
       } catch (error) {
         obEl.sub.textContent = `没存上：${error.message}`;
         obEl.next.disabled = false;
@@ -4658,7 +4939,7 @@
         obRender();
         return;
       }
-      if (obState.modeChoice || obState.running || obState.loadingDraft) {
+      if (obState.modeChoice || obState.running || obState.loadingDraft || obState.mode === "talk") {
         obClose();
         void bootChat();
         return;

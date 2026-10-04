@@ -732,6 +732,10 @@ html, body {
   line-height: 1.6;
 }
 .voice-transcript[hidden] { display: none; }
+/* 跟着播放点亮的原话：只给当前那几道加重，不做满屏变色 */
+.voice-marked { font-variant-numeric: tabular-nums; }
+.voice-mark { border-radius: 4px; transition: background 180ms ease, color 180ms ease; }
+.voice-mark.on { background: var(--accent-soft); color: var(--primary-ink); font-weight: 600; }
 @keyframes voice-wave {
   from { transform: scaleY(.72); opacity: .45; }
   to { transform: scaleY(1.08); opacity: .9; }
@@ -762,6 +766,24 @@ html, body {
   flex: none;
   border-radius: 50%;
   background: currentColor;
+}
+/* 模型这会儿用不了时的那条说明。居中、不带头像，比消息气泡轻一档：
+   它是这边的情况，不是 ta 说的话，也不该看起来像 ta 回了一条。 */
+.row.notice {
+  align-self: center;
+  max-width: 82%;
+  margin: 2px 0;
+}
+.notice-bubble {
+  padding: 6px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: var(--sunken);
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.7;
+  text-align: center;
+  user-select: text;
 }
 /* 消息操作条：右键一条消息，动作从这条消息自己身上长出来。
    位置锚在被点那条的气泡上（先量气泡的 rect 再摆），不跟鼠标跑——跟着鼠标的那个
@@ -1384,6 +1406,92 @@ body.ob-open { overflow: hidden; }
   border-radius: var(--r-xl);
   box-shadow: var(--sh-2);
   overflow: hidden;
+}
+
+/* 对谈那一屏左边聊天右边画像，520 塞不下 */
+.ob-card-wide { width: min(880px, 100%); }
+
+/* ── 跟我聊着捏 ───────────────────────────────── */
+
+.ob-talk {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 300px);
+  gap: 12px;
+  min-height: 240px;
+}
+
+.ob-talk-log {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  max-height: 46vh;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+}
+
+.ob-talk-bubble {
+  max-width: 86%;
+  padding: 9px 12px;
+  font-size: 13px;
+  line-height: 1.7;
+  border-radius: var(--r-md);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ob-talk-bubble.from-me {
+  align-self: flex-end;
+  color: var(--ink);
+  background: var(--accent-soft);
+}
+.ob-talk-bubble.from-ta {
+  align-self: flex-start;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line-soft);
+}
+
+.ob-talk-hint,
+.ob-talk-empty {
+  margin: 2px 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ink-soft);
+}
+
+.ob-talk-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  max-height: 46vh;
+  overflow-y: auto;
+  background: var(--accent-soft);
+  border-radius: var(--r-md);
+}
+.ob-talk-head { font-size: 12px; font-weight: 600; color: var(--ink-soft); }
+.ob-talk-color { display: flex; flex-direction: column; gap: 3px; }
+.ob-talk-color b { font-size: 12.5px; color: var(--ink); }
+.ob-talk-row { margin: 0; font-size: 12px; line-height: 1.65; color: var(--ink); }
+.ob-talk-gaps {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--line-soft);
+}
+.ob-talk-gaps b { font-size: 12px; color: var(--ink-soft); }
+.ob-talk-gap { margin: 0; font-size: 11.5px; line-height: 1.6; color: var(--ink-soft); }
+
+.ob-talk-input { display: flex; gap: 8px; align-items: flex-end; }
+.ob-talk-textarea { flex: 1; resize: vertical; }
+.ob-talk-input .ob-pick { width: auto; padding: 12px 18px; text-align: center; }
+
+@media (max-width: 720px) {
+  .ob-talk { grid-template-columns: minmax(0, 1fr); }
+  .ob-talk-log, .ob-talk-side { max-height: 32vh; }
 }
 
 .ob-head { padding: 18px 20px 10px; }

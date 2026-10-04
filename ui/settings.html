@@ -69,6 +69,17 @@
         <button class="switch" id="voice-switch" type="button" role="switch" aria-checked="false">
           <span class="track"><span></span></span><span class="switch-label">关闭</span>
         </button>
+        <p class="setting-hint" id="voice-ready-hint" hidden>下面那条朗读模型还缺必填项，现在合成不出语音。</p>
+        <p class="setting-hint" id="voice-plainkey-hint" hidden>系统加密这会儿用不上，朗读 Key 是明文放在茶话会自己的数据文件里（只有你的 Windows 账户能读）。</p>
+      </article>
+      <article class="setting-card compact">
+        <div class="setting-copy">
+          <h3>声音里的情绪</h3>
+          <p>让 ta 在合适的地方带一声笑、叹口气，中间停半拍；关掉就是干净利落地念完。</p>
+        </div>
+        <button class="switch" id="voice-delivery-switch" type="button" role="switch" aria-checked="true">
+          <span class="track"><span></span></span><span class="switch-label">带着情绪</span>
+        </button>
       </article>
       <article class="setting-card" id="voice-model-card">
         <div class="setting-copy">
@@ -361,6 +372,7 @@
     let modelCatalog = [];
     let visionModelCatalog = [];
     let voiceChoices = [];
+    let voiceGroups = [];
     let voiceTiers = [];
     let voicePresets = [];
     /** 新建朗读模型时的底稿；模板按钮只改这份，不动已保存的条目 */
@@ -379,8 +391,13 @@
     const avatarCache = new Map();
 
     async function api(method, sub, body) {
+      return apiWith(method, sub, body, 8000);
+    }
+
+    /** 要等真实模型跑完的请求用长超时：8 秒连一次思考都不够（实测识图测试必超时）。 */
+    async function apiWith(method, sub, body, timeoutMs) {
       const path = String(sub).replace(/^\//, "");
-      const init = { method, signal: AbortSignal.timeout(8000) };
+      const init = { method, signal: AbortSignal.timeout(timeoutMs) };
       if (body !== undefined) {
         init.headers = { "content-type": "application/json" };
         init.body = JSON.stringify(body);
@@ -570,6 +587,7 @@
           const data = await api("PUT", "settings/global", payload);
           globalSettings = data.global;
           if (Array.isArray(data.voiceChoices)) voiceChoices = data.voiceChoices;
+          if (Array.isArray(data.voiceGroups)) voiceGroups = data.voiceGroups;
           say(successText, "ok");
           return true;
         } catch (error) {
@@ -611,6 +629,15 @@
       voiceSwitch.classList.toggle("on", voiceOn);
       voiceSwitch.setAttribute("aria-checked", String(voiceOn));
       voiceSwitch.querySelector(".switch-label").textContent = voiceOn ? "打开" : "关闭";
+      const voiceHint = document.getElementById("voice-ready-hint");
+      if (voiceHint) voiceHint.hidden = voiceOn ? Boolean(globalSettings.voiceReady) : true;
+      const plainKeyHint = document.getElementById("voice-plainkey-hint");
+      if (plainKeyHint) plainKeyHint.hidden = !(voiceOn && globalSettings.voiceReady && globalSettings.voiceKeyEncrypted === false);
+      const deliverySwitch = document.getElementById("voice-delivery-switch");
+      const deliveryOn = globalSettings.voiceDelivery !== false;
+      deliverySwitch.classList.toggle("on", deliveryOn);
+      deliverySwitch.setAttribute("aria-checked", String(deliveryOn));
+      deliverySwitch.querySelector(".switch-label").textContent = deliveryOn ? "带着情绪" : "干净念";
       const daybookSwitch = document.getElementById("daybook-switch");
       const daybookOn = daybookInstalled && Boolean(globalSettings.daybookEnabled);
       daybookSwitch.disabled = !daybookInstalled;
@@ -802,7 +829,7 @@
           keyBadge.textContent = hasStoredKey ? "会覆盖已保存的" : "待保存";
         } else if (hasStoredKey) {
           keyBadge.className = "field-state saved";
-          keyBadge.textContent = "已保存";
+          keyBadge.textContent = globalSettings.voiceKeyEncrypted === false ? "已保存 · 未加密" : "已保存";
         } else {
           keyBadge.className = "field-state missing";
           keyBadge.textContent = "还没填";
@@ -984,7 +1011,7 @@
         test.disabled = true;
         test.textContent = "正在测试…";
         try {
-          const data = await api("POST", "vision/test", { model: vision.model });
+          const data = await apiWith("POST", "vision/test", { model: vision.model }, 90000);
           globalSettings.vision = data.vision;
           say(data.ok ? "识图测试通过，发送图片时会允许放行" : `识图测试没通过：${data.error?.message || "模型暂时不可用"}`, data.ok ? "ok" : "err");
         } catch (error) {
@@ -1037,6 +1064,10 @@
     document.getElementById("voice-switch").addEventListener("click", async () => {
       const next = !Boolean(globalSettings.voiceEnabled);
       if (await saveGlobal({ voiceEnabled: next }, next ? "伙伴语音消息已打开" : "伙伴语音消息已关闭")) paintGlobal();
+    });
+    document.getElementById("voice-delivery-switch").addEventListener("click", async () => {
+      const next = globalSettings.voiceDelivery === false;
+      if (await saveGlobal({ voiceDelivery: next }, next ? "声音里会带情绪了" : "改成干净利落地念")) paintGlobal();
     });
     document.getElementById("voice-model-test").addEventListener("click", async (event) => {
       const button = event.currentTarget;
@@ -1539,15 +1570,63 @@
       });
       voiceCard.appendChild(field("语音开关", voiceSwitch));
       const profileId = voiceProfileId();
-      const savedVoiceId = s.voice?.voiceByProfile?.[profileId] || s.voice?.voiceId;
+      const savedVoiceId = s.voice?.voiceByProfile?.[profileId] || s.voice?.voiceId || "";
       const pickedVoice = voiceChoices.some((item) => item.id === savedVoiceId);
-      const voiceId = pickedVoice ? savedVoiceId : (voiceChoices[0]?.id || "");
+      const voiceId = savedVoiceId || voiceChoices[0]?.id || "";
+      if (!globalSettings.voiceReady) {
+        const warn = document.createElement("p");
+        warn.className = "detail-field-note warn";
+        warn.textContent = "上面那条朗读模型还缺必填项，现在一条语音也合成不出来。";
+        voiceCard.appendChild(warn);
+      }
       if (voiceChoices.length) {
-        voiceCard.appendChild(field("声音", segment(voiceChoices.map((item) => [item.id, item.name]), voiceId, async (value) => {
-          if (await savePartner(agentId, { voice: { ...(s.voice ?? {}), voiceId: value, voiceByProfile: { ...(s.voice?.voiceByProfile || {}), [profileId]: value } } }, "音色已保存")) {
+        const picker = document.createElement("div");
+        picker.className = "voice-picker";
+        const groups = voiceGroups.length ? voiceGroups : [{ id: "default", label: "音色", voices: voiceChoices }];
+        const saveVoiceId = async (next) => {
+          if (await savePartner(agentId, { voice: { ...(s.voice ?? {}), voiceId: next, voiceByProfile: { ...(s.voice?.voiceByProfile || {}), [profileId]: next } } }, "音色已保存")) {
             if (currentId === agentId) openPartner(agentId, "contact");
           }
-        }), pickedVoice ? "" : "这条朗读模型还没给 ta 选过声音，现在是默认音色，挑一个就好。"));
+        };
+        for (const group of groups) {
+          const details = document.createElement("details");
+          details.className = "voice-group";
+          details.open = group.voices.some((item) => item.id === voiceId);
+          const summary = document.createElement("summary");
+          summary.textContent = `${group.label} · ${group.voices.length}`;
+          const grid = document.createElement("div");
+          grid.className = "voice-grid";
+          for (const item of group.voices) {
+            const chip = document.createElement("button");
+            chip.type = "button";
+            chip.className = `voice-chip${item.id === voiceId ? " on" : ""}`;
+            chip.textContent = item.name;
+            chip.title = item.id;
+            chip.addEventListener("click", () => saveVoiceId(item.id));
+            grid.appendChild(chip);
+          }
+          details.append(summary, grid);
+          picker.appendChild(details);
+        }
+        // 自己克隆或设计出来的音色不在系统目录里，只能直接填 id。
+        const custom = document.createElement("div");
+        custom.className = "voice-custom";
+        const customInput = document.createElement("input");
+        customInput.type = "text";
+        customInput.placeholder = "粘贴自己克隆/设计的音色 ID";
+        customInput.value = pickedVoice ? "" : savedVoiceId;
+        const customSave = document.createElement("button");
+        customSave.type = "button";
+        customSave.className = "soft-button";
+        customSave.textContent = "用这个 ID";
+        customSave.addEventListener("click", () => {
+          const value = customInput.value.trim();
+          if (!value) { say("先粘一个音色 ID，比如 ttv-voice-… 开头的那串", "warn"); return; }
+          void saveVoiceId(value);
+        });
+        custom.append(customInput, customSave);
+        picker.appendChild(custom);
+        voiceCard.appendChild(field("声音", picker, pickedVoice ? "" : "这条朗读模型还没给 ta 选过声音，现在是默认音色，挑一个就好。"));
       } else {
         voiceCard.appendChild(field("声音", document.createTextNode("暂时没读到可用音色"), "先在上面选一条朗读模型，音色列表会跟着它走。"));
       }
@@ -1573,7 +1652,7 @@
           const response = await hana.api.fetch("voice/test", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ voiceId: voiceId, modelConfig: globalSettings.voiceModel, text: `你好呀，我是${partner.name}。这是我的声音试听。` }),
+            body: JSON.stringify({ voiceId: savedVoiceId || voiceId, modelConfig: globalSettings.voiceModel, text: `你好呀，我是${partner.name}。这是我的声音试听。` }),
           });
           if (!response.ok) throw new Error((await response.text()).slice(0, 200) || `HTTP ${response.status}`);
           const audio = new Audio(URL.createObjectURL(await response.blob()));
@@ -2524,7 +2603,7 @@
         visionTest.disabled = true;
         visionTest.textContent = "正在测试…";
         try {
-          const result = await api("POST", "vision/test", { agentId, model: s.vision.model });
+          const result = await apiWith("POST", "vision/test", { agentId, model: s.vision.model }, 90000);
           s.vision = result.vision;
           say(result.ok ? "这位伙伴的识图测试通过" : `识图测试没通过：${result.error?.message || "模型暂时不可用"}`, result.ok ? "ok" : "err");
         } catch (error) {
@@ -2908,6 +2987,7 @@
       modelCatalog = data.models ?? [];
       visionModelCatalog = data.visionModels ?? [];
       voiceChoices = data.voiceChoices ?? [];
+      voiceGroups = data.voiceGroups ?? [];
       voiceTiers = data.voiceTiers ?? [];
       voicePresets = data.voicePresets ?? [];
       daybookInstalled = Boolean(data.daybookInstalled);
