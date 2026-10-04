@@ -12,6 +12,7 @@ import {
   bornHobbySpec,
   canGrow,
   isSameSpot,
+  motifHobbySpec,
   nativeInterestSeed,
   needsBorn,
   parseHobbyLine,
@@ -20,7 +21,7 @@ import {
   sampleNativeAtoms,
   validateNativeHobbies,
 } from "../lib/growth.js";
-import { MAX_GROWN_HOBBIES } from "../lib/knowing.js";
+import { MAX_HOBBIES } from "../lib/knowing.js";
 import { normalizeRelationship } from "../lib/relationship.js";
 
 /** 造一个刚好够到「逐渐熟悉」的账 */
@@ -109,22 +110,56 @@ test("撞车判定认得近似说法，但不会把不相干的算成撞", () =>
   assert.equal(isSameSpot("杯底磨出来的痕迹", "玻璃杯上的水痕"), false);
 });
 
-test("原生兴趣要有层次：能聊的爱好 + 小细节癣好，俗雅都收", () => {
+test("原生兴趣要分两层：母题负责出话题、癣好只当底色", () => {
   const spec = bornHobbySpec({ partnerName: "小花", personalityText: "注意方式：看一眼" });
-  assert.match(spec.systemPrompt, /至少一条是能撑起一场聊天的爱好/);
-  assert.match(spec.systemPrompt, /至少一条是小细节癣好/);
+  assert.match(spec.systemPrompt, /【母题】3 条/);
+  assert.match(spec.systemPrompt, /【癣好】1 到 2 条/);
+  assert.match(spec.systemPrompt, /能接话、能反驳、能拿自己的经验来搭一句/);
+  assert.match(spec.systemPrompt, /别人只能点头说「哦」，聊不下去，不算母题/);
   assert.match(spec.systemPrompt, /别只写「留意、观察、辨认」这类动作/);
   assert.match(spec.systemPrompt, /俗的和雅的都算数/);
   assert.match(spec.systemPrompt, /只爱听八九十年代某一路的歌/);
+  assert.match(spec.userText, /3 条母题和 1 到 2 条癖好/);
   assert.doesNotMatch(spec.systemPrompt, /不要写宏大领域/, "反例不该再是领域名，那会把具体的领域爱好一起误伤");
 });
 
-test("抽样两档各出半，不再清一色微物", () => {
+test("带层的原生兴趣行能读出母题和癣好，旧格式也认", () => {
+  const rows = parseNativeHobbyReply([
+    "母题|火锅流派|几种汤底与蘸料之争|认死牛油|出锅前先尝一口|不吃香菜|小时候跟着大人涮锅",
+    "癣好|楼道里的脚步声|听熟了能分轻重|会停下听两秒|走得太急就听不出|觉得有意思",
+  ].join("\n"));
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].layer, "motif");
+  assert.equal(rows[1].layer, "quirk");
+  assert.equal(rows[0].object, "几种汤底与蘸料之争");
+  const legacy = parseNativeHobbyReply("纸袋封口|纸袋的封口方式|喜欢歪一点但不能散|看到就比较两下|贴得太正像流水线|会注意使用痕迹");
+  assert.equal(legacy[0].layer, null, "旧格式没有层，交给兜底判");
+});
+
+test("补母题只收母题，癣好不许混进来", () => {
+  const rows = [
+    { name: "火锅流派", layer: "motif", object: "几种汤底与蘸料之争", preference: "认死牛油", ritual: "先尝一口", friction: "不吃香菜" },
+    { name: "楼道脚步", layer: "quirk", object: "听熟了能分轻重", preference: "会停两秒", ritual: "数数", friction: "不走神就听不出" },
+  ];
+  assert.equal(validateNativeHobbies(rows, { layer: "motif" }).length, 1);
+  assert.equal(validateNativeHobbies(rows, { layer: "quirk" }).length, 1);
+  assert.equal(validateNativeHobbies(rows).length, 2, "不传层就按正常构成收：母题最多 3、癣好最多 2");
+  const spec = motifHobbySpec({
+    partnerName: "小花",
+    personalityText: "注意方式：看一眼",
+    existing: [{ name: "楼道里不同的脚步声", origin: "born" }],
+  });
+  assert.match(spec.systemPrompt, /能接话、能反驳、能拿自己的经验来搭一句/);
+  assert.match(spec.userText, /楼道里不同的脚步声/);
+  assert.match(spec.userText, /补 3 条母题/);
+});
+
+test("抽样偏向母题档，不再清一色微物", () => {
   const picks = sampleNativeAtoms(() => 0.5, 6);
   assert.equal(picks.length, 6);
   assert.equal(new Set(picks).size, 6);
-  assert.equal(NATIVE_DETAIL_ATOMS.filter((atom) => picks.includes(atom)).length, 3);
-  assert.equal(NATIVE_PASTIME_ATOMS.filter((atom) => picks.includes(atom)).length, 3);
+  assert.equal(NATIVE_DETAIL_ATOMS.filter((atom) => picks.includes(atom)).length, 2);
+  assert.equal(NATIVE_PASTIME_ATOMS.filter((atom) => picks.includes(atom)).length, 4);
 });
 
 test("两档池子各管各的，不重叠", () => {
@@ -192,14 +227,15 @@ test("关系够了才可能长，而且两次之间要隔几天", () => {
   );
 });
 
-test("后来那份有额度上限，长满了就不再长", () => {
-  const full = [
-    { name: "生来那条", origin: "born" },
-    ...Array.from({ length: MAX_GROWN_HOBBIES }, (_, i) => ({
-      name: `后来的${i}`,
-      origin: "grown",
-      at: `2026-08-0${i + 1}T10:00:00`,
-    })),
-  ];
+test("后来那份有额度上限：手上满了就不再长", () => {
+  const full = Array.from({ length: MAX_HOBBIES }, (_, i) => ({
+    name: `后来的${i}`,
+    origin: "grown",
+    layer: "quirk",
+    at: "2026-08-01T10:00:00",
+  }));
   assert.equal(canGrow({ relationship: relationshipAtStage1(), hobbies: full, today: "2026-09-12" }), false);
+
+  const roomy = [{ name: "生来那条", origin: "born", layer: "motif", at: "2026-08-01T10:00:00" }];
+  assert.equal(canGrow({ relationship: relationshipAtStage1(), hobbies: roomy, today: "2026-09-12" }), true);
 });

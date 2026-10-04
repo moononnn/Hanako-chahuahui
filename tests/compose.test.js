@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { cleanVoice, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNoReply, looksLikeAdTail, nightSpec, proactiveSpec, readFollowupStage } from "../lib/compose.js";
+import { cleanVoice, hasOpenHook, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNoReply, looksLikeAdTail, nightSpec, proactiveSpec, readFollowupStage } from "../lib/compose.js";
 
 test("渠道塞在末尾的广告尾巴剥掉，正常聊天里的加号不动", () => {
   // 实机撞到的那条：`+天天中彩票` 是外挂上去的
@@ -331,6 +331,33 @@ test("看过很久了就放下这事，不再提她没回", () => {  const spec 
   assert.match(unknown.userText, /可以放下了/);
 });
 
+test("她翻回来的题要优先接，不能只当背景参考", () => {
+  assert.equal(hasOpenHook("四川那边是不是看不起鸳鸯锅？"), true);
+  assert.equal(hasOpenHook("今天天气咋样"), true);
+  assert.equal(hasOpenHook("我困了"), false, "顺口话不该当成待接的题");
+
+  const base = {
+    partnerName: "小花",
+    userName: "阿舟",
+    hobby: { id: "h1", name: "火锅流派" },
+    seed: { id: "s1", motifId: "h1", motifName: "火锅流派", kind: "exchange", hook: "蘸料台先舀什么", angle: "我永远是蒜泥打底" },
+    currentTimeText: "2026年10月4日，晚上 8 点",
+  };
+  const asked = proactiveSpec({
+    ...base,
+    sceneEcho: { userText: "四川那边是不是看不起鸳鸯锅？", assistantText: "鸳鸯锅本质上就是让一桌人都能留下来嘛" },
+  });
+  assert.match(asked.userText, /她上一轮问了你一件具体的事/);
+  assert.match(asked.userText, /优先于你手上那条面/);
+
+  const chat = proactiveSpec({
+    ...base,
+    sceneEcho: { userText: "我今天把那个按钮改完了", assistantText: "厉害呀" },
+  });
+  assert.match(chat.userText, /不代表这次必须承接/);
+  assert.doesNotMatch(chat.userText, /优先于你手上那条面/);
+});
+
 test("有新探索发现时才从长期兴趣生成内容话题，静态兴趣本身不会被直接复述", () => {
   const hobby = {
     id: "paper-bag",
@@ -343,7 +370,21 @@ test("有新探索发现时才从长期兴趣生成内容话题，静态兴趣�
   };
   const empty = proactiveSpec({ partnerName: "小花", userName: "阿舟", hobby });
   assert.doesNotMatch(empty.userText, /纸袋封口/);
-  assert.match(empty.userText, /没有新探索发现/);
+  assert.match(empty.userText, /没有可用的种子或新发现/);
+
+  // 主力那条路：从母题长出来的种子，要连她自己站得进去的那一面一起递过去
+  const withSeed = proactiveSpec({
+    partnerName: "小花",
+    userName: "阿舟",
+    hobby: { ...hobby, layer: "motif" },
+    seed: { id: "seed-1", motifId: hobby.id, motifName: "火锅流派", kind: "stand", hook: "清油锅和牛油锅到底差在哪", angle: "我认死牛油，但说不过清油派" },
+    currentTimeText: "2026年10月4日，傍晚 6 点 12 分",
+  });
+  assert.match(withSeed.userText, /这一面：清油锅和牛油锅到底差在哪/);
+  assert.match(withSeed.userText, /你自己的角度：我认死牛油/);
+  assert.match(withSeed.userText, /立场摆出来/);
+  assert.doesNotMatch(withSeed.userText, /没有可用的种子或新发现/);
+  assert.match(withSeed.systemPrompt, /能反驳你、能说自己的经验/);
 
   const spec = proactiveSpec({
     partnerName: "小花",

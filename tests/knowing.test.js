@@ -23,6 +23,8 @@ import {
   MAX_BORN_HOBBIES,
   MAX_GROWN_HOBBIES,
   MAX_HOBBIES,
+  MAX_MOTIFS,
+  MAX_QUIRKS,
   MAX_TAGS_PER_LAYER,
   PERSONALITY_PRESETS,
   TAG_CONFLICTS,
@@ -35,6 +37,8 @@ import {
   canAddTag,
   findPersonalityPreset,
   hasPersonality,
+  motifsOf,
+  needsMotifs,
   layerTagProblem,
   normalizeHobbies,
   normalizeHobby,
@@ -163,18 +167,36 @@ test("手动锁定的 born 不被原生兴趣重塑覆盖", () => {
   assert.equal(next[0].manuallyEdited, true);
 });
 
-test("爱好封顶：生来最多三条，后来最多两条", () => {
+test("爱好分两层：母题封顶、癖好宽松、总数有顶", () => {
+  // 母题卡得紧：出题的源头不能无限长
   let list = [];
-  for (let i = 0; i < 5; i += 1) list = addHobby(list, { name: `爱好${i}`, origin: "born" });
-  assert.equal(list.length, MAX_BORN_HOBBIES);
-  assert.equal(canAddHobby(list, "born"), false);
+  for (let i = 0; i < MAX_MOTIFS + 2; i += 1) {
+    list = addHobby(list, { name: `母题${i}`, origin: "born", layer: "motif" });
+  }
+  assert.equal(list.length, MAX_MOTIFS);
+  assert.equal(canAddHobby(list, "born", "motif"), false);
 
-  for (let i = 0; i < 3; i += 1) {
-    list = addHobby(list, { name: `后来的${i}`, origin: "grown", from: "她提过一嘴" });
+  // 癖好只当底色，不跟母题抢额度
+  for (let i = 0; i < MAX_QUIRKS + 2; i += 1) {
+    list = addHobby(list, { name: `癖好${i}`, origin: "born", layer: "quirk" });
   }
   assert.equal(list.length, MAX_HOBBIES);
-  assert.equal(list.filter((h) => h.origin === "grown").length, MAX_GROWN_HOBBIES);
-  assert.equal(canAddHobby(list, "grown"), false);
+  assert.equal(canAddHobby(list, "born", "quirk"), false);
+
+});
+
+test("老数据没有层字段：一律按癖好放，一条都不丢", () => {
+  const rows = normalizeHobbies([
+    { name: "楼道里不同的脚步声", origin: "born" },
+    { name: "雨后窗台的干燥小角", origin: "born" },
+    { name: "旧物被修过的接缝", origin: "born" },
+    { name: "游戏细节考据", origin: "born" },
+    { name: "涮鱼蘸碟的小搭配", origin: "born" },
+  ]);
+  assert.equal(rows.length, 5, "旧兴趣是人格底色，不该被新上限截掉");
+  assert.equal(rows.every((row) => row.layer === "quirk"), true);
+  assert.equal(motifsOf(rows).length, 0);
+  assert.equal(needsMotifs(rows), true, "母题为 0 时必须能触发补母题");
 });
 
 test("重名和空名字都不算数", () => {
@@ -194,7 +216,7 @@ test("盘上读回的爱好会去重、也会被上限截掉多余的", () => {
     { name: "第四样", origin: "born" },
     { name: "因为她老提螺蛳粉", origin: "grown", from: "她总在半夜说饿" },
   ]);
-  assert.equal(rows.length, MAX_BORN_HOBBIES + 1);
+  assert.equal(rows.length, 5);
   assert.equal(rows.at(-1).origin, "grown");
   assert.equal(rows.at(-1).from, "她总在半夜说饿");
 });
