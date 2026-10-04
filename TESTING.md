@@ -1,5 +1,14 @@
 # TESTING · 茶话会
 
+本轮（v0.7.475，发布汇总）：2026-10-04 全量 **1151/1151** 通过（70 个测试文件）。距上次记录（v0.7.470，1137/1137）新增 14 条，加上中间几轮的累计构成 1151。发布前完整预检由发布小工坊跑过一次：版本对账、语法检查、1151 条全量、剥 8 块内测、82 项机器验包、发布说明分层对账，全部通过。命令：`$tests = Get-ChildItem tests -Filter '*.test.js' -File | ForEach-Object FullName; node --test @tests`（`node --test tests/` 在本机 Node 上会把目录当单个用例，必须显式列文件）。
+
+本轮新增的两个模块的专项覆盖：
+· `tests/topic-seeds.test.js`（9 条）：五种种子类型的归一（中文标签与内部 id 互认）、库存低于 12 条才补、30 天未用清理、母题不足时补母题、频率仍归用户档位管这层不碰。
+· `tests/co-create.test.js`（26 条）+ `tests/co-create-routes.test.js`（6 条）：协商期不落画像、点「成型」才写 palette 并过 normalizePalette 收口、形容词作为追问起点不原样抄进画像、翻译当着她的面做完、会话续接与过期失效、`/co-create/:agentId` 系列路由的读写与只改自己的草稿。
+其余本轮触及模块的专项条数：vision 11、voice 43、prompt 35、model 37、knowing 27、growth 20、compose 31、ui 118、store 61、poke 9。
+
+口径边界：本轮验证的是提示词组装、账本迁移、路由接线与预算计算，**不保证每轮模型口吻**。朗读的听觉自然度与逐词点亮仍需重载后实听验收；新结构（种子账本、放肆纪律档位、co-create 会话）对老数据目录的回填效果需实机验证。母题/癖好分家对存量数据只补母题、不改旧数据，这一点有代码依据（`lib/knowing.js` 旧数据 `layer` 兜底为 `quirk`）。未改动 Hana 全局设置与伙伴档案。
+
 本轮（v0.7.470，朗读字幕与停顿真正接通）：2026-10-04 基线 **1134/1134**，新增 3 条 `tests/voice.test.js` 回归，全量 **1137/1137** 通过。voice 专项 43/43；voice + ui + load + store + model 合并 263/263。
 
 起因：上轮 v0.7.468 留的「没有真实调用过 MiniMax」这条口径边界被实听撞上——高亮和停顿都没感觉。本轮用本机真实 Key（`custom-musfatex-ihmpj`，`speech-2.8-hd`）跑通实测，暴露两处真错：① 官方字幕时间戳字段是 `time_begin` / `time_end`，逐词明细在 `timestamped_words`，旧代码只认 `begin_time` / `end_time`，整份字幕解析为零条；② 字幕文件在阿里云 OSS（实测 `minimax-algeng-chat-tts.oss-cn-wulanchabu.aliyuncs.com`），不在 `network.allowedHosts`，`ctx.network.fetch` 按白名单直接拒。两条叠加使「原话跟着点亮」从未拿到词级时间，一直退到分句级平均摊——她那句 43 字原话只切 2 段，看着像没在跟。
