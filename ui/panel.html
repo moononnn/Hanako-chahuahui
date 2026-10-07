@@ -87,6 +87,7 @@
         <div class="empty" id="empty-tip">左边点一位伙伴，就能开始聊了<span class="empty-hint">还没有伙伴？点右上角齿轮，去『伙伴管理』建一个茶话会角色</span></div>
       </div>
       <div class="composer">
+        <div class="todo-proposal-layer" id="todo-proposals" hidden></div>
         <div class="emoji-drawer" id="emoji-drawer" hidden>
           <div class="emoji-tabs" id="emoji-tabs" role="tablist" aria-label="表情选择"></div>
           <div class="sticker-new-group" id="sticker-new-group" hidden>
@@ -324,7 +325,26 @@
     let partnersLoadSeq = 0;
     /** 已经画过的消息 id，用来增量补新消息（戳一下之后要等ta回应） */
     let seenIds = new Set();
+    /**
+     * 正在发送、还没拿到回执的消息编号（后端 clientMessageId）。
+     * 屏幕上的占位气泡就是这条；在这段时间里它已经「在场」了，
+     * 轮询撞见同编号的真消息必须让开，不然一条消息会画成两个一模一样的气泡。
+     */
+    const pendingClientIds = new Set();
     const voiceStates = new Map();
+    /** 消息 id → 她把「转文字」点开了没有。整段重画时按这个摆回去，别替她合上。 */
+    const transcriptOpen = new Map();
+    /**
+     * 判断「这条语音要不要整段重画」只看哪几个字段。
+     *
+     * playedAt 不算：点播放时那个「还没播放过」的小圆点本地就收掉了，
+     * 后端把 playedAt 一改，轮询就当成状态变了整段重画——正在播的语音
+     * 和她点开的转文字都被掀翻（2026-10-05 实测）。要等的是 status 从
+     * pending 变 ready、时长/格式变，这些才真得重画。
+     */
+    function voiceStateKey(message) {
+      return `${message?.voice?.status || ""}:${message?.voice?.format || ""}:${message?.voice?.durationMs || ""}`;
+    }
     /** 聊天窗里要不要给两边挂头像（设置里开的，默认关，跟以前一样） */
     let showMessageAvatars = false;
     /** 默认关闭：打开后才给伙伴回复显示修正入口，戳一戳只提供删除。 */
@@ -1548,10 +1568,23 @@
       return row;
     }
 
+    /**
+     * 登记「这条消息下面的未读小字」。
+     * 同一个 id 只留一个节点：换人登记前先把上一个摘掉，
+     * 否则屏幕上会同时挂着两个「未读」，其中一个从此没人管，永远不消。
+     */
+    function registerTick(id, node) {
+      if (!id || !node) return;
+      const previous = tickNodes.get(id);
+      if (previous && previous !== node) previous.remove();
+      tickNodes.set(id, node);
+    }
+
     function paintTick(node, read) {
       if (!node) return;
       if (read) {
         node.remove();
+        for (const [id, bound] of tickNodes) if (bound === node) tickNodes.delete(id);
         return;
       }
       node.textContent = "未读";
@@ -1869,7 +1902,12 @@
         await reloadCurrentThread(agentId, viewSeq);
         await loadPartners();
         if (current === agentId && viewSeq === threadViewSeq) setStatus("消息撤回了");
-      } catch (error) { if (current === agentId && viewSeq === threadViewSeq) setStatus(error.message || "这条消息现在不能撤回"); }
+      } catch (error) {
+        // 撤不掉也要把当前线程拉回来：屏幕上可能正摆着没对齐的气泡（重复的、已读状态错位的），
+        // 让她对着一个旧画面猜为什么撤不动。刷新一遍，她看到的就是线上真实的样子。
+        await reloadCurrentThread(agentId, viewSeq);
+        if (current === agentId && viewSeq === threadViewSeq) setStatus(error.message || "这条消息现在不能撤回");
+      }
     }
     async function regenerateMessage(agentId, messageId, viewSeq = threadViewSeq) {
       closeMessageActions();
@@ -2152,6 +2190,7 @@
 
     function renderVoiceMessage(m, opts = {}) {
       const rendered = bubble("assistant", "", null, m.at);
+      rendered.row.dataset.voiceId = m.id;
       const box = rendered.bubble;
       box.classList.add("voice-bubble");
 
@@ -2209,11 +2248,15 @@
       }
       transcriptLine.appendChild(transcriptText);
       rendered.col.appendChild(transcriptLine);
-      let autoOpened = false;
+      // 上次重画前她是开着的，就照旧摆开，别一声不响收掉。
+      if (transcriptOpen.get(m.id)) {
+        transcriptText.hidden = false;
+        transcript.textContent = "收起文字";
+      }
       transcript.addEventListener("click", () => {
         transcriptText.hidden = !transcriptText.hidden;
         transcript.textContent = transcriptText.hidden ? "转文字" : "收起文字";
-        autoOpened = false;
+        transcriptOpen.set(m.id, !transcriptText.hidden);
       });
 
       if (m.voice?.status === "ready") {
@@ -2234,7 +2277,12 @@
         audio.addEventListener("loadedmetadata", () => {
           duration.textContent = formatVoiceDuration(audio.duration * 1000);
         });
-        if (!m.voice?.durationMs) void loadAudio().catch(() => {});
+        // 音频文件早就在本机落好了，只是要走一次 bridge 才拿得到。
+        // 所以渲染时就顺手热一遍，等她真去点的那一下已经是就绪状态；
+        // 否则第一次点要干等这一整趟（2026-10-06：等好久才开始读）。
+        window.requestIdleCallback
+          ? window.requestIdleCallback(() => { void loadAudio().catch(() => {}); }, { timeout: 2000 })
+          : setTimeout(() => { void loadAudio().catch(() => {}); }, 400);
         const spans = usableMarks.length ? [...transcriptText.querySelectorAll(".voice-mark")] : [];
         let activeMark = -1;
         let markFrame = 0;
@@ -2260,20 +2308,18 @@
             void hana.api.fetch(`voice/${encodeURIComponent(current)}/${encodeURIComponent(m.id)}/played`, { method: "POST" }).catch(() => {});
           }
           if (!audio.paused) { audio.pause(); return; }
-          if (!audio.paused) { audio.pause(); return; }
+          // 预取还没赶上，就当场告诉她在取，别让按钮看着像死了。
+          if (!audio.src) box.classList.add("is-loading");
           try {
             if (!audio.src) await loadAudio();
-            // 第一次播放时自动把原话摆出来，后面的同步才有东西可点亮。
-            if (transcriptText.hidden && usableMarks.length && !autoOpened) {
-              transcriptText.hidden = false;
-              transcript.textContent = "收起文字";
-              autoOpened = true;
-            }
+            // 原话只由她自己点开（2026-10-05：播放不再替她展开）。
+            // 收着的时候点亮照样在跑，她什么时候点开，看到的都是当前那句。
             box.classList.add("is-playing");
             icon.textContent = "Ⅱ";
             if (usableMarks.length) { paintMark(-1); syncMark(); }
             await audio.play();
-          } catch { setStatus("这条语音暂时播不出来"); }
+            box.classList.remove("is-loading");
+          } catch { box.classList.remove("is-loading"); setStatus("这条语音暂时播不出来"); }
         });
         audio.addEventListener("ended", () => { box.classList.remove("is-playing"); icon.textContent = "▶"; stopMark(); paintMark(-1); });
         audio.addEventListener("pause", () => { stopMark(); if (audio.ended || audio.currentTime === 0) { box.classList.remove("is-playing"); icon.textContent = "▶"; } });
@@ -2340,7 +2386,8 @@
         }
         // 只把真正需要注意的未读摆出来；已读不占聊天流的位置。
         const read = Boolean(opts.read);
-        if (!read) tickNodes.set(m.id, tick(col));
+        if (!read) registerTick(m.id, tick(col));
+        if (row) row.dataset.messageId = m.id;
         if (col) {
           userCols.set(m.id, col);
           renderPartnerFeed(col, m);
@@ -2349,12 +2396,12 @@
         if (m.notice?.text) row.insertAdjacentElement("afterend", noticeBubble(m.notice.text));
       } else {
         if (m.voice && !Array.isArray(opts.assistantPieces)) {
-          voiceStates.set(m.id, `${m.voice.status || ""}:${m.voice.format || ""}:${m.voice.durationMs || ""}:${m.voice.playedAt || ""}`);
+          voiceStates.set(m.id, voiceStateKey(m));
         }
         const voice = m.voice?.status === "ready" || m.voice?.status === "pending";
         if (voice && !Array.isArray(opts.assistantPieces)) {
           renderVoiceMessage(m, opts);
-          voiceStates.set(m.id, `${m.voice.status}:${m.voice.format || ""}:${m.voice.durationMs || ""}:${m.voice.playedAt || ""}`);
+          voiceStates.set(m.id, voiceStateKey(m));
           return true;
         }
         const rawList = Array.isArray(opts.assistantPieces)
@@ -2382,6 +2429,14 @@
       liveDots = null;
     }
 
+    /** 整段清空前，把她点开的转文字记下来，重画后照原样摆回去。 */
+    function rememberTranscriptOpen() {
+      for (const row of el.stream.querySelectorAll("[data-voice-id]")) {
+        const panel = row.querySelector(".voice-transcript");
+        if (panel) transcriptOpen.set(row.dataset.voiceId, !panel.hidden);
+      }
+    }
+
     /** 整段重画（改了外观开关之后用）。 */
     function renderAll(list) {
       const previousAutoScroll = autoScrollAllowed;
@@ -2389,8 +2444,11 @@
       renderingAll = true;
       try {
         invalidateRendering();
+        rememberTranscriptOpen();
         el.stream.innerHTML = "";
         seenIds = new Set();
+        // DOM 全清了，登记也跟着清；旧节点已经不在文档里，留着只会挡住下一次登记。
+        tickNodes.clear();
         voiceStates.clear();
         partnerFeedNodes.clear();
         userCols.clear();
@@ -2444,8 +2502,7 @@
       autoScrollAllowed = stickToBottom;
       const voiceChanged = currentMessages.some((message) => {
         if (!message?.id || !message.voice) return false;
-        const key = `${message.voice.status || ""}:${message.voice.format || ""}:${message.voice.durationMs || ""}:${message.voice.playedAt || ""}`;
-        return seenIds.has(message.id) && voiceStates.get(message.id) !== key;
+        return seenIds.has(message.id) && voiceStates.get(message.id) !== voiceStateKey(message);
       });
       if (voiceChanged) {
         renderAll(currentMessages);
@@ -2461,6 +2518,9 @@
         if (current !== agentId || viewSeq !== threadViewSeq || generation !== renderGeneration) return restoreScroll(added);
         // 正在「演」的那一轮由 playLiveTurn 一条条摆出来，轮询别抢着把整条先画上
         if (m?.role === "assistant" && m.repliedTo && liveSkipRepliedTo.has(m.repliedTo)) continue;
+        // 回执还没回来的那条，屏幕上已经有占位气泡了（带同一个 clientMessageId）。
+        // 这里再画一遍就是同一条消息出现两次——当初那条一模一样的就是这么来的。
+        if (m?.clientMessageId && pendingClientIds.has(m.clientMessageId)) continue;
         if (m?.role === "assistant" && Array.isArray(m.bubbles) && m.bubbles.length > 1 && !seenIds.has(m.id)) {
           for (let index = 0; index < m.bubbles.length; index += 1) {
             if (current !== agentId || viewSeq !== threadViewSeq || generation !== renderGeneration) return restoreScroll(added);
@@ -2724,6 +2784,7 @@
       currentMessages = [];
       seenIds = new Set();
       voiceStates.clear();
+      transcriptOpen.clear();
       el.title.textContent = "选一位伙伴";
       paintStateBadge(el.chatStateBadge, null);
       paintStatePin(el.chatAvatarStatePin, null);
@@ -2849,6 +2910,113 @@
       api("POST", `thread/${encodeURIComponent(agentId)}/read`, { throughId: last.id }).catch(() => {});
     }
 
+    // ── 待办确认 ──
+    // 她说「我做完了」，这里只负责问她要不要真的记下。账本不动，只有点了「就打上完成」才动。
+    // 硬规矩：没拿到后端的成功回包，就不许把这条收起来——宁可让她再点一次。
+
+    let todoProposals = [];
+
+    const escTodo = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]
+    ));
+
+    function renderTodoProposals() {
+      const box = document.getElementById("todo-proposals");
+      if (!box) return;
+      // 提议是 ta 当面问她的，所以只在 ta 那个窗里冒头；切到别人那儿就不该看见。
+      const mine = current ? todoProposals.filter((row) => !row.agentId || row.agentId === current) : [];
+      box.hidden = mine.length === 0;
+      box.textContent = "";
+      for (const row of mine) box.appendChild(todoProposalCard(row));
+    }
+
+    function todoProposalCard(row) {
+      const el = document.createElement("div");
+      el.className = "todo-proposal";
+      el.dataset.key = row.key;
+      const when = row.at ? `${row.at} · ` : "";
+      el.innerHTML = `
+        <div class="todo-proposal-body">
+          <div class="todo-proposal-label">刚说的那件，要记上吗</div>
+          <div class="todo-proposal-title">${escTodo(when + row.title)}</div>
+        </div>
+        <div class="todo-proposal-actions">
+          <button type="button" class="todo-proposal-btn primary" data-act="confirm">就打上完成</button>
+          <button type="button" class="todo-proposal-btn ghost" data-act="dismiss">先不用</button>
+        </div>`;
+      el.querySelector('[data-act="confirm"]').addEventListener("click", () => confirmTodoProposal(row, el));
+      el.querySelector('[data-act="dismiss"]').addEventListener("click", () => dismissTodoProposal(row, el));
+      return el;
+    }
+
+    async function refreshTodoProposals() {
+      try {
+        const res = await api("GET", "todos/proposals");
+        todoProposals = Array.isArray(res?.items) ? res.items : [];
+      } catch {
+        // 读不到就别动现有的：宁可这轮不更新，也不能把还挂着的窗误收掉。
+        return;
+      }
+      renderTodoProposals();
+    }
+
+    async function confirmTodoProposal(row, el) {
+      el.classList.add("is-busy");
+      el.innerHTML = `<div class="todo-proposal-body"><div class="todo-proposal-label">正在记上…</div><div class="todo-proposal-title">${escTodo(row.title)}</div></div>`;
+      let res = null;
+      let error = null;
+      try {
+        res = await api("POST", `todos/proposals/${encodeURIComponent(row.key)}/confirm`);
+      } catch (caught) {
+        // api() 把 ok:false 也当报错抛，所以失败走这里，不走下面的 res 分支。
+        res = null;
+        error = caught;
+      }
+      if (res?.ok) {
+        el.classList.remove("is-busy");
+        el.classList.add("is-done");
+        el.innerHTML = `<div class="todo-proposal-body"><div class="todo-proposal-label">已记下 ✓</div><div class="todo-proposal-title">${escTodo(row.title)}</div></div>`;
+        todoProposals = todoProposals.filter((item) => item.key !== row.key);
+        setTimeout(() => el.remove(), 1600);
+        return;
+      }
+      // 没划掉就不能收窗：原样留着，错误挂在上面，按钮还能再点。
+      el.classList.remove("is-busy");
+      const why = error?.message || "这次没记上，窗还给你留着，再点一次试试";
+      // 唯一一种可以收走的情况：这条提议确实已经没了（过了当天、或你已经处理过）。
+      // 这时反复点只会一直失败，留个死按钮在那儿没用。
+      if (/已经不在了|刚处理过/.test(why)) {
+        todoProposals = todoProposals.filter((item) => item.key !== row.key);
+        el.remove();
+        return;
+      }
+      el.classList.add("is-error");
+      el.innerHTML = `
+        <div class="todo-proposal-body">
+          <div class="todo-proposal-label todo-proposal-warn">${escTodo(why)}</div>
+          <div class="todo-proposal-title">${escTodo(row.title)}</div>
+        </div>
+        <div class="todo-proposal-actions">
+          <button type="button" class="todo-proposal-btn primary" data-act="retry">再试一次</button>
+          <button type="button" class="todo-proposal-btn ghost" data-act="dismiss">先不用</button>
+        </div>`;
+      el.querySelector('[data-act="retry"]').addEventListener("click", () => confirmTodoProposal(row, el));
+      el.querySelector('[data-act="dismiss"]').addEventListener("click", () => dismissTodoProposal(row, el));
+    }
+
+    async function dismissTodoProposal(row, el) {
+      el.classList.add("is-busy");
+      try {
+        await api("POST", `todos/proposals/${encodeURIComponent(row.key)}/dismiss`);
+      } catch {
+        // 收不掉就让它留在原样，别假装已经处理过。
+        el.classList.remove("is-busy");
+        return;
+      }
+      todoProposals = todoProposals.filter((item) => item.key !== row.key);
+      el.remove();
+    }
+
     /** 隔一阵看一眼有没有人来消息（未读徒标就靠它）。 */
     let pollTimer = null;
     function startPolling() {
@@ -2859,6 +3027,7 @@
           await loadPartners();
           if (current) await appendNew(current);
           reportRead();
+          await refreshTodoProposals();
         } catch { /* 轮询失败不吵她 */ }
       }, 5000);
     }
@@ -3347,6 +3516,7 @@
       clearChatBackground(); // 新的人进来，先把上一位的房间收走
       seenIds = new Set();
       voiceStates.clear();
+      transcriptOpen.clear();
       try {
         const data = await api("GET", `thread/${agentId}`);
         if (openSeq !== openPartnerSeq || current !== agentId || viewSeq !== threadViewSeq) return;
@@ -3561,6 +3731,12 @@
       if (pendingImage === image) clearPendingImage();
       if (pendingSticker === sticker) clearPendingSticker();
       const { row, col } = renderedUser;
+      // 任何消息都要一个编号，不只图片：这是占位气泡和后端那条真消息之间的握手凭据。
+      // 纯文字以前不带编号，所以回执慢过一轮轮询时，轮询会把同一条又画一遍，屏幕上就成了两条一模一样的。
+      const clientMessageId = image?.clientMessageId
+        || `msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+      pendingClientIds.add(clientMessageId);
+      for (const optimisticRow of optimisticRows) optimisticRow.dataset.pendingClientId = clientMessageId;
       // 先摆上「未读」：她发出去那一刻就是未读，读到后收起（后端落盘的那一笔）
       const tickEl = tick(col, "未读");
       setStatus("");
@@ -3570,9 +3746,9 @@
         const started = await api("POST", "turns", {
           agentId,
           text,
+          clientMessageId,
           ...(image ? {
             image: { name: image.name, mimeType: image.mimeType, data: image.data },
-            clientMessageId: image.clientMessageId,
           } : {}),
           ...(sticker ? { stickerId: sticker.id } : {}),
           ...(quote ? { quote } : {}),
@@ -3592,7 +3768,12 @@
         if (current !== agentId || turnSeq !== threadViewSeq) return;
         if (started.messageId) {
           seenIds.add(started.messageId);
-          tickNodes.set(started.messageId, tickEl);
+          registerTick(started.messageId, tickEl);
+          // 占位气泡升级成正式身份：从这一刻起它就是这条消息，轮询不再另画一份。
+          for (const optimisticRow of optimisticRows) {
+            delete optimisticRow.dataset.pendingClientId;
+            optimisticRow.dataset.messageId = started.messageId;
+          }
           bindMessageActions(row, { id: started.messageId, role: "user", text, kind: sticker ? "sticker" : undefined });
         }
         // 后端说模型这会儿用不了：消息收下了，但这一轮没人接得上。
@@ -3624,6 +3805,8 @@
           setStatus(`消息已经送达，但回复状态暂时取不到：${error.message}`);
         }
       } finally {
+        // 无论成没成，这条都不再是「还在路上」：之后轮询撞见它就按正式消息画。
+        pendingClientIds.delete(clientMessageId);
         // 旧请求无论在哪个窗口结束，都要释放提交锁；但不能碰新窗口的按钮状态。
         busy = false;
         if (current !== agentId || turnSeq !== threadViewSeq) return;

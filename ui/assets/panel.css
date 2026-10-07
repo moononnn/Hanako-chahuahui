@@ -675,6 +675,11 @@ html, body {
 .voice-play:active { transform: scale(.94); }
 .voice-play:disabled { cursor: wait; opacity: .62; }
 .voice-play-icon { margin-left: 1px; font-size: 11px; font-weight: 700; line-height: 1; }
+/* 音频还在取：给个呼吸的等待，别让按钮看着像卡死了。 */
+.voice-bubble.is-loading { cursor: wait; }
+.voice-bubble.is-loading .voice-play { cursor: wait; }
+.voice-bubble.is-loading .voice-play-icon { animation: voice-loading-pulse 1s ease-in-out infinite; }
+@keyframes voice-loading-pulse { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
 .voice-wave {
   flex: 1 1 auto;
   color: var(--voice-bg, var(--primary-ink));
@@ -1829,4 +1834,47 @@ body.ob-open { overflow: hidden; }
   /* 窄窗仍保持同一套单行几何，不再用 34px 行高制造另一种偏移。 */
   textarea { padding: 8px; line-height: 24px; }
   textarea.is-multiline { padding: 6px 8px; line-height: 1.5; }
+}
+
+/* ── 待办确认小窗 ──
+   浮在输入框上方，等她一句话的工夫就收。账本动没动全看这两个按钮，
+   所以它不能被点歪：整块用 pointer-events 关掉空档，按钮区自己接回来。 */
+.todo-proposal-layer {
+  position: absolute; left: 14px; right: 14px; bottom: calc(100% + 8px);
+  display: flex; flex-direction: column; gap: 8px; z-index: 6; pointer-events: none;
+}
+.todo-proposal-layer[hidden] { display: none; }
+.todo-proposal-layer > * { pointer-events: auto; }
+.todo-proposal {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--paper); box-shadow: var(--sh-2);
+  animation: todo-proposal-in .16s ease-out;
+}
+@keyframes todo-proposal-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.todo-proposal-body { min-width: 0; flex: 1; }
+.todo-proposal-label { font-size: 11px; color: var(--ink-soft); }
+.todo-proposal-warn { color: #b0603f; }
+.todo-proposal-title { font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.todo-proposal-actions { display: flex; gap: 6px; flex: none; }
+.todo-proposal-btn {
+  padding: 6px 11px; border: 1px solid transparent; border-radius: 999px;
+  font-size: 12px; line-height: 1.5; cursor: pointer; white-space: nowrap;
+  transition: filter .12s ease, background .12s ease;
+}
+.todo-proposal-btn.primary { background: var(--primary); color: #fff; }
+.todo-proposal-btn.primary:hover { filter: brightness(1.04); }
+.todo-proposal-btn.ghost { background: var(--sunken); color: var(--ink-soft); }
+.todo-proposal-btn.ghost:hover { background: var(--line-soft); }
+.todo-proposal-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.todo-proposal.is-busy { opacity: .7; }
+.todo-proposal.is-done { border-color: var(--primary); background: var(--accent-soft); }
+.todo-proposal.is-done .todo-proposal-label { color: var(--primary-ink); }
+@media (prefers-reduced-motion: reduce) {
+  .todo-proposal { animation: none; }
+}
+@media (max-width: 380px) {
+  .todo-proposal-layer { left: 6px; right: 6px; }
+  .todo-proposal { flex-wrap: wrap; }
+  .todo-proposal-actions { width: 100%; justify-content: flex-end; }
 }
