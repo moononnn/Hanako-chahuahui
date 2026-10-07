@@ -149,7 +149,8 @@ test("长种子时把已经铺过的面递过去，挡住重复", () => {
   assert.match(spec.userText, /长期方向：火锅流派/);
   assert.match(spec.userText, /清油和牛油差在哪/);
   assert.match(spec.userText, /当时的想法：我认死牛油/, "连态度一起递过去，才好避开同一个立场换场景重说");
-  assert.match(spec.systemPrompt, /对方有位置站/);
+  assert.match(spec.systemPrompt, /不靠猜前提/);
+  assert.match(spec.systemPrompt, /允许一句轻分享/);
   assert.match(spec.systemPrompt, /不要编造现实里发生过的人、地点或经历/);
   assert.match(spec.systemPrompt, /态度要有区别/);
 });
