@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { cleanVoice, hasOpenHook, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNoReply, looksLikeAdTail, nightSpec, proactiveSpec, readFollowupStage } from "../lib/compose.js";
+import { cleanVoice, farewellSpec, hasOpenHook, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNoReply, LINKUP_DISCIPLINE, looksLikeAdTail, nightSpec, proactiveSpec, readFollowupStage, stirredSpec } from "../lib/compose.js";
 
 test("渠道塞在末尾的广告尾巴剥掉，正常聊天里的加号不动", () => {
   // 实机撞到的那条：`+天天中彩票` 是外挂上去的
@@ -27,6 +27,24 @@ test("渠道塞在末尾的广告尾巴剥掉，正常聊天里的加号不动",
   assert.equal(cleanVoice("今天好累。想早点睡"), "今天好累。想早点睡");
   assert.equal(cleanVoice("行。明天见"), "行。明天见");
   assert.equal(cleanVoice("他说。我们走吧"), "他说。我们走吧");
+});
+
+test("到点待办：由头独立成块，手上别的种子让位，不许当尾巴捎带", () => {
+  const seed = { motifId: "walk", motifName: "走路歇脚", hook: "偏给每一小段都留个能坐的地方", kind: "motif" };
+  const plain = proactiveSpec({ partnerName: "小花", userName: "小林", personaText: "我是小花。", seed });
+  const withTodo = proactiveSpec({
+    partnerName: "小花",
+    userName: "小林",
+    personaText: "我是小花。",
+    seed,
+    todoNudge: "【你现在来找 ta 的原因】\n她今天这几件到了时间还没做：16:00 给薄荷浇水。",
+  });
+  assert.match(plain.userText, /这次你自己惦记着的那一面/, "没有到点的事时，种子照旧是内容来源");
+  assert.doesNotMatch(withTodo.userText, /这次你自己惦记着的那一面/, "有到点的事在，就不再另找话题");
+  assert.match(withTodo.userText, /你现在来找 ta 的原因/);
+  assert.match(withTodo.userText, /专门为上面那件到点的事来的/);
+  assert.match(withTodo.userText, /不要先聊别的再捎带一句/);
+  assert.doesNotMatch(withTodo.userText, /顺口带一句/);
 });
 
 test("主动消息提示词会带入相处理解", () => {
@@ -447,4 +465,53 @@ test("手打的图名是话，不是混进来的外文残片", () => {
   assert.equal(inspectVoice("无语jpg").level, "pass", "漏了个点也不该被当成乱码重试");
   assert.equal(inspectVoice("无语abc").level, "retry", "真外文残片还是要拦");
   assert.equal(cleanVoice("笑死\n装死.jpg"), "笑死\n装死.jpg", "洗的时候别把图名洗掉");
+});
+
+// ── 晨间第一句 / 两边同一个伙伴 / 睡前收尾（2026-10-05）────────────
+
+test("今天第一句可以没由头，招呼不必先端出话题", () => {
+  const plain = proactiveSpec({ partnerName: "小花", userName: "小林", personaText: "我是小花。" });
+  assert.match(plain.userText, /不要临时抽旧兴趣或共同话题凑一条内容消息/, "平时仍不硬凑内容");
+  assert.doesNotMatch(plain.userText, /这是你今天第一次开口/);
+  const first = proactiveSpec({ partnerName: "小花", userName: "小林", personaText: "我是小花。", firstOfDay: true });
+  assert.match(first.userText, /这是你今天第一次开口/);
+  assert.match(first.userText, /打个招呼/);
+  assert.doesNotMatch(first.userText, /不要临时抽旧兴趣或共同话题凑一条内容消息/, "第一句不该又被那道筛子拦住");
+  assert.match(first.systemPrompt, /不许提「我看到」/, "两边同一个人的红线要跟着第一句一起进去");
+});
+
+test("电脑那边的近况得按「我自己刚经历的事」说，不能写成监视播报", () => {
+  const spec = proactiveSpec({
+    partnerName: "小花",
+    userName: "小林",
+    personaText: "我是小花。",
+    workfeedText: "【电脑那边最近发生的事】\n小林：先把窗口修好",
+    firstOfDay: true,
+  });
+  assert.match(spec.userText, /电脑那边（Hana）最近的近况/);
+  assert.match(spec.systemPrompt, /不许提「我看到」/);
+  assert.match(spec.systemPrompt, /那边就是空的/);
+  assert.equal(LINKUP_DISCIPLINE.includes("我看到"), true);
+  const withoutFeed = proactiveSpec({ partnerName: "小花", userName: "小林", personaText: "我是小花。" });
+  assert.doesNotMatch(withoutFeed.systemPrompt, /那边就是空的/, "没有近况就不提这茬");
+});
+
+test("睡前收尾允许没由头，并且分得清她还在忙还是已经收工", () => {
+  const done = farewellSpec({ partnerName: "小花", userName: "小林", personaText: "我是小花。", busy: false, sleepStart: "23:30", currentTimeText: "晚上 11 点 15 分" });
+  assert.match(done.systemPrompt, /去睡了本身就是理由/);
+  assert.match(done.userText, /已经安静下来了/);
+  assert.match(done.userText, /你自己的睡点是 23:30 前后/);
+  assert.match(done.systemPrompt, /我是小花/, "睡前那条也是 ta 本人在说，得带人格");
+  const busy = farewellSpec({ partnerName: "小花", userName: "小林", busy: true, sleepStart: "23:30" });
+  assert.match(busy.userText, /还剩动静|还有动静/);
+  assert.match(busy.systemPrompt, /不是安心去睡的时候/);
+});
+
+test("晚安之后又被薅起来：基调是生气，不是又温柔地陪聊", () => {
+  const spec = stirredSpec({ partnerName: "小花", userName: "小林", personaText: "我是小花。", sleepStart: "23:30", workfeedText: "【电脑那边最近发生的事】\n小林：又开了一个会话" });
+  assert.match(spec.systemPrompt, /不高兴/);
+  assert.match(spec.systemPrompt, /不许说「我看到你又在忙」/);
+  assert.match(spec.systemPrompt, /我是小花/);
+  assert.match(spec.userText, /又被她拉到电脑那头干活/);
+  assert.doesNotMatch(spec.userText, /去睡了本身就是理由/, "这条不是入睡道别");
 });

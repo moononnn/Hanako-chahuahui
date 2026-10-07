@@ -656,6 +656,26 @@ test("语音消息采用播放胶囊，转文字独立成普通气泡", () => {
   assert.doesNotMatch(panel, /main\.append\(play, wave, duration, transcript\)/, "转文字按钮不能继续塞进语音胶囊");
 });
 
+test("播语音时转文字不能被轮询重画收走", () => {
+  // 2026-10-05 实测：点播放 → POST /played → 5 秒轮询见 playedAt 变了 → 整段重画 →
+  // 新 DOM 里转文字默认 hidden，正在播的 Audio 元素也一起被丢掉。
+  // 修法两层：重画判据不含 playedAt；重画时把展开态记下来再摆回去。
+  assert.match(panel, /function voiceStateKey\(message\) \{\s*\n\s*return `\$\{message\?\.voice\?\.status \|\| ""\}:\$\{message\?\.voice\?\.format \|\| ""\}:\$\{message\?\.voice\?\.durationMs \|\| ""\}`;/);
+  assert.doesNotMatch(panel, /voiceStateKey[\s\S]{0,200}playedAt/, "重画判据里不能带 playedAt");
+  assert.match(panel, /const voiceChanged = currentMessages\.some\(\(message\) => \{\s*\n\s*if \(!message\?\.id \|\| !message\.voice\) return false;\s*\n\s*return seenIds\.has\(message\.id\) && voiceStates\.get\(message\.id\) !== voiceStateKey\(message\);/);
+  assert.match(panel, /const transcriptOpen = new Map\(\)/);
+  assert.match(panel, /rendered\.row\.dataset\.voiceId = m\.id;/);
+  assert.match(panel, /function rememberTranscriptOpen\(\)[\s\S]{0,400}el\.stream\.querySelectorAll\("\[data-voice-id\]"\)/);
+  assert.match(panel, /invalidateRendering\(\);\s*\n\s*rememberTranscriptOpen\(\);\s*\n\s*el\.stream\.innerHTML = "";/, "清空 DOM 之前得先把展开态记下来");
+  assert.match(panel, /if \(transcriptOpen\.get\(m\.id\)\) \{\s*\n\s*transcriptText\.hidden = false;\s*\n\s*transcript\.textContent = "收起文字";/);
+  assert.match(panel, /transcriptOpen\.set\(m\.id, !transcriptText\.hidden\);/);
+  // 2026-10-05：展开原话只能她自己点，播放不许替她掀开（点亮在收着时照跑）
+  assert.doesNotMatch(panel, /autoOpened/);
+  assert.doesNotMatch(panel, /play\.addEventListener\("click"[\s\S]{0,900}?transcriptText\.hidden = false/);
+  // 换人 / 清空时这份记录不能跟着串到下一位伙伴身上
+  assert.match(panel, /voiceStates\.clear\(\);\s*\n\s*transcriptOpen\.clear\(\);/);
+});
+
 test("判定发语音时先在后台合成，实时回合直接摆最终语音条", () => {
   assert.match(app, /async function prepareVoice\(/, "语音要有独立的后台准备阶段");
   assert.match(app, /let preparedVoice = await prepareVoice\(agentId, cleanedText/, "普通回复要在落消息前准备语音");
@@ -685,9 +705,17 @@ test("设置页操作按钮和上方控件之间保留呼吸感", () => {
   assert.match(settingsCss, /\.user-name-field \.soft-button \{[^}]*margin-top: 12px;/s);
 });
 
-test("设置页分成通用设置与伙伴管理，并提供移出和放回入口", () => {
-  assert.match(settings, /data-tab="global"[^>]*>通用设置/);
-  assert.match(settings, /data-tab="partners"[^>]*>伙伴管理/);
+test("设置页按类目分栅，并提供移出和放回入口", () => {
+  // 六个分类各自一栅：找设置点一下就到，不用再一路往下滚
+  for (const [tab, label] of [["chat", "聊天显示"], ["voice", "语音"], ["immersion", "沉浸感"], ["model", "模型"], ["proactive", "主动联系"], ["partners", "伙伴"]]) {
+    assert.match(settings, new RegExp(`data-tab="${tab}"[^>]*>${label}<`), `${label} 要有自己的一栅`);
+    assert.match(settings, new RegExp(`id="panel-${tab}"`), `${label} 要有一块面板`);
+  }
+  // 面板跟分类栏一一对应，漏一个就会点不开；除第一栏外都默认收着
+  for (const tab of ["voice", "immersion", "model", "proactive", "partners"]) {
+    assert.match(settings, new RegExp(`id="panel-${tab}"[^>]*hidden`), `${tab} 面板默认要收着`);
+  }
+  assert.doesNotMatch(settings, /id="panel-chat"[^>]*hidden/, "默认落在第一栏");
   // 分类得有 tab 语义，屏幕阅读器才知道当前在哪一栏
   assert.match(settings, /role="tablist"/);
   assert.match(settings, /aria-selected="true"/);
@@ -830,9 +858,22 @@ test("起跑线：自动量那边的痕迹，也能自己定从哪儿算，只�
   assert.match(app, /seedStale\(knowing\.relationSeed, seedLastTry\)/, "该重量的就重量一份（量不出东西也有节流）");
   assert.doesNotMatch(app, /session:list/, "量会话那条路 v2 应用走不通，别写");
   assert.match(app, /note: relationshipNote\(effectiveRelationship\(knowing\), knowing\.relationSeed\)/, "回复那一句也要带上起跑线");
-  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, stickerText, userRhythmText: userRhythm \}\)/, "主动消息只带与当前消息类型相符的兴趣发现，同时带上本人人格");
+  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, firstOfDay, askBudgetSpent: askSpent \}\)/, "主动消息只带与当前消息类型相符的兴趣发现，同时带上本人人格，并带上电脑那边的近况与「今天第一句」的标志");
+  // 锚点门（2026-10-06）：内容型开口先看她那边有没有真凭据，免得又出一条她插不进嘴的自说自话
+  assert.match(app, /const anchor = proactiveAnchor\(\{/, "内容型开口要过锚点门");
+  assert.match(app, /const seed = gate\.exception \|\| !anchor\.ok \? null : candidateSeed/, "没过锚点门的种子不发，留着下次");
+  assert.match(app, /dropUnansweredProactive\(conversationMessages\(store\.getThread\(agentId\)\.messages\)\)/, "画像素材里剔掉她没接住的主动独白");
+  assert.match(app, /isSeedKindVoiceMismatch\(text, shareableSeed\.kind\)/, "求解与好奇写成结论就压着不发");
+  // 到点待办是「这次为什么开口」，不是可以捎带的背景：混进情境块就会被写成尾巴
+  assert.doesNotMatch(app, /if \(todoNudge\) contextText = /, "待办由头不再拼进共享情境块");
+  assert.match(app, /const sendKind = farewellSend && !todoHere/, "到点待办优先于睡前收尾，别被 farewell 占掉");
+  assert.match(app, /const carriedTodo = todoHere && sendKind === "proactive" && !Boolean\(finalGate\.exception\)/, "真把由头带出去的那一轮才算说过");
+  assert.match(app, /if \(todoHere && sent\.carriedTodo\)/, "没带出去不许记账，否则这件事今天不会再来");
   assert.match(app, /async function maybeExploreInterest[\s\S]*?searchTimelyTopic\(fetcher, \{ title: plan\.focus, searchQuery: plan\.searchQuery \}, \{\s*privateTerms: \[USER_NAME, partnerName\],\s*\}\)/, "探索由稳定兴趣生成新角度；已知称呼外发前过滤");
-  assert.match(app, /const candidateSeed = followup\?\.read[\s\S]{0,140}?pickSeed\(seedBook, \{ now, recentMotifIds: recentSeedMotifs\(seedBook\) \}\)/, "主动话题先用手上的种子");
+  assert.match(app, /const candidateSeed = followup\?\.read[\s\S]{0,220}?pickSeed\(seedBook, \{[\s\S]{0,220}?mutedIds: mutedMotifIds\(moodBook\)[\s\S]{0,160}?perMotifCooldown: cooldownByMotif\(moodBook\)/, "主动话题先用手上的种子，她冷掉的方向也一并排除");
+  assert.match(app, /const mooded = recomputeMood\(revived\.book, thread\.messages/, "话题温度每轮从消息流重算（她后来才回话也要算得进去）");
+  assert.match(app, /const motif = pickMotifForSeeds\(motifs, book, \{ mutedIds \}\)/, "冷掉的方向不再长新种子");
+  assert.match(app, /const starved = live\.filter\(/, "还有方向空仓就继续补货，后备库才叫充足");
   assert.match(app, /const candidateDiscovery = followup\?\.read \|\| candidateSeed[\s\S]{0,90}?nextDiscovery\(state\.interestLearning, now\)/, "种子在手时不再另找时效发现");
   assert.match(app, /discoveryForProactiveMessage\(candidateDiscovery, \{ exception: gate\.exception \}\)/, "夜间例外不得绑定或消耗兴趣发现");
   assert.match(app, /const shareableDiscovery = discoveryForProactiveMessage\(discovery, \{ exception \}\)/, "最终发送门变化为夜间例外时，也必须保护待分享发现");
@@ -1062,15 +1103,15 @@ test("自己的话只突出未读，已读收起且状态仍查得到", () => {
     "回一个戳也算接住了",
   );
 
-  assert.match(panel, /if \(!read\) tickNodes\.set\(m\.id, tick\(col\)\)/, "只有未读才摆小字");
+  assert.match(panel, /if \(!read\) registerTick\(m\.id, tick\(col\)\)/, "只有未读才摆小字，且走统一登记（同一个 id 不许挂两个）");
   assert.match(panel, /const tickEl = tick\(col, "未读"\)/, "送出去那一刻先摆未读");
   assert.match(panel, /function paintTick\(node, read\)[\s\S]{0,120}?node\.remove\(\)/, "读到后收掉未读小字");
   assert.match(panelCss, /\.tick \{[\s\S]*?color: var\(--blossom\)/, "未读要用通知色突出");
   assert.doesNotMatch(panelCss, /\.tick\.read/, "已读不再单独占一个绿色状态");
-  assert.match(panel, /tickNodes\.set\(started\.messageId, tickEl\)/, "刚发出去那条要把小字记上");
+  assert.match(panel, /registerTick\(started\.messageId, tickEl\)/, "刚发出去那条要把小字记上");
   assert.match(
     panel,
-    /if \(started\.messageId\) \{\s*\n\s*seenIds\.add\(started\.messageId\);\s*\n\s*tickNodes\.set\(started\.messageId, tickEl\);/,
+    /if \(started\.messageId\) \{\s*\n\s*seenIds\.add\(started\.messageId\);\s*\n\s*registerTick\(started\.messageId, tickEl\);/,
     "刚发出去那条要记一笔（已画 + 小字），不然轮询会再画一遍",
   );
   assert.doesNotMatch(panel, /answeredUserIds|opts\.answered/, "旧的只看「被没被接住」那套要换掉");
@@ -1248,7 +1289,7 @@ test("等回音也过主动硬门并在真实发送后记配额，暂存意图�
   assert.match(app, /const finalGate = autonomousGateNow\(agentId, "proactive"\)[\s\S]{0,1200}?noteSent\(/, "proactive 必须在全局锁内二次过门并记账");
   assert.match(awaitingBody, /withGlobalAutonomousLane[\s\S]{0,700}?autonomousGateNow\(agentId, "awaiting"\)/, "awaiting 必须在全局锁内二次过门");
   assert.match(app, /staged: \[pending\.intent, \.\.\.pending\.rest\]/, "gate 拦住时旧暂存意图要显式写回");
-  assert.match(app, /const candidateSeed = followup\?\.read[\s\S]{0,140}?pickSeed\(seedBook, \{ now, recentMotifIds: recentSeedMotifs\(seedBook\) \}\)/, "临门先端手上的种子，种子也就那一份");
+  assert.match(app, /const candidateSeed = followup\?\.read[\s\S]{0,220}?pickSeed\(seedBook, \{[\s\S]{0,220}?mutedIds: mutedMotifIds\(moodBook\)/, "临门先端手上的种子，种子也就那一份");
   assert.match(app, /const candidateDiscovery = followup\?\.read \|\| candidateSeed[\s\S]{0,90}?nextDiscovery\(state\.interestLearning, now\)/, "临门只剩种子或时效发现二选一");
   assert.match(app, /discoveryForProactiveMessage\(candidateDiscovery, \{ exception: gate\.exception \}\)/, "夜间例外不得消耗兴趣发现");
   assert.match(app, /const shareableDiscovery = discoveryForProactiveMessage\(discovery, \{ exception \}\)/, "发送阶段再次按最终例外状态过滤发现");
@@ -1682,7 +1723,7 @@ test("聊天输入框可把剪贴板图片送进待发送图片链路", () => {
 
 test("图片回包延迟或丢失时用请求编号对账，已落盘图片不再留在待发送区", () => {
   assert.match(panel, /clientMessageId: `img_\$\{Date\.now\(\)\.toString\(36\)\}_/);
-  assert.match(panel, /clientMessageId: image\.clientMessageId/);
+  assert.match(panel, /image\?\.clientMessageId/);
   assert.match(panel, /function reconcilePendingImage\(messages\)/);
   assert.match(panel, /message\.clientMessageId === requestId/);
   assert.match(panel, /reconcilePendingImage\(currentMessages\)/);
@@ -1690,6 +1731,47 @@ test("图片回包延迟或丢失时用请求编号对账，已落盘图片不�
   assert.match(app, /const clientMessageId = String\(body\?\.clientMessageId \?\? ""\)\.trim\(\)/);
   assert.match(app, /existing\) return c\.json\(\{ ok: true, messageId: existing\.id, duplicate: true \}\)/);
   assert.match(app, /\.\.\.\(clientMessageId \? \{ clientMessageId \} : \{\}\)/);
+});
+
+// 回执慢过一轮轮询时，同一条消息曾经被画成两个一模一样的气泡。
+// 修法是给每条消息一个请求编号：占位气泡先占着，轮询撞见同编号必须让开。
+test("回执没回来之前，占位气泡就是那条消息，轮询不许再画一份", () => {
+  assert.match(panel, /const pendingClientIds = new Set\(\);/, "要有「还在路上」的消息编号集合");
+  assert.match(
+    panel,
+    /const clientMessageId = image\?\.clientMessageId\s*\n\s*\|\| `msg_\$\{Date\.now\(\)\.toString\(36\)\}_/,
+    "纯文字也要有编号，不能只有图片才有",
+  );
+  assert.match(panel, /pendingClientIds\.add\(clientMessageId\);/, "画完占位气泡就要登记编号");
+  assert.match(panel, /optimisticRow\.dataset\.pendingClientId = clientMessageId;/, "占位气泡挂上编号，认得出自己是哪条");
+  assert.match(
+    panel,
+    /if \(m\?\.clientMessageId && pendingClientIds\.has\(m\.clientMessageId\)\) continue;/,
+    "轮询撞见还在路上的那条就跳过，不然一条消息画成两个气泡",
+  );
+  assert.match(panel, /pendingClientIds\.delete\(clientMessageId\);/, "回执落地（或失败）就销号，之后按正式消息画");
+  // 拿到回执后占位气泡升级成正式身份，不再是「还在路上」的替身
+  assert.match(panel, /delete optimisticRow\.dataset\.pendingClientId;/);
+  assert.match(panel, /optimisticRow\.dataset\.messageId = started\.messageId;/);
+});
+
+test("同一条消息下面不许同时挂两个「未读」小字", () => {
+  assert.match(panel, /function registerTick\(id, node\)/, "未读小字要统一登记");
+  assert.match(
+    panel,
+    /const previous = tickNodes\.get\(id\);\s*\n\s*if \(previous && previous !== node\) previous\.remove\(\);\s*\n\s*tickNodes\.set\(id, node\);/,
+    "换人登记前先摘掉上一个，否则老那个从此没人管，永远显示未读",
+  );
+  assert.match(panel, /for \(const \[id, bound\] of tickNodes\) if \(bound === node\) tickNodes\.delete\(id\);/, "收掉小字时把登记也清掉，别留脏引用");
+  assert.match(panel, /tickNodes\.clear\(\);/, "整段重画后 DOM 都清了，登记也要跟着清");
+});
+
+test("撤回被拒时也要把线程拉回来，别让她对着一张旧画面猜", () => {
+  const start = panel.indexOf("async function recallMessage(");
+  assert.ok(start > 0, "panel.html 里要有 recallMessage");
+  const block = panel.slice(start, panel.indexOf("\n    }", start) + 6);
+  assert.match(block, /catch \(error\) \{[\s\S]*?await reloadCurrentThread\(agentId, viewSeq\);/, "撤不掉也要刷新一次，让她看到线上真实的样子");
+  assert.match(block, /setStatus\(error\.message \|\| "这条消息现在不能撤回"\)/, "原因还是照实说，不吞掉");
 });
 
 test("待发送图片有缩略图、放大预览和取消入口", () => {
@@ -1865,7 +1947,7 @@ test("拾光记今日情境：装了拾光记才有得开，默认关，没装�
   assert.match(app, /daybookInstalled: await shiguangjiInstalled\(\)/);
   assert.match(app, /async function shiguangjiInstalled\(\)/);
   assert.match(app, /function daybookOn\(\)/);
-  assert.match(app, /const snapshot = daybookOn\(\) \? await readDaybook\(ctx\) : null/, "没开就不读快照");
+  assert.match(app, /if \(daybookOn\(\)\) \{\s*const read = await readDaybookVerbose\(ctx\)/, "没开就不读快照");
   assert.match(app, /contextText = daybookOn\(\) \? buildAmbientContextText/, "主动消息那条路也要听开关");
   assert.match(app, /patch\.daybookEnabled = patch\.daybookEnabled === true/);
   assert.match(settingsCss, /\.switch:disabled/);
@@ -1899,4 +1981,84 @@ test("移出 / 删除：当场选可逆性，彻底删除要再确认一次并�
   assert.match(settings, /closeModal\("remove-modal", false\);\s*openModal\("purge-modal"\)/, "第二层窗接在第一层之后，不能叠着两层");
   // 弹窗操作栏：两个按钮不同音量、不折行，也不被按钮自己的 margin-auto 拆到两头
   assert.match(settingsCss, /\.modal-foot \.primary-button, \.modal-foot \.soft-button, \.modal-foot \.danger-button \{[^}]*flex: none;[^}]*white-space: nowrap;/s);
+});
+
+test("安静时间：关没关一眼看得出来，关掉时时间选择禁用，恢复回原来那一段", () => {
+  // 根因：判定「关没关」曾经拿输入框当前的字面比（点完按钮回来时它还留着旧时间，得出相反结论），
+  // 于是开关没变色、按钮还是原样、00:00 摆在那儿也看不出是"故意关的"。现在只认存下来的那份。
+  assert.match(settings, /const quietOff = Boolean\(quietSaved\.start\) && quietSaved\.start === quietSaved\.end;/,
+    "关没关只看存下来的设置，不能看输入框里现在摆着什么");
+  assert.doesNotMatch(settings, /const quietOff = Boolean\(quietStart\.value\)/,
+    "不许再拿输入框反推开关状态");
+  // 开关本身是标准 switch：亮着=全天都能来，暗着=有安静时间，一眼能读
+  assert.match(settings, /id="quiet-off-button"[^>]*role="switch"[^>]*aria-checked="false"/);
+  assert.match(settings, /quietButton\.classList\.toggle\("on", quietOff\)/);
+  assert.match(settings, /quietButton\.querySelector\("\.switch-label"\)\.textContent = quietOff \? "全天都能来" : "有安静时间"/);
+  // 关掉时：不摆 00:00（看着像填错），时间选择禁用 + 整行变灰，另有一条明说关掉了
+  assert.match(settings, /const back = lastQuietRange \?\? \{ start: "23:00", end: "08:00" \};/);
+  assert.match(settings, /quietStart\.disabled = quietOff;\s*quietEnd\.disabled = quietOff;/);
+  assert.match(settings, /classList\.toggle\("is-off", quietOff\)/);
+  assert.match(settings, /id="quiet-off-flag"[\s\S]*?hidden/);
+  assert.match(settings, /quietFlag\.hidden = !quietOff;/);
+  assert.match(settings, /安静时间关掉之前的那一段：恢复时原样回去/);
+  // 恢复不再硬塞 23:00~08:00，走关之前那一段
+  assert.match(settings, /const back = lastQuietRange \?\? \{ start: "23:00", end: "08:00" \};\s*lastQuietRange = back;/);
+  // 禁用期间拖时间不算修改；开始=结束也不当成一段有效安静时间
+  assert.match(settings, /if \(startEl\.disabled \|\| endEl\.disabled\) return;/);
+  assert.match(settings, /if \(start === end\) return say\(/);
+  assert.match(settingsCss, /\.time-row\.is-off \{[^}]*opacity: \.42;/s, "关掉时整行时间要能看出是废的");
+  assert.match(settingsCss, /\.quiet-off-mark \{[^}]*background: var\(--mint\);/s, "关掉状态要有一个认得出的标记");
+});
+
+// ——— 待办确认小窗（v0.7.488）———
+test("待办确认：窗在输入框上方，两个按钮，账本动没动只看这两个", () => {
+  assert.match(panel, /<div class="todo-proposal-layer" id="todo-proposals" hidden><\/div>/);
+  // 浮在输入框上方那一行是定位的根，不能漂到消息流里
+  assert.match(panelCss, /\.todo-proposal-layer \{[^}]*position: absolute;[^}]*bottom: calc\(100% \+ 8px\);/s);
+  assert.match(panel, /就打上完成/);
+  assert.match(panel, /先不用/);
+  // 提议是 ta 当面问的：切到别的伙伴那儿就不该看见
+  assert.match(panel, /todoProposals\.filter\(\(row\) => !row\.agentId \|\| row\.agentId === current\)/);
+  // 轮询顺手带一下，不用单独开一个定时器
+  assert.match(panel, /await refreshTodoProposals\(\);/);
+});
+
+test("待办确认：没划掉就不许收窗，这是硬规矩", () => {
+  // 成功才收：先把「已记下」显示出来，1.6 秒后再撤
+  assert.match(panel, /已记下 ✓/);
+  assert.match(panel, /setTimeout\(\(\) => el\.remove\(\), 1600\)/);
+  // 失败必须留在原地，还给一个能再点的按钮
+  assert.match(panel, /const why = error\?\.message \|\| "这次没记上，窗还给你留着，再点一次试试"/);
+  assert.match(panel, /data-act="retry">再试一次/);
+  // api() 把 ok:false 也当报错抛，失败走 catch 这条路，不许只判 res
+  assert.match(panel, /catch \(caught\) \{\s*\n\s*\/\/ api\(\) 把 ok:false 也当报错抛[\s\S]{0,80}?error = caught;/);
+  // 唯一允许立刻收走的情况：这条提议真的已经没了
+  assert.match(panel, /if \(\/已经不在了\|刚处理过\/\.test\(why\)\) \{[\s\S]{0,200}?el\.remove\(\);/);
+});
+
+test("待办确认：待办标题是原样插进去的，先转义", () => {
+  assert.match(panel, /const escTodo = \(value\) => String\(value \?\? ""\)\.replace\(\/\[&<>"'\]\/g/);
+  assert.match(panel, /escTodo\(when \+ row\.title\)/);
+  // 读待确认失败时不清空：宁可这轮不更新，也不能把还挂着的窗误收掉
+  assert.match(panel, /catch \{\s*\n\s*\/\/ 读不到就别动现有的[\s\S]{0,120}?return;/);
+});
+
+test("待办确认：后端三条路都在，落笔只有确认那一条", () => {
+  assert.match(app, /app\.get\("\/todos\/proposals"/);
+  assert.match(app, /app\.post\("\/todos\/proposals\/:key\/confirm"/);
+  assert.match(app, /app\.post\("\/todos\/proposals\/:key\/dismiss"/);
+  // 聊天那一轮只攒提议，不调落笔
+  assert.match(app, /const judged = proposeFromMessage\(\{ text: latestUser\?\.text, snapshot: daybookSnapshot, diagnostics \}\);/);
+  assert.match(app, /store\.setTodoProposals\(\[\.\.\.pending, made\]\);/);
+  // 落笔只在 confirm 路由里发生
+  assert.match(app, /const result = await confirmProposal\(ctx, found, \{ diagnostics \}\);/);
+  assert.doesNotMatch(app, /completeFromMessage\(ctx/);
+});
+
+test("出题资格：母题加被接住过的癖好，冷掉的收回（2026-10-06）", () => {
+  assert.match(app, /const motifs = topicSourcesOf\(knowing\.hobbies\)/, "长种子要从「能出题的方向」取，不再只取出生自带的母题");
+  assert.match(app, /topic\.warm >= OFFER_WARM_FLOOR && !topic\.mutedAt/, "够热又没有冷掉的方向才放出来出题");
+  assert.match(app, /setHobbyOffers\(hobbies, promoted, true, now\)/, "接住过的方向放出来");
+  assert.match(app, /setHobbyOffers\(hobbies, demoted, false, now\)/, "冷掉的收回");
+  assert.match(app, /sharedMaterial,/, "补母题时带上真实相处素材");
 });

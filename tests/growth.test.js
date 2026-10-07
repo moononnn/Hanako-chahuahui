@@ -239,3 +239,17 @@ test("后来那份有额度上限：手上满了就不再长", () => {
   const roomy = [{ name: "生来那条", origin: "born", layer: "motif", at: "2026-08-01T10:00:00" }];
   assert.equal(canGrow({ relationship: relationshipAtStage1(), hobbies: roomy, today: "2026-09-12" }), true);
 });
+
+test("补母题时把真实相处也递进去", () => {
+  const spec = motifHobbySpec({
+    partnerName: "小花",
+    personalityText: "注意方式：认死牛油，先看原料",
+    takenObjects: [],
+    existing: [],
+    sharedMaterial: "小林：今天浇完薄荷了\n小花：要得",
+  });
+  assert.match(spec.userText, /最近真实聊过的/, "相处素材要有自己的位置");
+  assert.match(spec.userText, /浇完薄荷/, "素材本身要递进去");
+  const bare = motifHobbySpec({ partnerName: "小花", personalityText: "注意方式：认死牛油，先看原料" });
+  assert.doesNotMatch(bare.userText, /最近真实聊过的/, "没有素材时不硬凑一块空的");
+});

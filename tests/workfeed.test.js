@@ -8,6 +8,7 @@ import {
   isTeaHouseSession,
   normalizeWorkEvent,
   recentWorkEvents,
+  recentWorkActivity,
   textFromSessionMessage,
   workLifeDay,
 } from "../lib/workfeed.js";
@@ -110,4 +111,45 @@ test("电脑端生活联动：默认开，关得上，清得掉", async () => {
   assert.equal(store.readWorkfeed().events.length, 1);
   store.clearWorkfeed();
   assert.equal(store.readWorkfeed().events.length, 0, "清空要真的空");
+});
+
+// ── 两边同一个伙伴：电脑那边的动静要看得出「还在忙」和「早收工了」──
+
+const feedWith = (rows) => ({ schemaVersion: 1, events: rows });
+const row = (agentId, date, text) => ({
+  id: `${agentId}-${date.getTime()}`,
+  agentId,
+  lifeDay: workLifeDay(date),
+  at: date.toISOString(),
+  role: "user",
+  text,
+});
+
+test("电脑那边的动静只算这个伙伴自己的", () => {
+  const now = new Date(2026, 9, 5, 8, 37);
+  const mine = new Date(2026, 9, 5, 8, 30);
+  const other = new Date(2026, 9, 5, 8, 35);
+  const feed = feedWith([row("hanako", mine, "早，先把插件弄完"), row("partner-b", other, "在忙别的")]);
+  const activity = recentWorkActivity(feed, "hanako", { now: now.getTime() });
+  assert.equal(activity.active, true);
+  assert.equal(activity.last.text, "早，先把插件弄完", "不被别人的班次顶掉");
+  assert.equal(activity.gapMs, 7 * 60 * 1000);
+  assert.equal(recentWorkActivity(feed, "partner-c", { now: now.getTime() }).at, null, "她没在这位那边找过，就什么都没有");
+});
+
+test("超过窗口就算收工了；没近况时不能凭空当成她还在忙", () => {
+  const now = new Date(2026, 9, 5, 23, 50);
+  const feed = feedWith([row("hanako", new Date(2026, 9, 5, 22, 0), "先睡啦")]);
+  assert.equal(recentWorkActivity(feed, "hanako", { now: now.getTime(), withinMs: 45 * 60 * 1000 }).active, false, "两个小时前的事不算她还在忙");
+  assert.equal(recentWorkActivity(feed, "hanako", { now: now.getTime(), withinMs: 120 * 60 * 1000 }).active, true);
+  assert.deepEqual(recentWorkActivity(null, "hanako", { now: now.getTime() }), { active: false, at: null, gapMs: null, last: null });
+});
+
+test("一堆乱序事件里也能挑出最新的那一条", () => {
+  const now = new Date(2026, 9, 5, 9, 0);
+  const feed = feedWith([
+    row("hanako", new Date(2026, 9, 5, 8, 50), "刚说完这个"),
+    row("hanako", new Date(2026, 9, 5, 7, 10), "早上先弄的"),
+  ]);
+  assert.equal(recentWorkActivity(feed, "hanako", { now: now.getTime() }).last.text, "刚说完这个");
 });

@@ -245,6 +245,7 @@ function panelHarness(names) {
     console, setTimeout, clearTimeout, Date, Audio: class { addEventListener() {} },
     el, document: { createElement: (tag) => new Node(tag), querySelectorAll: (s) => root.querySelectorAll(s), body: root },
     partners: [], current: "partner-a", currentMessages: [], seenIds: new Set(), voiceStates: new Map(),
+    transcriptOpen: new Map(),
     partnerFeedNodes: new Map(), userCols: new Map(), tickNodes: new Map(), pendingDrafts: new Map(),
     actionEmoji: new Map(), liveDots: null, autoScrollAllowed: true, renderingAll: false,
     lastRenderedConversationAt: null, paintedWithAvatars: null, showMessageAvatars: false,
@@ -271,7 +272,7 @@ function panelHarness(names) {
   vm.runInContext(actual, context);
   return { context, root, el, binds, mounts, states, paints, opened, statuses, requests };
 }
-const renderFunctions = ["renderAll", "invalidateRendering", "renderMessage", "renderAction", "renderVoiceMessage", "bubble", "place", "messageTime", "bubbleTimeText", "timeDivider", "timeDividerText", "stickerIdOf", "isBareImageMarker", "isBareStickerMarker", "readUserIds", "scrollDown", "updateJumpBottom", "isAtBottom", "tick", "formatVoiceDuration", "appendImageToBubble"];
+const renderFunctions = ["renderAll", "rememberTranscriptOpen", "voiceStateKey", "invalidateRendering", "renderMessage", "renderAction", "renderVoiceMessage", "bubble", "place", "messageTime", "bubbleTimeText", "timeDivider", "timeDividerText", "stickerIdOf", "isBareImageMarker", "isBareStickerMarker", "readUserIds", "scrollDown", "updateJumpBottom", "isAtBottom", "tick", "formatVoiceDuration", "appendImageToBubble"];
 function renderHarness() {
   const h = panelHarness(renderFunctions);
   vm.runInContext('const STICKER_PREFIX = "\\u0001stk:"; const BARE_IMAGE_MARKER_RE = /^\\[图片\\]$/; const BARE_MARKER_RE = /^\\[表情\\]$/;', h.context);

@@ -39,6 +39,8 @@ import {
   hasPersonality,
   motifsOf,
   needsMotifs,
+  setHobbyOffers,
+  topicSourcesOf,
   layerTagProblem,
   normalizeHobbies,
   normalizeHobby,
@@ -382,4 +384,33 @@ test("自动那份单独留底：改过能回去，改回原样也算没改", ()
   assert.deepEqual(personalityStanding({ personality: auto, auto, from: null }), { edited: false, from: null });
   // 连基准都没有（判不出来）：不算改过
   assert.deepEqual(personalityStanding({ personality: mine, auto: null, from: "user" }), { edited: false, from: "user" });
+});
+
+test("出题方向：母题天然出题，被接住过的癖好也放出来", () => {
+  const hobbies = [
+    { id: "m1", name: "半日路线", layer: "motif" },
+    { id: "q1", name: "涮鱼蘸碟", layer: "quirk" },
+    { id: "q2", name: "楼道脚步", layer: "quirk" },
+  ];
+  assert.deepEqual(topicSourcesOf(hobbies).map((h) => h.id), ["m1"], "癖好默认不许出题");
+  const promoted = setHobbyOffers(hobbies, ["q1"], true);
+  assert.deepEqual(topicSourcesOf(promoted).map((h) => h.id), ["m1", "q1"], "被接住过的癖好放出来");
+  assert.equal(promoted.find((h) => h.id === "q1").offers, true);
+  const demoted = setHobbyOffers(promoted, ["q1"], false);
+  assert.deepEqual(topicSourcesOf(demoted).map((h) => h.id), ["m1"], "冷掉的收回去");
+  assert.equal(normalizeHobby({ id: "q3", name: "窗台干角", layer: "quirk" }).offers, false, "默认不带上出题权");
+  assert.equal(setHobbyOffers(hobbies, [], true).length, 3, "没点名就原样返回");
+});
+
+test("母题下限抬到五个：三个母题的时候还要继续补", () => {
+  const three = [
+    { id: "m1", name: "路线", layer: "motif" },
+    { id: "m2", name: "种植", layer: "motif" },
+    { id: "m3", name: "填词", layer: "motif" },
+    { id: "q1", name: "涮鱼", layer: "quirk" },
+  ];
+  assert.equal(needsMotifs(three), true, "三不够了，得往上长");
+  const five = [...three, { id: "m4", name: "夜市摊", layer: "motif" }, { id: "m5", name: "旧唱片", layer: "motif" }];
+  assert.equal(needsMotifs(five), false, "到五个就算够");
+  assert.equal(MAX_MOTIFS >= 5, true, "上限得容得下这个下限");
 });

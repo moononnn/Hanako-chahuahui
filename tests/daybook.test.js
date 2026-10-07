@@ -52,7 +52,7 @@ function tmpHana() {
   return { hana, dataDir };
 }
 
-function fakeCtx(dataDir, { throwOnRead = false, raw = undefined } = {}) {
+function fakeCtx(dataDir, { throwOnRead = false, raw = undefined, published = null, throwOnGet = false } = {}) {
   return {
     dataDir,
     resources: {
@@ -63,6 +63,16 @@ function fakeCtx(dataDir, { throwOnRead = false, raw = undefined } = {}) {
         return { content: fs.readFileSync(ref.path, "utf-8") };
       },
     },
+    // 现在的读取只认拾光记 App 实时发布的那一份（不再回退磁盘遗留文件）
+    ...(dataDir ? {
+      publicData: {
+        get: async ({ appId, key }) => {
+          if (throwOnGet) throw new Error("public data denied");
+          if (published === null) return null;
+          return { appId, key, schemaVersion: published.schemaVersion, data: published.data };
+        },
+      },
+    } : {}),
   };
 }
 
@@ -179,30 +189,36 @@ test("脏文本被洗过，超长做册被截", () => {
 
 test("读快照：正常读得到", async () => {
   __clearDaybookCache();
-  const { hana, dataDir } = tmpHana();
-  writeSnapshot(hana, SNAPSHOT);
-  const got = await readDaybook(fakeCtx(dataDir));
+  const { dataDir } = tmpHana();
+  const got = await readDaybook(fakeCtx(dataDir, { published: { schemaVersion: DAYBOOK_SCHEMA_VERSION, data: SNAPSHOT } }));
   assert.equal(got.dataRev, 42);
 });
 
-test("读快照：没装拾光记 / 版本对不上 / 读崩了，一律安静给 null", async () => {
+test("读快照：没发布 / 版本对不上 / 读崩了 / 形状不对，一律安静给 null", async () => {
   __clearDaybookCache();
-  const { hana, dataDir } = tmpHana();
+  const { dataDir } = tmpHana();
 
-  assert.equal(await readDaybook(fakeCtx(dataDir)), null, "文件不存在应给 null");
-
-  writeSnapshot(hana, { schemaVersion: 99, today: {} });
-  __clearDaybookCache();
-  assert.equal(await readDaybook(fakeCtx(dataDir)), null, "版本对不上应给 null");
-
-  writeSnapshot(hana, SNAPSHOT);
-  __clearDaybookCache();
-  assert.equal(await readDaybook(fakeCtx(dataDir, { throwOnRead: true })), null, "读崩了应给 null");
+  assert.equal(await readDaybook(fakeCtx(dataDir)), null, "没人发布应给 null");
 
   __clearDaybookCache();
-  assert.equal(await readDaybook(fakeCtx("", { raw: null })), null, "没有 dataDir 应给 null");
+  assert.equal(
+    await readDaybook(fakeCtx(dataDir, { published: { schemaVersion: 99, data: { today: {} } } })),
+    null,
+    "版本对不上应给 null",
+  );
+
   __clearDaybookCache();
-  assert.equal(await readDaybook(fakeCtx(dataDir, { raw: "{ 不是 json" })), null, "坏 JSON 应给 null");
+  assert.equal(await readDaybook(fakeCtx(dataDir, { throwOnGet: true })), null, "权限被拒应给 null");
+
+  __clearDaybookCache();
+  assert.equal(await readDaybook(fakeCtx("")), null, "接口不存在应给 null");
+
+  __clearDaybookCache();
+  assert.equal(
+    await readDaybook(fakeCtx(dataDir, { published: { schemaVersion: DAYBOOK_SCHEMA_VERSION, data: { today: "不是对象" } } })),
+    null,
+    "形状不对应给 null",
+  );
 });
 
 // ── 按天说一遍 ──
@@ -228,6 +244,30 @@ test("按需询问绕过今日记账；设置关闭时所有注入都停止", ()
   assert.equal(shouldUseDaybook({ enabled: true, topics: ["weather"], mark, lifeDay: "2026-09-13", hash: "abc" }), true);
   assert.equal(shouldUseDaybook({ enabled: true, topics: [], mark, lifeDay: "2026-09-13", hash: "abc" }), false);
   assert.equal(shouldUseDaybook({ enabled: false, topics: ["weather"], mark, lifeDay: "2026-09-13", hash: "abc" }), false);
+});
+
+test("真实追问形状：本轮取得的情境注明拾光记来源，不让旧工作进度冒充读取现状", () => {
+  for (const question of ["你能读到拾光记那边的信息吗？比如天气啥的？", "看下拾光记今天的日子？"]) {
+    const topics = daybookQueryTopics(question);
+    assert.ok(topics.length > 0);
+    const daybookText = buildDaybookText(SNAPSHOT, "hanako", { topics });
+    const prompt = buildSystemPrompt({
+      partnerName: "小花", partnerId: "hanako", personaText: "人格设定正文", userName: "阿舟",
+      daybookText, workfeedText: "【早些时候的工作进度】跨应用读取尚未验收。",
+    });
+    assert.match(daybookText, /拾光记 App/);
+    assert.match(daybookText, /本轮已读取/);
+    assert.match(daybookText, /2026-09-13/);
+    assert.match(daybookText, /不代表能浏览完整档案/);
+    assert.ok(prompt.includes(daybookText));
+    assert.ok(topics.includes("weather") ? daybookText.includes("窗外阴着") : daybookText.includes("中秋节"));
+  }
+});
+
+test("来源声明只随实际内容出现：所问片段缺失时不冒充已取得该片段", () => {
+  assert.equal(buildDaybookText(SNAPSHOT, "hanako", { topics: [] }), "");
+  assert.equal(buildDaybookText({ ...SNAPSHOT, weather: null }, "hanako", { topics: ["weather"] }), "");
+  assert.equal(buildDaybookText(null, "hanako"), "");
 });
 
 // ── 接进系统提示 ──

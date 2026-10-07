@@ -32,9 +32,58 @@ import {
   wakeEchoFor,
   recentSceneFor,
   resolveProactivePolicy,
+  inFarewellWindow,
+  shouldSendFarewell,
+  stirredUp,
+  morningOpening,
+  FAREWELL_LEAD_MINUTES,
+  ANCHOR_USER_RECENT_MS,
+  proactiveAnchor,
+  lastUserVoiceAt,
+  askBudgetSpent,
 } from "../lib/proactive.js";
 
 const at = (h, m = 0) => new Date(2026, 8, 12, h, m);
+
+test("锚点门：她完全没动静时，内容型开口先压住", () => {
+  const now = at(16).getTime();
+  // 没有待办、没有刚聊过的一轮、她几小时没说话、电脑那边也静着
+  assert.deepEqual(proactiveAnchor({ now }), { ok: false, kind: null });
+  assert.equal(proactiveAnchor({ todoNudge: "三点给薄荷浇水", now }).kind, "todo");
+  assert.equal(proactiveAnchor({ wakeEcho: { sourceText: "我再眯一会" }, now }).kind, "wake");
+  assert.equal(proactiveAnchor({ sceneEcho: { userText: "在的", assistantText: "嗯" }, now }).kind, "scene");
+  assert.equal(proactiveAnchor({ workActive: true, now }).kind, "workfeed");
+  const fresh = now - ANCHOR_USER_RECENT_MS + 60 * 1000;
+  assert.equal(proactiveAnchor({ lastUserAt: fresh, now }).kind, "recent-user");
+  const stale = now - ANCHOR_USER_RECENT_MS - 60 * 1000;
+  assert.equal(proactiveAnchor({ lastUserAt: stale, now }).ok, false);
+  // 她刚发的消息优先于电脑那边的动静：来处越近越先说
+  assert.equal(proactiveAnchor({ lastUserAt: fresh, workActive: true, now }).kind, "recent-user");
+});
+
+test("她最后一句真话的时间：号令行和摸一摸不算", () => {
+  const now = at(16).getTime();
+  const rows = [
+    { role: "user", text: "浇完啦", at: at(15).toISOString() },
+    { role: "assistant", text: "要得", at: at(15, 5).toISOString() },
+    { role: "user", text: "小林戳了戳你的键盘", kind: "action", at: at(15, 30).toISOString() },
+    { role: "assistant", text: "小花戳了戳你的肚皮", at: at(15, 40).toISOString() },
+  ];
+  assert.equal(lastUserVoiceAt(rows), at(15).getTime());
+  assert.equal(lastUserVoiceAt([{ role: "assistant", text: "嗯", at: at(15).toISOString() }]), null);
+  assert.equal(lastUserVoiceAt([]), null);
+  // 撤回的那句不算说过话
+  assert.equal(lastUserVoiceAt([{ role: "user", text: "算了", recalled: true, at: at(14).toISOString() }]), null);
+  void now;
+});
+
+test("问句额度：连着问了几条，下一条就别再问", () => {
+  const ask = (text) => /[?？]/u.test(text);
+  assert.equal(askBudgetSpent(["问一个？", "又问？", "还说"], { isAsk: ask }), true);
+  assert.equal(askBudgetSpent(["问一个？", "这句没问", "还说"], { isAsk: ask }), false);
+  assert.equal(askBudgetSpent(["只有一条？"], { isAsk: ask }), false);
+  assert.equal(askBudgetSpent([], { isAsk: ask }), false);
+});
 
 test("困着之后醒来只产生一次生活状态回声", () => {
   const now = at(16).getTime();
@@ -508,4 +557,64 @@ test("看过了、或者这轮已经接过了，就不挡主动开场", () => {
   assert.equal(hasUnseenUserMessage([{ role: "user", text: "在吗", recalled: true }]), false, "撤回的话不再等回音");
   assert.equal(hasUnseenUserMessage([]), false);
   assert.equal(hasUnseenUserMessage(null), false);
+});
+
+// ── 睡前收尾与「晚安之后又被薅起来」（2026-10-05）────────────────
+
+test("睡前收尾只落在睡点前那一小段，同一晚只算一次", () => {
+  const sleep = [{ kind: "main", start: "23:30" }];
+  assert.equal(FAREWELL_LEAD_MINUTES, 20);
+  assert.equal(inFarewellWindow(at(22, 40), sleep).due, false, "离睡点还早，不是收尾的时候");
+  const due = inFarewellWindow(at(23, 15), sleep);
+  assert.equal(due.due, true);
+  assert.equal(due.start, "23:30");
+  assert.equal(due.reason, "sleep");
+  const night = due.night;
+  assert.equal(shouldSendFarewell({}, night), true);
+  assert.equal(shouldSendFarewell({ farewellNight: night }, night), false, "今晚已经说过了");
+  assert.equal(shouldSendFarewell({ farewellFailNight: night, farewellFailCount: 2 }, night), true, "生成失败还能再试一次");
+  assert.equal(shouldSendFarewell({ farewellFailNight: night, farewellFailCount: 3 }, night), false, "试够就别整晚反复叫模型");
+  assert.equal(inFarewellWindow(at(23, 15), null).due, false, "没定过作息就不强行收尾");
+});
+
+test("安静时段比睡点更早时，收尾要赶在门关之前", () => {
+  const sleep = [{ kind: "main", start: "02:00" }];
+  const plan = inFarewellWindow(at(22, 50), sleep, { extraAnchor: "23:00" });
+  assert.equal(plan.due, true, "睡点在凌晨两点，但安静时间二十三时就关门了");
+  assert.equal(plan.reason, "quiet");
+  assert.equal(plan.start, "23:00");
+  assert.equal(inFarewellWindow(at(21, 30), sleep, { extraAnchor: "23:00" }).due, false);
+});
+
+test("晚安之后她又在电脑那边开干，才算把人薅起来", () => {
+  const now = at(23, 50);
+  const said = at(23, 20).toISOString();
+  const base = { farewellNight: "2026-09-12", farewellAt: said };
+  const after = at(23, 45).toISOString();
+  assert.equal(stirredUp({ state: base, night: "2026-09-12", workAt: after, farewellAt: said, now }), true);
+  assert.equal(stirredUp({ state: base, night: "2026-09-12", workAt: at(23, 10).toISOString(), farewellAt: said, now }), false, "说晚安之前就在忙的不算");
+  assert.equal(stirredUp({ state: { ...base, stirNight: "2026-09-12", stirCount: 1 }, night: "2026-09-12", workAt: after, farewellAt: said, now }), false, "一晚最多闹一次");
+  assert.equal(stirredUp({ state: base, night: "2026-09-11", workAt: after, farewellAt: said, now }), true, "新的夜重新算");
+  assert.equal(stirredUp({ state: base, night: null, workAt: after, farewellAt: said, now }), false, "没说过晚安就无从谈起");
+  assert.equal(stirredUp({ state: {}, night: "2026-09-12", workAt: after, farewellAt: null, now }), false);
+});
+
+test("晨间第一句给的是把握，不是打卡", () => {
+  assert.equal(morningOpening({ tier: "clingy", rnd: () => 0.1 }), true);
+  assert.equal(morningOpening({ tier: "rare", rnd: () => 0.99 }), false);
+  assert.equal(morningOpening({ tier: "rare", workActive: true, rnd: () => 0.4 }), true, "清早她已经在电脑那边忙，把握更大");
+  assert.equal(TIER_PLANS.rare.morningChance < TIER_PLANS.clingy.morningChance, true, "越黏人的越容易先开个口");
+});
+
+test("说过晚安又被薅起来：只放睡眠这一道门，其余照管", () => {
+  const now = at(23, 50);
+  const settings = { tier: "often", sleep: [{ kind: "main", start: "23:00" }] };
+  const globalSettings = { rhythmProactiveEnabled: true, quiet: DEFAULT_QUIET, globalGate: DEFAULT_GLOBAL_GATE };
+  const state = { sentToday: { day: dailyKey(now), count: 2 } };
+  const blocked = gateCheck({ now, settings, globalSettings, state, globalState: {} });
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.reason, "quiet", "平常时候睡着就是睡着");
+  assert.equal(gateCheck({ now, settings, globalSettings, state, globalState: {}, ignoreSleep: true }).ok, true, "那一条本来就在睡着之后");
+  const maxed = { sentToday: { day: dailyKey(now), count: TIER_PLANS.often.dailyMax } };
+  assert.equal(gateCheck({ now, settings, globalSettings, state: maxed, globalState: {}, ignoreSleep: true }).reason, "tier-daily-max", "日上限还是拦得住");
 });
