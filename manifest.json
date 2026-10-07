@@ -6,7 +6,7 @@
   "entry": "index.js",
   "description": "茶话会：像 QQ 一样跟伙伴闲聊。主对话框面对面谈正事，这里围炉聊八卦。",
   "icon": "assets/icon.png",
-  "minAppVersion": "0.942.0",
+  "minAppVersion": "0.1020.0",
   "capabilities": [
     "app/models.infer",
     "app/agents.read",
@@ -40,6 +40,7 @@
         "face": {
           "image": "assets/icon.png"
         },
+        "pageIcon": "assets/nav-icon.png",
         "route": "/panel.html",
         "realization": "page",
         "siteNavEntry": true,

@@ -20,7 +20,7 @@
       <div>
         <p class="eyebrow">茶话会</p>
         <h1>茶话会设置</h1>
-        <p class="sub" id="sub">把聊天过成舒服的样子。常用的放前面，伙伴自己的事单独收好。</p>
+        <p class="sub" id="sub">把聊天过成舒服的样子。常改的排在前头，伙伴自己的事单独收好。</p>
       </div>
       <div class="settings-head-actions">
         <button class="soft-button back-chat" id="back-to-chat" type="button">← 返回聊天</button>
@@ -35,64 +35,38 @@
     </header>
 
     <nav class="tabs" aria-label="设置分类" role="tablist">
-      <button class="tab on" id="tab-global" data-tab="global" role="tab" aria-selected="true" aria-controls="panel-global">通用设置</button>
-      <button class="tab" id="tab-partners" data-tab="partners" role="tab" aria-selected="false" aria-controls="panel-partners">伙伴管理</button>
+      <button class="tab on" id="tab-chat" data-tab="chat" role="tab" aria-selected="true" aria-controls="panel-chat">聊天显示</button>
+      <button class="tab" id="tab-voice" data-tab="voice" role="tab" aria-selected="false" aria-controls="panel-voice">语音</button>
+      <button class="tab" id="tab-immersion" data-tab="immersion" role="tab" aria-selected="false" aria-controls="panel-immersion">沉浸感</button>
+      <button class="tab" id="tab-model" data-tab="model" role="tab" aria-selected="false" aria-controls="panel-model">模型</button>
+      <button class="tab" id="tab-proactive" data-tab="proactive" role="tab" aria-selected="false" aria-controls="panel-proactive">主动联系</button>
+      <button class="tab" id="tab-partners" data-tab="partners" role="tab" aria-selected="false" aria-controls="panel-partners">伙伴</button>
     </nav>
 
-    <section id="panel-global" role="tabpanel" aria-labelledby="tab-global" tabindex="0">
+    <section id="panel-chat" role="tabpanel" aria-labelledby="tab-chat" tabindex="0">
       <div class="section-head">
         <div><h2>聊天显示</h2><p>只管聊天窗长什么样，不影响聊过的内容。</p></div>
       </div>
-      <article class="setting-card compact">
-        <div class="setting-copy">
-          <h3>消息头像</h3>
-          <p>打开后，伙伴头像在左边，你的头像在右边。</p>
-        </div>
-        <button class="switch" id="msg-avatars-switch" type="button" role="switch" aria-checked="false">
-          <span class="track"><span></span></span><span class="switch-label">不显示</span>
-        </button>
-      </article>
-      <article class="setting-card compact">
-        <div class="setting-copy">
-          <h3>修整伙伴回复</h3>
-          <p>打开后，悬停在伙伴气泡上可以重新生成、调整或删除最新一轮回复。默认关闭，不影响平常聊天。</p>
-        </div>
-        <button class="switch" id="msg-refine-switch" type="button" role="switch" aria-checked="false">
-          <span class="track"><span></span></span><span class="switch-label">不显示</span>
-        </button>
-      </article>
-      <article class="setting-card compact">
-        <div class="setting-copy">
-          <h3>伙伴语音消息</h3>
-          <p>打开后，伙伴偶尔会把适合短短说出来的回复发成一条语音；长回复仍然用文字。</p>
-        </div>
-        <button class="switch" id="voice-switch" type="button" role="switch" aria-checked="false">
-          <span class="track"><span></span></span><span class="switch-label">关闭</span>
-        </button>
-        <p class="setting-hint" id="voice-ready-hint" hidden>下面那条朗读模型还缺必填项，现在合成不出语音。</p>
-        <p class="setting-hint" id="voice-plainkey-hint" hidden>系统加密这会儿用不上，朗读 Key 是明文放在茶话会自己的数据文件里（只有你的 Windows 账户能读）。</p>
-      </article>
-      <article class="setting-card compact">
-        <div class="setting-copy">
-          <h3>声音里的情绪</h3>
-          <p>让 ta 在合适的地方带一声笑、叹口气，中间停半拍；关掉就是干净利落地念完。</p>
-        </div>
-        <button class="switch" id="voice-delivery-switch" type="button" role="switch" aria-checked="true">
-          <span class="track"><span></span></span><span class="switch-label">带着情绪</span>
-        </button>
-      </article>
-      <article class="setting-card" id="voice-model-card">
-        <div class="setting-copy">
-          <h3>朗读模型</h3>
-          <p>茶话会自己的一套朗读配置：填好接口、模型名和 Key 就能存下来，可以存多条，随时在不同供应商之间切换；伙伴页只负责选择各自的声音和频率。</p>
-        </div>
-        <div class="detail-field">
-          <div id="voice-model-host"></div>
-          <small id="voice-model-note">可以存多条朗读模型，随时切换。</small>
-          <button class="soft-button" id="voice-model-test" type="button">测试模型连接</button>
-          <small id="voice-model-test-note" class="detail-field-note"></small>
-        </div>
-      </article>
+      <div class="switch-grid">
+        <article class="setting-card compact">
+          <div class="setting-copy">
+            <h3>消息头像</h3>
+            <p>打开后，伙伴头像在左边，你的头像在右边。</p>
+          </div>
+          <button class="switch" id="msg-avatars-switch" type="button" role="switch" aria-checked="false">
+            <span class="track"><span></span></span><span class="switch-label">不显示</span>
+          </button>
+        </article>
+        <article class="setting-card compact">
+          <div class="setting-copy">
+            <h3>修整伙伴回复</h3>
+            <p>打开后，悬停在伙伴气泡上可以重新生成、调整或删除最新一轮回复。默认关闭，不影响平常聊天。</p>
+          </div>
+          <button class="switch" id="msg-refine-switch" type="button" role="switch" aria-checked="false">
+            <span class="track"><span></span></span><span class="switch-label">不显示</span>
+          </button>
+        </article>
+      </div>
       <article class="setting-card">
         <div class="setting-copy">
           <h3>我在茶话会里叫什么</h3>
@@ -102,120 +76,6 @@
           <input type="text" id="user-name-override" maxlength="40" placeholder="跟随 Hana">
           <button class="soft-button" id="user-name-override-save" type="button">保存</button>
           <small class="detail-field-note">清空并保存，就会恢复跟随 Hana。</small>
-        </div>
-      </article>
-
-      <div class="section-head roomy">
-        <div><h2>沉浸感</h2><p>让伙伴多知道一点你这边今天的事。装了对应的插件才有这一项。</p></div>
-      </div>
-      <article class="setting-card compact">
-        <div class="setting-copy">
-          <h3>拾光记今日情境</h3>
-          <p id="daybook-copy">打开后，伙伴会知道拾光记里的今天是什么日子、窗外什么天气，还有你们最近过下来的日子。</p>
-        </div>
-        <button class="switch" id="daybook-switch" type="button" role="switch" aria-checked="false">
-          <span class="track"><span></span></span><span class="switch-label">关闭</span>
-        </button>
-      </article>
-      <article class="setting-card compact">
-        <div class="setting-copy">
-          <h3>Hana 主对话近况</h3>
-          <p id="workfeed-copy">打开后，伙伴可以在合适时参考你和伙伴在 Hana 主对话框里最近聊过的事。关掉就不再收集，已经收的也不再使用。</p>
-        </div>
-        <button class="switch" id="workfeed-switch" type="button" role="switch" aria-checked="true">
-          <span class="track"><span></span></span><span class="switch-label">打开</span>
-        </button>
-      </article>
-      <article class="setting-card compact">
-        <div class="setting-copy">
-          <h3>已收集的生活记录</h3>
-          <p>茶话会自己存了一份 Hana 主对话框里的近期聊天。可以翻看或单条删掉，清空之后伙伴就不知道那些事了。</p>
-        </div>
-        <div class="detail-actions workfeed-actions">
-          <button class="soft-button" id="workfeed-view" type="button">查看</button>
-          <button class="soft-button" id="workfeed-clear" type="button">清空</button>
-        </div>
-      </article>
-      <article class="setting-card compact">
-        <div class="setting-copy">
-          <h3>生活节拍分析</h3>
-          <p>让伙伴逐渐熟悉你常在什么时候聊天，以及你的表达习惯。只按茶话会里的聊天归纳，数据不足时不会猜。</p>
-        </div>
-        <button class="switch" id="rhythm-switch" type="button" role="switch" aria-checked="true">
-          <span class="track"><span></span></span><span class="switch-label">打开</span>
-        </button>
-      </article>
-      <article class="setting-card compact">
-        <div class="setting-copy">
-          <h3>表达习惯</h3>
-          <p>允许伙伴参考你平时的语气词和符号变化，只当作轻轻留意的背景，不直接判断你的心情。</p>
-        </div>
-        <button class="switch" id="rhythm-style-switch" type="button" role="switch" aria-checked="true">
-          <span class="track"><span></span></span><span class="switch-label">参考</span>
-        </button>
-      </article>
-      <article class="setting-card compact">
-        <div class="setting-copy">
-          <h3>允许伙伴主动来找你</h3>
-          <p>全局总闸，默认关着。关着的时候没有任何伙伴会主动出现，聊天里也不会突然蹦出谁；打开之后，仍由频率档位、静默时段和你逐位的开关共同管着。</p>
-        </div>
-        <button class="switch" id="rhythm-proactive-switch" type="button" role="switch" aria-checked="false">
-          <span class="track"><span></span></span><span class="switch-label">关闭</span>
-        </button>
-      </article>
-      <article class="setting-card compact">
-        <div class="setting-copy">
-          <h3>已分析的生活节拍</h3>
-          <p>查看目前归纳出的聊天时段、表达变化和样本数量。这里只显示趋势，不展示具体聊天原文。</p>
-        </div>
-        <div class="detail-actions rhythm-actions">
-          <button class="soft-button" id="rhythm-view" type="button">查看</button>
-          <button class="soft-button" id="rhythm-clear" type="button">重新开始积累</button>
-        </div>
-      </article>
-
-      <div class="section-head roomy">
-        <div><h2>模型</h2><p>决定聊天时用哪个模型。给某位伙伴单独挑了就用挑的；没挑的，跟 ta 自己在 Hana 里配的模型。</p></div>
-      </div>
-      <article class="setting-card">
-        <div class="card-title"><div><h3>默认模型</h3><p>茶话会自己的兜底：某位伙伴没在这里单独设、也没读到 ta 在 Hana 里的模型时，才轮到这一条。</p></div></div>
-        <div class="detail-field" id="global-model-host"></div>
-        <small class="detail-field-note" id="global-model-note"></small>
-      </article>
-      <article class="setting-card">
-        <div class="card-title"><div><h3>认识伙伴</h3><p>「认真认识 ta」生成那些场景候选时用哪个模型。拿不准就别动，跟着默认走。</p></div></div>
-        <div class="detail-field" id="global-recognition-model-host"></div>
-        <small class="detail-field-note" id="global-recognition-model-note"></small>
-      </article>
-      <article class="setting-card">
-        <div class="card-title"><div><h3>全局辅助识图</h3><p>聊天模型看不懂图片时，先由这位模型看一眼。只有测试通过后，茶话会才会允许发送图片。</p></div></div>
-        <div class="detail-field" id="global-vision-host"></div>
-        <div class="detail-actions"><button class="soft-button" id="global-vision-test" type="button">测试识图</button></div>
-        <small class="detail-field-note" id="global-vision-note"></small>
-      </article>
-
-      <div class="section-head roomy">
-        <div><h2>主动联系</h2><p>管大家什么时候来、别一次挤上来。</p></div>
-      </div>
-      <article class="setting-card">
-        <div class="subsetting">
-          <div class="card-title"><div><h3>安静时间</h3><p>这段时间默认都在休息，特别惦记时仍可留一句。</p></div></div>
-          <div class="time-row">
-            <label><span class="sr-only">开始时间</span><input type="time" id="quiet-start"></label>
-            <span class="time-sep">到</span>
-            <label><span class="sr-only">结束时间</span><input type="time" id="quiet-end"></label>
-          </div>
-        </div>
-        <div class="subsetting">
-          <div class="card-title"><div><h3>别一起扑上来</h3><p>每位伙伴有自己的频率，这里只管全体的间隔和总量。</p></div></div>
-          <div class="choice-block">
-            <span class="choice-label">两条主动消息至少隔多久</span>
-            <div class="seg" id="gate-gap-options"></div>
-          </div>
-          <div class="choice-block">
-            <span class="choice-label">一天最多收到几条</span>
-            <div class="seg" id="gate-max-options"></div>
-          </div>
         </div>
       </article>
 
@@ -235,6 +95,175 @@
           <input type="text" id="my-action-text" maxlength="34" placeholder="填这里，比如肚皮并发出海豹音" aria-label="动作后面的内容">
         </label>
         <small class="action-note">选中的叫法会自动换到前面，留空就用默认句。</small>
+      </article>
+    </section>
+
+    <section id="panel-voice" role="tabpanel" aria-labelledby="tab-voice" tabindex="0" hidden>
+      <div class="section-head">
+        <div><h2>语音</h2><p>伙伴偶尔发一条语音，念得带点情绪；怎么念、用哪个模型都在这一页。</p></div>
+      </div>
+      <div class="switch-grid">
+        <article class="setting-card compact">
+          <div class="setting-copy">
+            <h3>伙伴语音消息</h3>
+            <p>打开后，伙伴偶尔会把适合短短说出来的回复发成一条语音；长回复仍然用文字。</p>
+            <p class="setting-hint" id="voice-ready-hint" hidden>下面那条朗读模型还缺必填项，现在合成不出语音。</p>
+            <p class="setting-hint" id="voice-plainkey-hint" hidden>系统加密这会儿用不上，朗读 Key 是明文放在茶话会自己的数据文件里（只有你的 Windows 账户能读）。</p>
+          </div>
+          <button class="switch" id="voice-switch" type="button" role="switch" aria-checked="false">
+            <span class="track"><span></span></span><span class="switch-label">关闭</span>
+          </button>
+        </article>
+        <article class="setting-card compact">
+          <div class="setting-copy">
+            <h3>声音里的情绪</h3>
+            <p>让 ta 在合适的地方带一声笑、叹口气，中间停半拍；关掉就是干净利落地念完。</p>
+          </div>
+          <button class="switch" id="voice-delivery-switch" type="button" role="switch" aria-checked="true">
+            <span class="track"><span></span></span><span class="switch-label">带着情绪</span>
+          </button>
+        </article>
+      </div>
+      <article class="setting-card" id="voice-model-card">
+        <div class="setting-copy">
+          <h3>朗读模型</h3>
+          <p>茶话会自己的一套朗读配置：填好接口、模型名和 Key 就能存下来，可以存多条，随时在不同供应商之间切换；伙伴页只负责选择各自的声音和频率。</p>
+        </div>
+        <div class="detail-field">
+          <div id="voice-model-host"></div>
+          <small id="voice-model-note">可以存多条朗读模型，随时切换。</small>
+          <button class="soft-button" id="voice-model-test" type="button">测试模型连接</button>
+          <small id="voice-model-test-note" class="detail-field-note"></small>
+        </div>
+      </article>
+    </section>
+
+    <section id="panel-immersion" role="tabpanel" aria-labelledby="tab-immersion" tabindex="0" hidden>
+      <div class="section-head">
+        <div><h2>沉浸感</h2><p>让伙伴多知道一点你这边今天的事。装了对应的插件才有这一项。</p></div>
+      </div>
+      <div class="switch-grid">
+        <article class="setting-card compact">
+          <div class="setting-copy">
+            <h3>拾光记今日情境</h3>
+            <p id="daybook-copy">打开后，伙伴会知道拾光记里的今天是什么日子、窗外什么天气，还有你们最近过下来的日子。</p>
+          </div>
+          <button class="switch" id="daybook-switch" type="button" role="switch" aria-checked="false">
+            <span class="track"><span></span></span><span class="switch-label">关闭</span>
+          </button>
+        </article>
+        <article class="setting-card compact">
+          <div class="setting-copy">
+            <h3>Hana 主对话近况</h3>
+            <p id="workfeed-copy">打开后，伙伴可以在合适时参考你和伙伴在 Hana 主对话框里最近聊过的事。关掉就不再收集，已经收的也不再使用。</p>
+          </div>
+          <button class="switch" id="workfeed-switch" type="button" role="switch" aria-checked="true">
+            <span class="track"><span></span></span><span class="switch-label">打开</span>
+          </button>
+        </article>
+        <article class="setting-card compact">
+          <div class="setting-copy">
+            <h3>生活节拍分析</h3>
+            <p>让伙伴逐渐熟悉你常在什么时候聊天，以及你的表达习惯。只按茶话会里的聊天归纳，数据不足时不会猜。</p>
+          </div>
+          <button class="switch" id="rhythm-switch" type="button" role="switch" aria-checked="true">
+            <span class="track"><span></span></span><span class="switch-label">打开</span>
+          </button>
+        </article>
+        <article class="setting-card compact">
+          <div class="setting-copy">
+            <h3>表达习惯</h3>
+            <p>允许伙伴参考你平时的语气词和符号变化，只当作轻轻留意的背景，不直接判断你的心情。</p>
+          </div>
+          <button class="switch" id="rhythm-style-switch" type="button" role="switch" aria-checked="true">
+            <span class="track"><span></span></span><span class="switch-label">参考</span>
+          </button>
+        </article>
+      </div>
+      <article class="setting-card compact">
+        <div class="setting-copy">
+          <h3>已收集的生活记录</h3>
+          <p>茶话会自己存了一份 Hana 主对话框里的近期聊天。可以翻看或单条删掉，清空之后伙伴就不知道那些事了。</p>
+        </div>
+        <div class="detail-actions workfeed-actions">
+          <button class="soft-button" id="workfeed-view" type="button">查看</button>
+          <button class="soft-button" id="workfeed-clear" type="button">清空</button>
+        </div>
+      </article>
+      <article class="setting-card compact">
+        <div class="setting-copy">
+          <h3>已分析的生活节拍</h3>
+          <p>查看目前归纳出的聊天时段、表达变化和样本数量。这里只显示趋势，不展示具体聊天原文。</p>
+        </div>
+        <div class="detail-actions rhythm-actions">
+          <button class="soft-button" id="rhythm-view" type="button">查看</button>
+          <button class="soft-button" id="rhythm-clear" type="button">重新开始积累</button>
+        </div>
+      </article>
+    </section>
+
+    <section id="panel-model" role="tabpanel" aria-labelledby="tab-model" tabindex="0" hidden>
+      <div class="section-head">
+        <div><h2>模型</h2><p>决定聊天时用哪个模型。给某位伙伴单独挑了就用挑的；没挑的，跟 ta 自己在 Hana 里配的模型。</p></div>
+      </div>
+      <article class="setting-card">
+        <div class="card-title"><div><h3>默认模型</h3><p>茶话会自己的兜底：某位伙伴没在这里单独设、也没读到 ta 在 Hana 里的模型时，才轮到这一条。</p></div></div>
+        <div class="detail-field" id="global-model-host"></div>
+        <small class="detail-field-note" id="global-model-note"></small>
+      </article>
+      <article class="setting-card">
+        <div class="card-title"><div><h3>认识伙伴</h3><p>「认真认识 ta」生成那些场景候选时用哪个模型。拿不准就别动，跟着默认走。</p></div></div>
+        <div class="detail-field" id="global-recognition-model-host"></div>
+        <small class="detail-field-note" id="global-recognition-model-note"></small>
+      </article>
+      <article class="setting-card">
+        <div class="card-title"><div><h3>全局辅助识图</h3><p>聊天模型看不懂图片时，先由这位模型看一眼。只有测试通过后，茶话会才会允许发送图片。</p></div></div>
+        <div class="detail-field" id="global-vision-host"></div>
+        <div class="detail-actions"><button class="soft-button" id="global-vision-test" type="button">测试识图</button></div>
+        <small class="detail-field-note" id="global-vision-note"></small>
+      </article>
+    </section>
+
+    <section id="panel-proactive" role="tabpanel" aria-labelledby="tab-proactive" tabindex="0" hidden>
+      <div class="section-head">
+        <div><h2>主动联系</h2><p>管大家什么时候来、别一次挤上来。</p></div>
+      </div>
+      <article class="setting-card compact">
+        <div class="setting-copy">
+          <h3>允许伙伴主动来找你</h3>
+          <p>全局总闸，默认关着。关着的时候没有任何伙伴会主动出现，聊天里也不会突然蹦出谁；打开之后，仍由频率档位、静默时段和你逐位的开关共同管着。</p>
+        </div>
+        <button class="switch" id="rhythm-proactive-switch" type="button" role="switch" aria-checked="false">
+          <span class="track"><span></span></span><span class="switch-label">关闭</span>
+        </button>
+      </article>
+      <article class="setting-card">
+        <div class="subsetting">
+          <div class="card-title"><div><h3>安静时间</h3><p id="quiet-copy">这段时间默认都在休息，特别惦记时仍可留一句。嫌受限就整段关掉。</p></div></div>
+          <div class="time-row" id="quiet-time-row">
+            <label><span class="sr-only">开始时间</span><input type="time" id="quiet-start"></label>
+            <span class="time-sep">到</span>
+            <label><span class="sr-only">结束时间</span><input type="time" id="quiet-end"></label>
+          </div>
+          <p class="quiet-off-flag" id="quiet-off-flag" hidden><span class="quiet-off-mark">已经关掉</span><span id="quiet-off-flag-text">全天都没有安静时间，伙伴什么时候都可能来找你。</span></p>
+          <div class="detail-actions">
+            <button class="switch" id="quiet-off-button" type="button" role="switch" aria-checked="false">
+              <span class="track"><span></span></span><span class="switch-label">有安静时间</span>
+            </button>
+          </div>
+          <small class="detail-field-note" id="quiet-note"></small>
+        </div>
+        <div class="subsetting">
+          <div class="card-title"><div><h3>别一起扑上来</h3><p>每位伙伴有自己的频率，这里只管全体的间隔和总量。</p></div></div>
+          <div class="choice-block">
+            <span class="choice-label">两条主动消息至少隔多久</span>
+            <div class="seg" id="gate-gap-options"></div>
+          </div>
+          <div class="choice-block">
+            <span class="choice-label">一天最多收到几条</span>
+            <div class="seg" id="gate-max-options"></div>
+          </div>
+        </div>
       </article>
     </section>
 
@@ -361,12 +390,15 @@
       removedEntry: document.getElementById("removed-entry"),
       newLocalEntry: document.getElementById("new-local-entry"),
       removedList: document.getElementById("removed-list"),
-      panels: { global: document.getElementById("panel-global"), partners: document.getElementById("panel-partners") },
+      // 分类栏跟着 DOM 走：以后再加一栏，这里不用再改一遍
+      panels: Object.fromEntries([...document.querySelectorAll("[role='tabpanel']")].map((node) => [node.id.replace(/^panel-/, ""), node])),
     };
 
     let partners = [];
     let hiddenPartners = [];
     let globalSettings = {};
+    // 安静时间关掉之前的那一段：恢复时原样回去，而不是每次都塞一段默认的 23:00~08:00。
+    let lastQuietRange = null;
     let daybookInstalled = false;
     let styleCatalog = [];
     let modelCatalog = [];
@@ -424,6 +456,16 @@
       if (text) setTimeout(() => { if (el.status.textContent === text) say(""); }, kind === "err" ? 4200 : 2400);
     }
 
+    /** 每栏一句副标题；台面上分得清「这一页管什么」 */
+    const TAB_SUBTITLES = {
+      chat: "只管聊天窗长什么样，不影响聊过的内容。",
+      voice: "伙伴偶尔发一条语音，念得带点情绪；怎么念、用哪个模型都在这一页。",
+      immersion: "让伙伴多知道一点你这边今天的事。",
+      model: "决定聊天时用哪个模型。给某位伙伴单独挑了就用挑的。",
+      proactive: "管大家什么时候来、别一次挤上来。",
+      partners: "先选伙伴，再看 ta 自己的设置和记忆。",
+    };
+
     function setTab(name) {
       for (const [key, node] of Object.entries(el.panels)) node.hidden = key !== name;
       document.querySelectorAll(".tab").forEach((b) => {
@@ -432,7 +474,7 @@
         // 屏幕阅读器靠这两个属性知道当前在哪一栏
         b.setAttribute("aria-selected", active ? "true" : "false");
       });
-      el.sub.textContent = name === "global" ? "把聊天过成舒服的样子。常用的放前面，伙伴自己的事单独收好。" : "先选伙伴，再看 ta 自己的设置和记忆。";
+      el.sub.textContent = TAB_SUBTITLES[name] ?? "把聊天过成舒服的样子。常改的排在前头，伙伴自己的事单独收好。";
       if (name === "partners" && !currentId && partners.length) void openPartner(partners[0].id);
     }
 
@@ -667,8 +709,39 @@
         button.setAttribute("aria-checked", String(on));
         button.querySelector(".switch-label").textContent = on ? onLabel : offLabel;
       }
-      document.getElementById("quiet-start").value = globalSettings.quiet?.start ?? "23:00";
-      document.getElementById("quiet-end").value = globalSettings.quiet?.end ?? "08:00";
+      const quietStart = document.getElementById("quiet-start");
+      const quietEnd = document.getElementById("quiet-end");
+      // 「关没关」只看存下来的那份，不看输入框里现在摆着什么：点完按钮回来重画时，
+      // 输入框还留着上一段旧时间，拿它比会得出相反的结论（这就是「看不出关没关」的根因）。
+      const quietSaved = globalSettings.quiet ?? {};
+      const quietOff = Boolean(quietSaved.start) && quietSaved.start === quietSaved.end;
+      if (quietOff) {
+        // 关掉的时候别把 00:00 摆在眼前，看着像填错了；把关之前那一段摆回去（禁用着），
+        // 顺手留一份，好让「恢复」是原样回来，不是凭空给一段 23:00~08:00。
+        const back = lastQuietRange ?? { start: "23:00", end: "08:00" };
+        quietStart.value = back.start;
+        quietEnd.value = back.end;
+      } else {
+        if (quietSaved.start && quietSaved.end) lastQuietRange = { start: quietSaved.start, end: quietSaved.end };
+        quietStart.value = quietSaved.start ?? quietStart.value ?? "23:00";
+        quietEnd.value = quietSaved.end ?? quietEnd.value ?? "08:00";
+      }
+      quietStart.disabled = quietOff;
+      quietEnd.disabled = quietOff;
+      document.getElementById("quiet-time-row").classList.toggle("is-off", quietOff);
+      const quietFlag = document.getElementById("quiet-off-flag");
+      quietFlag.hidden = !quietOff;
+      document.getElementById("quiet-copy").textContent = quietOff
+        ? "现在全天都不设安静时间，伙伴什么时候都可能来找你。关回去就在下面拨一段时间。"
+        : "这段时间默认都在休息，特别惦记时仍可留一句。嫌受限就整段关掉。";
+      const quietButton = document.getElementById("quiet-off-button");
+      quietButton.classList.toggle("on", quietOff);
+      quietButton.setAttribute("aria-checked", String(quietOff));
+      quietButton.querySelector(".switch-label").textContent = quietOff ? "全天都能来" : "有安静时间";
+      const quietNote = document.getElementById("quiet-note");
+      if (quietNote) quietNote.textContent = quietOff
+        ? (lastQuietRange ? `关掉之前是 ${lastQuietRange.start} 到 ${lastQuietRange.end}，拨回开关就按那一段恢复。` : "")
+        : "";
       document.getElementById("my-action-text").value = globalSettings.myActionTail ?? "";
       document.getElementById("user-name-override").value = globalSettings.userNameOverride ?? globalSettings.effectiveUserName ?? "";
       paintGlobalChoices();
@@ -1295,11 +1368,32 @@
     });
 
     async function saveQuiet() {
-      const start = document.getElementById("quiet-start").value;
-      const end = document.getElementById("quiet-end").value;
+      const startEl = document.getElementById("quiet-start");
+      const endEl = document.getElementById("quiet-end");
+      // 关着的时候输入框是禁用的，它里面的值只是个「恢复后会用到的备选」，不该被当成修改。
+      if (startEl.disabled || endEl.disabled) return;
+      const start = startEl.value;
+      const end = endEl.value;
       if (!start || !end) return say("安静时间要把开始和结束都选上", "err");
+      if (start === end) return say("开始和结束是同一刻，那就等于没设；想关掉就拨右边的开关", "warn");
+      lastQuietRange = { start, end };
       await saveGlobal({ quiet: { start, end } }, "安静时间已保存");
     }
+    document.getElementById("quiet-off-button").addEventListener("click", async () => {
+      // 状态一律以存下来的那份为准（quiet.start === quiet.end 即整段关掉），不拿输入框反推。
+      const saved = globalSettings.quiet ?? {};
+      const off = !(saved.start && saved.start === saved.end);
+      if (off) {
+        lastQuietRange = { start: saved.start, end: saved.end };
+        await saveGlobal({ quiet: { start: "00:00", end: "00:00" } }, "已经关掉安静时间，伙伴什么时候都可能来");
+        paintGlobal();
+        return;
+      }
+      const back = lastQuietRange ?? { start: "23:00", end: "08:00" };
+      lastQuietRange = back;
+      await saveGlobal({ quiet: back }, `安静时间已恢复：${back.start} 到 ${back.end}`);
+      paintGlobal();
+    });
     document.getElementById("quiet-start").addEventListener("change", saveQuiet);
     document.getElementById("quiet-end").addEventListener("change", saveQuiet);
     document.getElementById("my-action-text").addEventListener("change", async (event) => {
