@@ -3965,7 +3965,7 @@ export function apply(ctx) {
       userName: USER_NAME,
     });
     // 表情包进上下文不能只剩"[表情]"两个字：从本地翻出标签，把"她发的是哪张"说成人话。
-    // 只查本地（图库 + 快照），不靠看图，也不靠表情包插件当场在线。
+    // 只查本地（图库 + 快照），不靠看图，也不依赖表情包数据源当场在线。
     const stickerLabels = stickerLabelMap({
       library: readStickerLibrary(ctx.dataDir),
       catalog: stickerCatalog,
@@ -7152,12 +7152,12 @@ export function apply(ctx) {
         return c.json({ ok: true, removed: file, affectedPartners: affectedPartners.length });
       });
 
-      // 茶话会自己的图库：表情包插件只负责提供一次导入来源，日常展示与发送都读这里。
+      // 茶话会自己的图库：外部表情包数据源只负责提供导入来源，日常展示与发送都读这里。
       app.get("/library/stickers", (c) => {
         return c.json({ ok: true, ...listStickerLibrary(ctx.dataDir) });
       });
 
-      // 只有表情包插件存在且公开快照可读时，才提供「添加表情包」来源。
+      // 只有表情包数据源存在且公开快照可读时，才提供「添加表情包」来源。
       // 没读到就说清楚为什么，不拿一句「请确认插件已启动」冤枉人。
       // 没有标签的图不给选：伙伴那边只能看到"[表情]"两个字，发出去是添乱。
       app.get("/sticker-source", async (c) => {
@@ -7199,7 +7199,7 @@ export function apply(ctx) {
           const ids = [...new Set((Array.isArray(body?.sourceIds) ? body.sourceIds : []).map(String).filter(Boolean))].slice(0, 100);
           if (!ids.length) return c.json({ ok: false, error: { message: "先选几张表情包" } }, 400);
           const index = await readSourceCatalog(ctx);
-          if (!index) return c.json({ ok: false, error: { message: "表情包插件当前不可用" } }, 409);
+          if (!index) return c.json({ ok: false, error: { message: "表情包来源当前不可用" } }, 409);
           const groupId = String(body?.groupId ?? "").trim();
           const library = listStickerLibrary(ctx.dataDir);
           if (groupId && !library.groups.some((group) => group.id === groupId)) {
