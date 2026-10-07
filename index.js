@@ -31,7 +31,9 @@ import { hasPalette, isPaletteDone, normalizePalette, paletteToText } from "./li
 import { createAvatarReader, looksLikeImage, toBytes } from "./lib/avatar.js";
 import { registerTavernImportService, renderImportedPersona } from "./lib/character-import.js";
 import { buildSystemPrompt, buildTeaseText, identityBlock, replyChoiceBlock, shouldQuietClose, threadToMessages } from "./lib/prompt.js";
-import { buildAmbientContextText, buildDaybookText, daybookHash, daybookQueryTopics, previousAssistantBeforeUser, readDaybook, shouldUseDaybook } from "./lib/daybook.js";
+import { buildAmbientContextText, buildDaybookText, daybookAvailable, daybookHash, daybookQueryTopics, previousAssistantBeforeUser, readDaybook, readDaybookVerbose, shouldUseDaybook } from "./lib/daybook.js";
+import { dueTodosFromSnapshot, nudgeKey, nudgeSeen, pickTodoNudger, todoNudgeText } from "./lib/todo-nudge.js";
+import { hasProposal, confirmProposal, makeProposal, proposalAskText, proposeFromMessage } from "./lib/todo-propose.js";
 import { spokenClock, timeBlock } from "./lib/clock.js";
 import {
   askUtility,
@@ -52,6 +54,7 @@ import {
   DEFAULT_CONTEXT,
   buildMemoryBlock,
   conversationMessages,
+  dropUnansweredProactive,
   isConversationMessage,
   makeArchiveEntry,
   planRollup,
@@ -59,7 +62,7 @@ import {
   splitForContext,
 } from "./lib/memory.js";
 import { dailySpec, isProfileIdentitySafe, profileSpec, runSummary, segmentSpec } from "./lib/summarize.js";
-import { buildWorkfeedText, normalizeWorkEvent } from "./lib/workfeed.js";
+import { buildWorkfeedText, normalizeWorkEvent, recentWorkActivity } from "./lib/workfeed.js";
 import { addFeed } from "./lib/feed.js";
 import {
   addPartnerFeed,
@@ -100,6 +103,8 @@ import {
   replaceBornHobbies,
   layerTagProblem,
   motifsOf,
+  setHobbyOffers,
+  topicSourcesOf,
   normalizePersonality,
   parseDraftReply,
   personalityDraftSpec,
@@ -116,7 +121,7 @@ import {
   parseNativeHobbyReply,
   validateNativeHobbies,
 } from "./lib/growth.js";
-import { cleanVoice, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNoReply, isUsableVoice, nightSpec, proactiveSpec } from "./lib/compose.js";
+import { cleanVoice, farewellSpec, hasOpenHook, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNoReply, isUsableVoice, nightSpec, proactiveSpec, stirredSpec } from "./lib/compose.js";
 import { formatSearchContext, searchTimelyTopic } from "./lib/topic-search.js";
 import { findPreviousSearchContext, isChatSearchCandidate, searchForChat } from "./lib/chat-search.js";
 import {
@@ -138,6 +143,7 @@ import {
 import {
   addSeeds,
   emptySeedBook,
+  isSeedKindVoiceMismatch,
   markSeedUsed,
   parseSeedReply,
   pickMotifForSeeds,
@@ -147,6 +153,15 @@ import {
   seedSpec,
   usableSeeds,
 } from "./lib/topic-seeds.js";
+import {
+  OFFER_WARM_FLOOR,
+  cooldownByMotif,
+  moodSummary,
+  mutedMotifIds,
+  readMoodBook,
+  recomputeMood,
+  reviveMentioned,
+} from "./lib/topic-mood.js";
 import {
   buildCatalog,
   buildStickerHint,
@@ -254,17 +269,26 @@ import { DOZE_SLOWDOWN, mergeDueAt, planReply } from "./lib/reply.js";
 import { advancePhone } from "./lib/phone.js";
 import { recallEligibility, shouldCancelScheduledReply } from "./lib/recall.js";
 import {
+  DEFAULT_QUIET,
   dailyKey,
   decideForm,
   applyProactiveInterval,
+  askBudgetSpent,
   dueNow,
   gateCheck,
   hasUnseenUserMessage,
   isDirectReplyToProactive,
   isRepeatedPhrasing,
+  lastUserVoiceAt,
   noteSent,
+  proactiveAnchor,
   proactiveDelayFactor,
   proactiveSilenceContext,
+  inFarewellWindow,
+  shouldSendFarewell,
+  stirredUp,
+  morningOpening,
+  WORK_ACTIVE_WINDOW_MS,
   wakeEchoFor,
   recentSceneFor,
   quietNow,
@@ -422,33 +446,9 @@ export function apply(ctx) {
     return store.getGlobalSettings().workfeedEnabled !== false;
   }
 
-  /**
-   * 拾光记装了没有：只认它摊出来的东西，两条探针能读到任一条就算装。
-   *
-   * 【隐式约定，改路径必须两边同步】今日情境的快照位置是茶话会与拾光记之间的约定：
-   * 拾光记写进自己的数据目录（plugins 目录之外），茶话会从 ctx.dataDir 往上退两层再拼
-   * `plugin-data/shiguangji/public-today.json`；探针里的 `plugins/shiguangji/manifest.json`
-   * 只是用来区分“根本没装”。哪一天谁挪了目录，两边会对不上且静默失效，改这里务必同步拾光记那边。
-   */
+  /** 拾光记当前共享快照是否可读；旧文件存在不代表 App 活跃或已获读取授权。 */
   async function shiguangjiInstalled() {
-    const home = path.dirname(path.dirname(String(ctx.dataDir ?? "")));
-    if (!home) return false;
-    const probes = [
-      path.join(home, "plugins", "shiguangji", "manifest.json"),
-      path.join(home, "plugin-data", "shiguangji", "public-today.json"),
-    ];
-    for (const file of probes) {
-      try {
-        const result = await ctx.resources.read({ kind: "local-file", path: file });
-        const text = typeof result?.content === "string"
-          ? result.content
-          : (result?.content ? Buffer.from(result.content).toString("utf8") : "");
-        if (text) return true;
-      } catch {
-        /* 换下一条探针 */
-      }
-    }
-    return false;
+    return daybookAvailable(ctx);
   }
 
   const GLOBAL_SETTING_KEYS = new Set([
@@ -494,6 +494,14 @@ export function apply(ctx) {
     // Hana 主对话近况：同样只收真布尔
     if (Object.prototype.hasOwnProperty.call(patch, "workfeedEnabled")) {
       patch.workfeedEnabled = patch.workfeedEnabled === true;
+    }
+    // 安静时间：两个 "HH:MM"；开始与结束填成同一个时刻表示整段关掉（不是填错时间）。
+    // 形状不对就当没改，别把坏值吃进去。
+    if (Object.prototype.hasOwnProperty.call(patch, "quiet")) {
+      const start = String(patch.quiet?.start ?? "").trim();
+      const end = String(patch.quiet?.end ?? "").trim();
+      if (/^\d{1,2}:\d{2}$/.test(start) && /^\d{1,2}:\d{2}$/.test(end)) patch.quiet = { start, end };
+      else delete patch.quiet;
     }
     if (Object.prototype.hasOwnProperty.call(patch, "voiceEnabled")) {
       patch.voiceEnabled = patch.voiceEnabled === true;
@@ -1755,7 +1763,9 @@ export function apply(ctx) {
   /** 关系档案：把新聊到的并进"我认识的她"。 */
   async function refreshProfile(agentId, sampleSize = 30) {
     const memory = store.readMemory(agentId);
-    const recent = conversationMessages(store.getThread(agentId).messages).slice(-sampleSize);
+    // 她没接住的主动独白不进画像素材（2026-10-06 修）：那些话只是伙伴自己在琢磨的东西，
+    // 混进去就会被写成「我们商量过的事」「她还没定」，档案一脏，后面每条消息都踩着假来处走。
+    const recent = dropUnansweredProactive(conversationMessages(store.getThread(agentId).messages)).slice(-sampleSize);
     // Hana 那边记着的「关于她的事」也带进来：那边抽出的事实和这边聊出来的印象，合起来才是一个人
     const persona = await getPersona(agentId);
     const facts = String(persona?.files?.facts ?? "");
@@ -1841,7 +1851,7 @@ export function apply(ctx) {
   }
 
   /** 把一条主动消息送进她那个窗（她不在也照发，显示未读）。 */
-  async function deliverProactive(agentId, { partnerName, topic, hobby, discovery, seed, exception, followup, wakeEcho, sceneEcho }) {
+  async function deliverProactive(agentId, { partnerName, topic, hobby, discovery, seed, exception, followup, wakeEcho, sceneEcho, kind = "proactive", activity = null, sleepStart = "", firstOfDay = false, todoNudge = "" }) {
     await loadUserName();
     const memoryText = buildMemoryBlock(store.readMemory(agentId));
     // 主动开口也得是「ta 本人」在说话：跟面对面回复用同一份人格来源。
@@ -1878,6 +1888,8 @@ export function apply(ctx) {
       } catch (error) {
         diagnostics({ event: "proactive.context.failed", agentId, error: describeError(error) });
       }
+      // 到点待办不走背景块，它有自己的位置与语气（见 compose 的 todoLead）：
+      // 背景是「她此刻在什么日子里」，这件事是「你这次为什么来找她」，两者混在一起会脱口成捎带。
     }
     let stickerText = "";
     if (!exception) {
@@ -1888,6 +1900,26 @@ export function apply(ctx) {
         diagnostics({ event: "proactive.sticker-hint.failed", agentId, error: describeError(error) });
       }
     }
+    // 电脑那边的近况：两边本来就是同一个伙伴，睡前收尾、晨间第一句、被薅起来都要靠它
+    // 才不是空口说白话。当天没有就退回最近两条，「刚刚的动静」不能被生活日边界切掉。
+    let workfeedText = "";
+    if (!exception && workfeedOn()) {
+      try {
+        const feed = store.readWorkfeed();
+        const lifeDay = dayKey(new Date());
+        workfeedText = buildWorkfeedText(feed, agentId, { lifeDay, limit: 4, userName: USER_NAME })
+          || buildWorkfeedText(feed, agentId, { lifeDay: "", limit: 2, userName: USER_NAME });
+      } catch (error) {
+        diagnostics({ event: "proactive.workfeed.failed", agentId, error: describeError(error) });
+      }
+    }
+    // 问句额度（2026-10-06）：连着几条都留了问句，这一条就别再追问，免得像采访。
+    const recentAsks = store.getThread(agentId).messages
+      .filter((row) => row.proactive && row.text)
+      .slice(-3)
+      .map((row) => row.text);
+    const askSpent = askBudgetSpent(recentAsks, { isAsk: hasOpenHook });
+
     const spec = exception
       ? nightSpec({
           partnerName,
@@ -1900,7 +1932,34 @@ export function apply(ctx) {
           correction: topic?.correction ?? "",
           currentTimeText,
         })
-      : proactiveSpec({ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, stickerText, userRhythmText: userRhythm });
+      : kind === "farewell"
+        ? farewellSpec({
+            partnerName,
+            userName: USER_NAME,
+            personaText,
+            memoryText,
+            relationNote,
+            adaptationText,
+            currentTimeText,
+            workfeedText,
+            busy: Boolean(activity?.active),
+            sleepStart,
+            stickerText,
+          })
+        : kind === "stirred"
+          ? stirredSpec({
+              partnerName,
+              userName: USER_NAME,
+              personaText,
+              memoryText,
+              relationNote,
+              adaptationText,
+              currentTimeText,
+              workfeedText,
+              sleepStart,
+              stickerText,
+            })
+          : proactiveSpec({ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, firstOfDay, askBudgetSpent: askSpent });
 
     let raw = "";
     try {
@@ -1956,6 +2015,17 @@ export function apply(ctx) {
       });
       return { ok: false, reason: "repeat-phrasing" };
     }
+    // 「求解」和「好奇」这两类种子本来带着没想通的那一头，写成完成态的结论就是跑调，
+    // 压着不发，种子留着下次（2026-10-06）。
+    if (shareableSeed && isSeedKindVoiceMismatch(text, shareableSeed.kind)) {
+      diagnostics({
+        event: "proactive.seed-voice-mismatch",
+        agentId,
+        kind: shareableSeed.kind,
+        head: text.slice(0, 40),
+      });
+      return { ok: false, reason: "seed-voice-mismatch" };
+    }
     const replyText = marker.keyword ? [text, `[表情:${marker.keyword}]`].filter(Boolean).join("\n") : text;
     const composed = await composeBubbles(agentId, replyText, {
       maxBubbles: 4,
@@ -1979,6 +2049,7 @@ export function apply(ctx) {
       bubbles,
       proactive: true,
       form: "word",
+      proactiveKind: kind,
       exception: Boolean(exception),
       topicId: topic?.id ?? null,
       discoveryId: shareableDiscovery?.id ?? null,
@@ -2010,7 +2081,7 @@ export function apply(ctx) {
       });
     }
     diagnostics({
-      event: exception ? "proactive.night.ok" : "proactive.ok",
+      event: exception ? "proactive.night.ok" : kind === "farewell" ? "proactive.farewell.ok" : kind === "stirred" ? "proactive.stirred.ok" : "proactive.ok",
       agentId,
       topic: topic?.title ?? null,
       bubbles: bubbles.length,
@@ -2023,6 +2094,43 @@ export function apply(ctx) {
       messageId: stored.id,
       interest: shareableHobby ? { id: shareableHobby.id ?? null, name: shareableHobby.name ?? null, object: shareableHobby.object ?? null } : null,
     };
+  }
+
+  /**
+   * 说过晚安又被拉起来干活。
+   *
+   * 唯一穿得过睡眠门的一条：它本来就发生在睡着之后。
+   * 日上限、全局间隔、关系策略照旧管着，所以不会被闹成刷屏。
+   */
+  async function deliverStirred(agentId, { partnerName, activity, sleepStart = "" }) {
+    const stamp = threadStamp(agentId);
+    return withAutonomousLane(agentId, () => withGlobalAutonomousLane(async () => {
+      if (hasReplyInFlight(agentId) || threadStamp(agentId) !== stamp) return { ok: false, reason: "reply-in-flight" };
+      const finalGate = autonomousGateNow(agentId, "proactive", { ignoreSleep: true });
+      if (!finalGate.ok) return { ok: false, reason: finalGate.reason, gateBlocked: true };
+      const delivered = await deliverProactive(agentId, {
+        partnerName,
+        kind: "stirred",
+        activity,
+        sleepStart,
+      });
+      if (!delivered.ok) return delivered;
+      const sentAt = new Date();
+      const before = store.getProactiveState(agentId);
+      const noted = noteSent(
+        { state: before, globalState: store.getGlobalRuntime(), now: sentAt },
+        { exception: false, quiet: store.getGlobalSettings().quiet },
+      );
+      const night = before.farewellNight ?? null;
+      store.setProactiveState(agentId, {
+        ...noted.state,
+        stirNight: night,
+        stirCount: before.stirNight === night ? Number(before.stirCount ?? 0) + 1 : 1,
+        lastStirAt: sentAt.toISOString(),
+      });
+      store.setGlobalRuntime(noted.globalState);
+      return { ok: true, sentAt };
+    }));
   }
 
   /**
@@ -2430,6 +2538,44 @@ export function apply(ctx) {
     return true;
   }
 
+  /**
+   * 拾光记那边今天过了钟点、还没了结的待办：这件事该由谁来说。
+   *
+   * 只挑一位：关系走得最远、最近也还在聊的那个。有来处才开口，不是随机找话说。
+   * 同一批待办一天只说一次；她没开「今日情境」就一个字都不读。
+   * 读不到、版本对不上、一个人都够不着，一律返回 null——那就按原本的节拍走。
+   */
+  async function resolveTodoNudge(partners, now) {
+    if (!daybookOn()) return null;
+    let snapshot = null;
+    try {
+      snapshot = await readDaybook(ctx);
+    } catch (error) {
+      diagnostics({ event: "todo-nudge.read.failed", error: describeError(error) });
+      return null;
+    }
+    const todos = dueTodosFromSnapshot(snapshot);
+    if (!todos.length) return null;
+    const key = nudgeKey(todos, dayKey(now));
+    if (nudgeSeen(store.getGlobalRuntime(), key)) return null;
+    const candidates = [];
+    for (const partner of partners) {
+      const agentId = partner.id;
+      if (!isSettled(agentId)) continue;
+      if (store.getPartnerSettings(agentId).proactiveEnabled === false) continue;
+      const messages = store.getThread(agentId).messages;
+      const last = Array.isArray(messages) && messages.length ? messages[messages.length - 1] : null;
+      candidates.push({
+        agentId,
+        depth: disclosureRatio(effectiveRelationship(store.getKnowing(agentId))),
+        lastAt: Date.parse(last?.at ?? "") || 0,
+      });
+    }
+    const agentId = pickTodoNudger(candidates);
+    if (!agentId) return null;
+    return { agentId, key, text: todoNudgeText(todos, { userName: USER_NAME }) };
+  }
+
   let proactiveTickPromise = null;
   async function runProactiveTick(options = {}) {
     await ensureLegacyFactsMigration();
@@ -2460,6 +2606,14 @@ export function apply(ctx) {
     /** 一轮 tick 最多自省一位，别一次叫一群模型 */
     let reviewedThisTick = false;
     let exploredThisTick = false;
+    // 拾光记那边有到点还没了结的待办时，这件事比随机节拍更该开口；谁来说先定下来。
+    let todoNudge = null;
+    try {
+      todoNudge = await resolveTodoNudge(partners, now);
+      if (todoNudge) diagnostics({ event: "todo-nudge.picked", agentId: todoNudge.agentId });
+    } catch (error) {
+      diagnostics({ event: "todo-nudge.failed", error: describeError(error) });
+    }
 
     for (const partner of partners) {
       const agentId = partner.id;
@@ -2527,7 +2681,9 @@ export function apply(ctx) {
       }
       state = store.getProactiveState(agentId);
       const pending = takeIntent(state, now);
-      if (!force && !dueNow(state, now) && !pending.intent) continue;
+      // 轮到 ta 说这件事时，不等随机落点
+      const todoHere = todoNudge?.agentId === agentId;
+      if (!force && !dueNow(state, now) && !pending.intent && !todoHere) continue;
 
       // 主动联系不能等用户先说话才有兴趣；到需要开口时，先确保 ta 的内在兴趣已长出来。
       await maybeTendHobbies(agentId).catch((error) => {
@@ -2545,32 +2701,83 @@ export function apply(ctx) {
       // 已读未回先处理关系反应。
       const knowing = store.getKnowing(agentId);
       const seedBook = readSeedBook(state.topicSeeds, now);
+      // 话题温度（2026-10-06）：按方向记她接不接。冷两次就歇久、冷三次不再主动提，
+      // 她说「不想聊这个」直接按到底；她自己提起过的方向，那件事之前的旧账一笔勾销。
+      const lastUserText = [...thread.messages]
+        .reverse()
+        .find((row) => row?.role === "user" && String(row.text ?? "").trim())?.text ?? "";
+      const revived = reviveMentioned(readMoodBook(state.motifMood), lastUserText, { now });
+      const mooded = recomputeMood(revived.book, thread.messages, {
+        readThroughId: thread.readThroughId,
+        now,
+      });
+      const moodBook = mooded.book;
+      if (mooded.changed || revived.revived.length) {
+        store.setProactiveState(agentId, { motifMood: moodBook });
+        state = store.getProactiveState(agentId);
+        diagnostics({
+          event: "proactive.mood",
+          agentId,
+          revived: revived.revived,
+          topics: moodSummary(moodBook),
+        });
+      }
+      // 谁能出题看她的真实反应（2026-10-06）：被接住过两次以上的方向放出来出题，
+      // 被按下去的收回。以前出题权只看出生带没带，她接得最欢的那些全锁在抽屉里。
+      {
+        const list = store.getKnowing(agentId).hobbies;
+        const promoted = Object.entries(moodBook.topics)
+          .filter(([, topic]) => topic.warm >= OFFER_WARM_FLOOR && !topic.mutedAt)
+          .map(([id]) => id)
+          .filter((id) => !list.some((row) => row.id === id && (row.layer === "motif" || row.offers === true)));
+        const demoted = Object.entries(moodBook.topics)
+          .filter(([, topic]) => topic.mutedAt)
+          .map(([id]) => id)
+          .filter((id) => list.some((row) => row.id === id && row.layer !== "motif" && row.offers === true));
+        if (promoted.length || demoted.length) {
+          let hobbies = list;
+          if (promoted.length) hobbies = setHobbyOffers(hobbies, promoted, true, now);
+          if (demoted.length) hobbies = setHobbyOffers(hobbies, demoted, false, now);
+          store.saveKnowing(agentId, { ...store.getKnowing(agentId), hobbies });
+          diagnostics({ event: "knowing.offers", agentId, promoted, demoted });
+        }
+      }
       const candidateSeed = followup?.read
         ? null
-        : pickSeed(seedBook, { now, recentMotifIds: recentSeedMotifs(seedBook) });
+        : pickSeed(seedBook, {
+            now,
+            recentMotifIds: recentSeedMotifs(seedBook),
+            mutedIds: mutedMotifIds(moodBook),
+            perMotifCooldown: cooldownByMotif(moodBook),
+          });
       const candidateDiscovery = followup?.read || candidateSeed
         ? null
         : nextDiscovery(state.interestLearning, now);
       const topic = null;
+      // 电脑那边此刻的动静：两边本来就是同一个伙伴，晨间第一句、睡前收尾、被薅起来都靠它落地。
+      const workActivity = workfeedOn()
+        ? recentWorkActivity(store.readWorkfeed(), agentId, { now: now.getTime(), withinMs: WORK_ACTIVE_WINDOW_MS })
+        : { active: false, at: null };
+      // 今天还没发过主动消息：第一句可以只是打个招呼
+      const sentToday = state.sentToday?.day === dailyKey(now) ? Number(state.sentToday.count ?? 0) : 0;
+      const firstOfDay = sentToday === 0;
+      const sleepToday = sleepWindows(settings.sleep, now);
+      const sleepStartClock = sleepToday.find((w) => w.kind === "main")?.start ?? "";
+      // 快到 ta 自己的睡点（或安静时间要关门前）：这一晚的睡前收尾
+      const farewellPlan = inFarewellWindow(now, sleepToday, {
+        extraAnchor: (globalSettings?.quiet ?? DEFAULT_QUIET)?.start ?? DEFAULT_QUIET.start,
+      });
+      const farewellSend = Boolean(farewellPlan.due) && !followup?.read && shouldSendFarewell(state, farewellPlan.night);
       const contactPolicy = contactPolicyFor(agentId, now, "proactive");
       const gate = gateCheck({
         now,
         // ta今天的睡觉窗口先算好再递进去：主睡加可能的午觉，而且每天时长还会浮动
-        settings: { ...settings, sleep: sleepWindows(settings.sleep, now) },
+        settings: { ...settings, sleep: sleepToday },
         globalSettings,
         state,
         globalState: store.getGlobalRuntime(),
         relationalPolicy: contactPolicy,
       });
-      // 夜间例外走独立留言提示词，不带兴趣发现，也不能把发现误记为已分享。
-      const discovery = discoveryForProactiveMessage(candidateDiscovery, { exception: gate.exception });
-      const seed = gate.exception ? null : candidateSeed;
-      const hobby = seed
-        ? knowing.hobbies.find((row) => row.id === seed.motifId) ?? { id: seed.motifId, name: seed.motifName }
-        : discovery
-          ? knowing.hobbies.find((row) => row.id === discovery.interestId) ?? { id: discovery.interestId, name: discovery.interestName }
-          : null;
-
       const wakeEcho = gate.ok && !gate.exception && !followup?.read
         ? wakeEchoFor(thread.messages, { now: now.getTime(), consumedId: settings.wakeEcho?.sourceId ?? null })
         : null;
@@ -2578,7 +2785,53 @@ export function apply(ctx) {
         ? recentSceneFor(thread.messages, { now: now.getTime() })
         : null;
 
+      // 锚点门（2026-10-06）：内容型开口得先有一件跟她有关的真凭据——到点的待办、
+      // 刚聊过的一轮、她这几小时说过话、电脑那边刚动过。一件都没有时，宁可不发内容，
+      // 种子留着下次；免得又出一条写得漂漂亮亮、她却插不进嘴的自说自话。
+      const anchor = proactiveAnchor({
+        sceneEcho,
+        todoNudge: todoHere ? todoNudge.text : "",
+        wakeEcho,
+        workActive: workActivity.active,
+        lastUserAt: lastUserVoiceAt(thread.messages),
+        now: now.getTime(),
+      });
+      if (!anchor.ok && candidateSeed) {
+        diagnostics({ event: "proactive.no-anchor", agentId, motif: candidateSeed.motifName ?? null });
+      }
+      // 夜间例外走独立留言提示词，不带兴趣发现，也不能把发现误记为已分享。
+      const discovery = gate.exception || !anchor.ok
+        ? null
+        : discoveryForProactiveMessage(candidateDiscovery, { exception: gate.exception });
+      const seed = gate.exception || !anchor.ok ? null : candidateSeed;
+      const hobby = seed
+        ? knowing.hobbies.find((row) => row.id === seed.motifId) ?? { id: seed.motifId, name: seed.motifName }
+        : discovery
+          ? knowing.hobbies.find((row) => row.id === discovery.interestId) ?? { id: discovery.interestId, name: discovery.interestName }
+          : null;
+
       if (!gate.ok) {
+        // 说好的晚安之后，她又在电脑那边忙起来：这一晚的账。
+        // 顺序是先看这件事，再当一个普通的「被门拦住」；它本来就发生在睡着之后，不穿过去就永远发不出来。
+        if (gate.reason === "quiet" && workfeedOn() && stirredUp({
+          state,
+          night: state.farewellNight ?? null,
+          workAt: workActivity.at,
+          farewellAt: state.farewellAt ?? null,
+          now,
+        })) {
+          const stirred = await deliverStirred(agentId, {
+            partnerName: partner.name,
+            activity: workActivity,
+            sleepStart: sleepStartClock,
+          });
+          if (stirred.ok) {
+            store.setProactiveState(agentId, { nextDueAt: nextDueFor(agentId, settings, stirred.sentAt, globalSettings) });
+            report.push({ agentId, action: "stirred" });
+            continue;
+          }
+          diagnostics({ event: "proactive.stirred.failed", agentId, reason: stirred.reason });
+        }
         recordWatch(agentId, { action: "blocked", reason: gate.reason, topic: discovery?.focus ?? null });
         // 时机不合适时保留原暂存意图；探索发现本身仍留在短期账本里。
         if (pending.intent) {
@@ -2592,11 +2845,18 @@ export function apply(ctx) {
       }
 
       // 手上没有能聊的东西时，不从旧话题或静态兴趣里硬凑内容消息。
-      const form = wakeEcho || followup?.read
+      // 两个例外：今晚的睡前收尾必须发；今天第一句可以只是打个招呼（要不要这份把握看档位与性子）。
+      const morningSend = firstOfDay && !farewellSend && morningOpening({ tier: settings.tier, workActive: workActivity.active });
+      const form = todoHere
+        ? "word"
+        : wakeEcho || followup?.read || farewellSend
         ? "word"
         : seed || discovery
           ? "word"
-          : decideForm({ topic: null, selfSource: false, tier: settings.tier }).form;
+          : morningSend
+            ? "word"
+            : decideForm({ topic: null, selfSource: false, tier: settings.tier }).form;
+      const sendKind = farewellSend && !todoHere ? "farewell" : "proactive";
 
       if (form === "poke") {
         // 这个动作不需要由头——ta天然就是"我就是闲着"
@@ -2645,6 +2905,9 @@ export function apply(ctx) {
         if (hasReplyInFlight(agentId) || threadStamp(agentId) !== stamp) return { ok: false, reason: "reply-in-flight" };
         const finalGate = autonomousGateNow(agentId, "proactive");
         if (!finalGate.ok) return { ok: false, reason: finalGate.reason, gateBlocked: true };
+        // 这一轮到底有没有把那段由头带出去：只有真带了才记「今天说过了」，
+        // 否则被 farewell 或夜间例外占掉的那一轮会把待办默默标记为已说过，今天不再来。
+        const carriedTodo = todoHere && sendKind === "proactive" && !Boolean(finalGate.exception);
         const delivered = await deliverProactive(agentId, {
           partnerName: partner.name,
           topic,
@@ -2655,6 +2918,11 @@ export function apply(ctx) {
           followup,
           wakeEcho,
           sceneEcho,
+          kind: sendKind,
+          activity: workActivity,
+          sleepStart: sleepStartClock,
+          firstOfDay,
+          todoNudge: carriedTodo ? todoNudge.text : "",
         });
         if (!delivered.ok) return delivered;
         const sentAt = new Date();
@@ -2664,7 +2932,7 @@ export function apply(ctx) {
         );
         store.setProactiveState(agentId, noted.state);
         store.setGlobalRuntime(noted.globalState);
-        return { ...delivered, sentAt };
+        return { ...delivered, sentAt, carriedTodo };
       }));
       if (!sent.ok) {
         recordWatch(agentId, { action: sent.gateBlocked ? "blocked" : "failed", reason: sent.reason, topic: discovery?.focus ?? null });
@@ -2675,6 +2943,14 @@ export function apply(ctx) {
           nextDueAt: nextDueFor(agentId, settings, retryAt, globalSettings),
           staged,
         });
+        // 睡前收尾没生成出来：记一笔尝试，一晚最多试几次，免得整晚反复叫模型。
+        if (sendKind === "farewell" && farewellPlan.night) {
+          const st = store.getProactiveState(agentId);
+          store.setProactiveState(agentId, {
+            farewellFailNight: farewellPlan.night,
+            farewellFailCount: st.farewellFailNight === farewellPlan.night ? Number(st.farewellFailCount ?? 0) + 1 : 1,
+          });
+        }
         report.push({ agentId, action: sent.gateBlocked ? "blocked" : "failed", reason: sent.reason });
         continue;
       }
@@ -2686,10 +2962,23 @@ export function apply(ctx) {
           ? { ...sent.interest, at: now.toISOString() }
           : store.getProactiveState(agentId).lastInterestUse ?? null,
       });
+      // 这件事说过了，今天就不再提：指纹变了（她又添了新的到点待办）自然会再来一次。
+      if (todoHere && sent.carriedTodo) {
+        store.setGlobalRuntime({ todoNudge: { key: todoNudge.key, at: now.toISOString(), agentId } });
+      }
       if (wakeEcho) {
         store.setPartnerSettings(agentId, { wakeEcho: { sourceId: wakeEcho.sourceId, consumedAt: now.toISOString() } });
       }
-      report.push({ agentId, action: "sent", topic: discovery?.focus ?? null, wakeEcho: Boolean(wakeEcho), exception: Boolean(gate.exception) });
+      // 说过晚安就记下这一晚，之后她又在电脑那边忙时，才知道该生气。
+      if (sendKind === "farewell") {
+        store.setProactiveState(agentId, {
+          farewellNight: farewellPlan.night,
+          farewellAt: sent.sentAt.toISOString(),
+          farewellFailNight: null,
+          farewellFailCount: 0,
+        });
+      }
+      report.push({ agentId, action: "sent", topic: discovery?.focus ?? null, wakeEcho: Boolean(wakeEcho), exception: Boolean(gate.exception), kind: sendKind });
     }
 
     // 顺手把还没写过那句的伙伴补上（只有一个动作，一轮最多暖 3 位）。
@@ -2987,7 +3276,7 @@ export function apply(ctx) {
   const HOBBY_SEED_RETRY_MS = 6 * 60 * 60 * 1000;
   const DRAFT_RETRY_MS = 6 * 60 * 60 * 1000;
   /** 话题种子：库存低于这个数就再去长一批 */
-  const SEED_LOW_WATER = 12;
+  const SEED_LOW_WATER = 20;
   /** 两次长种子之间至少隔这么久，别变成天天刷模型 */
   const SEED_GROW_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 
@@ -3132,11 +3421,19 @@ export function apply(ctx) {
         return { motif: 0, reason: "no-material" };
       }
       const takenObjects = await collectTakenSpots(agentId);
+      // 相处素材（2026-10-06）：母题以前只从人设里长，跟对方无关；
+      // 把最近真实聊过的东西一并递进去，长出来的母题才带她的影子。
+      const sharedMaterial = renderForSummary(
+        conversationMessages(store.getThread(agentId).messages).filter((row) => row.role === "user").slice(-40),
+        USER_NAME,
+        partnerName,
+      );
       const spec = motifHobbySpec({
         partnerName,
         personalityText,
         takenObjects,
         existing: knowing.hobbies,
+        sharedMaterial,
       });
       const raw = await askCheap(spec.systemPrompt, spec.userText, 420);
       const rows = validateNativeHobbies(parseNativeHobbyReply(raw), { userName: USER_NAME, takenObjects, layer: "motif" });
@@ -3211,14 +3508,22 @@ export function apply(ctx) {
    */
   async function growSeeds(agentId, { now = new Date() } = {}) {
     const knowing = store.getKnowing(agentId);
-    const motifs = motifsOf(knowing.hobbies);
+    // 出题方向 = 母题 + 被对方接住过的癖好（2026-10-06）。
+    // 以前只取母题，而母题全是出生自带的那几个，种子就永远只在那几个方向里堆。
+    const motifs = topicSourcesOf(knowing.hobbies);
     if (!motifs.length) return { added: 0, reason: "no-motif" };
     const state = store.getProactiveState(agentId);
     const book = readSeedBook(state.topicSeeds, now);
-    if (usableSeeds(book, { now }).length >= SEED_LOW_WATER) return { added: 0, reason: "enough" };
+    const usable = usableSeeds(book, { now });
+    // 「后备库充足」（2026-10-06）：光看总数不够——库存满着、可出题的方向却有的是空仓，
+    // 一旦那个方向被挑中就没货。所以只要还有空仓的方向，就继续补。
+    const mutedIds = new Set(mutedMotifIds(readMoodBook(state.motifMood)));
+    const live = motifs.filter((row) => !mutedIds.has(String(row.id)));
+    const starved = live.filter((row) => !usable.some((item) => item.motifId === row.id));
+    if (usable.length >= SEED_LOW_WATER && !starved.length) return { added: 0, reason: "enough" };
     const last = Date.parse(book.lastGrowAt ?? "") || 0;
     if (last && now.getTime() - last < SEED_GROW_COOLDOWN_MS) return { added: 0, reason: "cooling" };
-    const motif = pickMotifForSeeds(motifs, book);
+    const motif = pickMotifForSeeds(motifs, book, { mutedIds });
     if (!motif) return { added: 0, reason: "no-motif" };
     const spec = seedSpec({ motif, existing: book, now });
     const raw = await askCheap(spec.systemPrompt, spec.userText, 420);
@@ -3515,9 +3820,33 @@ export function apply(ctx) {
     const daybookTopics = daybookOn()
       ? daybookQueryTopics(latestUser?.text, { previousAssistantText })
       : [];
+    // 她这句要是“我做完了”，先把那条待办划掉，再决定这一轮怎么回。
+    // 顺序很重要：账落完了，ta 才知道自己刚才那句已经算数了。
+    let daybookSnapshot = null;
+    if (daybookOn()) {
+      const read = await readDaybookVerbose(ctx);
+      daybookSnapshot = read.snapshot;
+      // 读不到时把原因记下来：静默 null 会让人对着一个没反应的待办猜半天。
+      if (!daybookSnapshot) diagnostics?.({ event: "daybook.read.unavailable", agentId, reason: read.reason });
+    }
+    let todoDoneText = "";
     try {
-      const snapshot = daybookOn() ? await readDaybook(ctx) : null;
-      const built = buildDaybookText(snapshot, agentId, {
+      // 落笔改由她点确认。这一层只攒一条待确认，账本一个字不动，ta 也只能说问句。
+      const pending = store.getTodoProposals();
+      const judged = proposeFromMessage({ text: latestUser?.text, snapshot: daybookSnapshot, diagnostics });
+      if (judged.proposed && !hasProposal(pending, judged.todo.id)) {
+        const made = makeProposal({ todo: judged.todo, agentId, text: latestUser?.text });
+        if (made) {
+          store.setTodoProposals([...pending, made]);
+          todoDoneText = proposalAskText(judged.todo, { userName: USER_NAME });
+          diagnostics?.({ event: "todo-propose.stored", agentId, title: made.title });
+        }
+      }
+    } catch (error) {
+      diagnostics?.({ event: "todo-propose.failed", agentId, error: describeError(error) });
+    }
+    try {
+      const built = buildDaybookText(daybookSnapshot, agentId, {
         userName: USER_NAME,
         ...(daybookTopics.length ? { topics: daybookTopics } : {}),
       });
@@ -3596,6 +3925,7 @@ export function apply(ctx) {
       stickerText,
       timeText,
       daybookText,
+      todoDoneText,
       workfeedText,
       searchText: chatSearch.context,
       discoveryText: heldDiscovery ? heldDiscoveryText(heldDiscovery) : "",
@@ -3972,7 +4302,7 @@ export function apply(ctx) {
     });
   }
 
-  function autonomousGateNow(agentId, kind = "proactive") {
+  function autonomousGateNow(agentId, kind = "proactive", { ignoreSleep = false } = {}) {
     const now = new Date();
     const settings = store.getPartnerSettings(agentId);
     const globalSettings = store.getGlobalSettings();
@@ -3985,6 +4315,7 @@ export function apply(ctx) {
         state: store.getProactiveState(agentId),
         globalState: store.getGlobalRuntime(),
         relationalPolicy: contactPolicy,
+        ignoreSleep,
       }),
       contactPolicy,
       now,
@@ -5507,6 +5838,54 @@ export function apply(ctx) {
         store.markRead(agentId, { throughId: messageId });
         diagnostics({ event: "thread.feed", agentId, messageId, emoji, count: nextFeed.items.find((row) => row.emoji === emoji)?.count ?? 1 });
         return c.json({ ok: true, message: updated, feed: nextFeed });
+      });
+
+      // ── 待办确认：她说「我做完了」攒下来的窗，点一下才真的落笔 ──
+      app.get("/todos/proposals", (c) => {
+        try {
+          return c.json({ ok: true, items: store.getTodoProposals() });
+        } catch (error) {
+          diagnostics({ event: "todo-proposals.read.failed", error: describeError(error) });
+          return c.json({ ok: false, error: { code: "PROPOSALS_READ_FAILED", message: "待确认的窗没能读出来" } }, 500);
+        }
+      });
+
+      app.post("/todos/proposals/:key/confirm", async (c) => {
+        const key = String(c.req.param("key") ?? "").trim();
+        try {
+          const list = store.getTodoProposals();
+          const found = list.find((row) => row.key === key);
+          if (!found) {
+            return c.json({ ok: false, error: { code: "PROPOSAL_GONE", message: "这条确认已经不在了（过了一天，或者你刚处理过）" } }, 404);
+          }
+          const result = await confirmProposal(ctx, found, { diagnostics });
+          if (!result.ok) {
+            // 没划掉就不假装成功：窗留在原地让她再点一次，硬规则里那条。
+            return c.json({
+              ok: false,
+              reason: result.reason,
+              error: { code: "CONFIRM_FAILED", message: "这次没记上，窗还给你留着，再点一次试试" },
+            }, 200);
+          }
+          store.setTodoProposals(list.filter((row) => row.key !== key));
+          return c.json({ ok: true, todo: result.todo, alreadyDone: result.alreadyDone, items: store.getTodoProposals() });
+        } catch (error) {
+          diagnostics({ event: "todo-proposals.confirm.failed", key, error: describeError(error) });
+          return c.json({ ok: false, error: { code: "CONFIRM_FAILED", message: "这次没记上，窗还给你留着，再点一次试试" } }, 200);
+        }
+      });
+
+      app.post("/todos/proposals/:key/dismiss", (c) => {
+        const key = String(c.req.param("key") ?? "").trim();
+        try {
+          const list = store.getTodoProposals();
+          const kept = list.filter((row) => row.key !== key);
+          // 「先不用」不是出错：她不想记，那就真的不记，窗收走，账本照旧。
+          return c.json({ ok: true, items: key ? store.setTodoProposals(kept) : kept });
+        } catch (error) {
+          diagnostics({ event: "todo-proposals.dismiss.failed", key, error: describeError(error) });
+          return c.json({ ok: false, error: { code: "DISMISS_FAILED", message: "这条窗暂时收不掉，再点一次" } }, 500);
+        }
       });
 
       app.get("/favorites", (c) => {

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   buildMemoryBlock,
   conversationMessages,
+  dropUnansweredProactive,
   isConversationMessage,
   makeArchiveEntry,
   planRollup,
@@ -11,9 +12,41 @@ import {
   recentLedger,
   renderForSummary,
   splitForContext,
+  unansweredProactiveIds,
 } from "../lib/memory.js";
 
 const msg = (role, text, at = "2026-09-12T01:00:00.000Z") => ({ role, text, at });
+
+test("没人接的主动独白不进画像素材", () => {
+  const rows = [
+    { id: "u1", role: "user", text: "浇完啦" },
+    { id: "a1", role: "assistant", text: "要得" },
+    { id: "pa1", role: "assistant", text: "我排半日路线还是偏原路折返那条", proactive: true },
+    { id: "pa2", role: "assistant", text: "我刚在想窄巷掉头的事", proactive: true },
+  ];
+  assert.deepEqual([...unansweredProactiveIds(rows)], ["pa1", "pa2"]);
+  assert.deepEqual(dropUnansweredProactive(rows).map((row) => row.id), ["u1", "a1"]);
+});
+
+test("她回过一句的主动消息留着，那是真聊过的", () => {
+  const rows = [
+    { id: "pa1", role: "assistant", text: "三点该浇水了", proactive: true },
+    { id: "u1", role: "user", text: "浇完啦" },
+    { id: "a1", role: "assistant", text: "要得" },
+    { id: "pa2", role: "assistant", text: "我又想起阳台换盆的事", proactive: true },
+  ];
+  assert.deepEqual([...unansweredProactiveIds(rows)], ["pa2"]);
+  assert.deepEqual(dropUnansweredProactive(rows).map((row) => row.id), ["pa1", "u1", "a1"]);
+});
+
+test("没带 id 的老消息也能按位置认出来", () => {
+  const rows = [
+    { role: "user", text: "在的" },
+    { role: "assistant", text: "自言自语", proactive: true },
+  ];
+  assert.equal(dropUnansweredProactive(rows).length, 1);
+  assert.equal(dropUnansweredProactive(rows)[0].role, "user");
+});
 
 function thread(n) {
   return Array.from({ length: n }, (_, i) => msg(i % 2 ? "assistant" : "user", `第${i}句`));
