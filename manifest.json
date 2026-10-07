@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "chahuahui",
   "name": "茶话会",
-  "version": "0.7.497",
+  "version": "0.7.500",
   "entry": "index.js",
   "description": "茶话会：像 QQ 一样跟伙伴闲聊。主对话框面对面谈正事，这里围炉聊八卦。",
   "icon": "assets/icon.png",
@@ -53,6 +53,16 @@
         },
         "cardForm": "flush",
         "titlebar": "solid"
+      },
+      {
+        "id": "canvas",
+        "title": "茶话会·并排",
+        "description": "跟主对话框并排用的茶话会小卡，同一份聊天账。",
+        "face": {
+          "image": "assets/icon.png"
+        },
+        "route": "/panel.html",
+        "cardForm": "edge-to-edge"
       }
     ]
   }
