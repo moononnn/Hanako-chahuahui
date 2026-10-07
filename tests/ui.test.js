@@ -1245,6 +1245,24 @@ test("伙伴列表只保留茶话会自己的展板，不注册 Hana 左侧功�
   assert.doesNotMatch(panelCss, /data-surface-mode="page"/, "任何挂载形态都保留茶话会自己的伙伴展板");
 });
 
+test("茶话会额外贡献一张画布小卡，跟主对话框并排用", () => {
+  const page = manifest.contributes.cards.find((row) => row.id === "panel");
+  const canvas = manifest.contributes.cards.find((row) => row.id === "canvas");
+  assert.ok(canvas, "要有一张能拖到画布上的普通卡");
+  assert.equal(page.realization, "page", "整页那张不动，还是独占一整页");
+  assert.equal(page.siteNavEntry, true, "整页那张照旧进导航");
+  assert.equal(canvas.route, "/panel.html", "两张卡共用同一份聊天账和同一个页面");
+  assert.equal(canvas.realization, undefined, "画布卡不声明整页（缺省就是画布卡）");
+  assert.equal(typeof canvas.face?.image, "string", "每张卡都得有封面");
+  assert.ok(fs.existsSync(new URL(`../ui/${canvas.face.image}`, import.meta.url)), "封面文件要真的在 ui/ 下");
+  assert.equal(canvas.siteNavEntry, undefined, "画布卡不占整页导航位");
+
+  assert.match(panel, /const HOST_SLOT = \(\(\) => \{[\s\S]{0,220}?hana\.lifecycle\?\.getSnapshot\?\.\(\)\.slot/, "页面要认宿主把自己放在整页还是画布卡上");
+  assert.match(panel, /const FOLD_KEY_CANVAS = "chahuahui\.listCollapsed\.canvas"/, "画布卡用自己那份折叠偏好");
+  assert.match(panel, /const foldStorageKey = \(\) => \(isCanvasSlot\(\) \? FOLD_KEY_CANVAS : FOLD_KEY\)/, "两份页面各记各的收/展，别互相顶掉");
+  assert.match(panel, /el\.shell\.dataset\.slot = HOST_SLOT/, "外壳上标出形态，样式要按形态分开时认这个");
+});
+
 test("关系破例只在真实成功提交点落账，并使用稳定幂等键", () => {
   assert.match(app, /id: `sleep\.wake\|\$\{triggerMessageId\}`/);
   assert.match(app, /id: `voice\.frequency\|\$\{stored\.id\}`/);

@@ -378,9 +378,18 @@
      * 手动那笔只在她当时那一档宽度里算数，跨过档位就还给自动，不然一次点击会按着窄窗不让收。
      */
     const FOLD_KEY = "chahuahui.listCollapsed";
+    /** 画布小卡跟整页是两份独立的浏览器页面，折叠偏好各记各的，
+        免得一张自动收起把另一张她手动展开的展板顶掉。 */
+    const FOLD_KEY_CANVAS = "chahuahui.listCollapsed.canvas";
     const FOLD_AUTO_WIDTH = 820;
     /** 窄到这个份上展板就浮到聊天区上（跟 CSS 里那条断点对齐），选完伙伴自己收 */
     const NARROW_WIDTH = 600;
+    /** 宿主把这一页放在哪儿：page = 独占整页，card = 画布上的普通小卡。
+        认不准就当整页走，跟从前一样。 */
+    const HOST_SLOT = (() => {
+      try { return hana.lifecycle?.getSnapshot?.().slot || "page"; } catch { return "page"; }
+    })();
+    const isCanvasSlot = () => HOST_SLOT === "card" || HOST_SLOT === "widget";
     /** 她手动点的收/展；null = 没点过，跟着当前布局的自动规则走 */
     let foldManual = null;
     /** 上一回的自动判断，用来认出「跨档了」 */
@@ -388,7 +397,7 @@
 
     const autoFolds = () => window.innerWidth < FOLD_AUTO_WIDTH;
     const isNarrow = () => window.innerWidth < NARROW_WIDTH;
-    const foldStorageKey = () => FOLD_KEY;
+    const foldStorageKey = () => (isCanvasSlot() ? FOLD_KEY_CANVAS : FOLD_KEY);
 
     function readFoldPreference() {
       let stored = null;
@@ -400,6 +409,7 @@
     function applyFolded(collapsed, { persist = true } = {}) {
       const fold = Boolean(collapsed);
       el.shell.classList.toggle("list-collapsed", fold);
+      el.shell.dataset.slot = HOST_SLOT;
       el.unfold.hidden = !fold;
       if (el.emptyTip?.isConnected) {
         el.emptyTip.innerHTML = fold
