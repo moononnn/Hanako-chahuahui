@@ -224,10 +224,53 @@ test("路径拼接：快照里的相对路径落在表情包数据目录下，�
   const home = "C:\\Users\\x\\.hanako";
   assert.equal(
     stickerAbsolutePath(home, "stickers/1.jpg"),
-    `${home}\\plugin-data\\biaoqingbao\\stickers\\1.jpg`,
+    `${home}\\app-data\\biaoqingbao-app\\stickers\\1.jpg`,
+    "不传根时按第一优先（应用版）拼",
   );
-  assert.equal(stickerAbsolutePath(home, "../../secrets.txt"), `${home}\\plugin-data\\biaoqingbao\\secrets.txt`);
+  assert.equal(
+    stickerAbsolutePath(home, "stickers/1.jpg", { dir: "plugin-data", id: "biaoqingbao" }),
+    `${home}\\plugin-data\\biaoqingbao\\stickers\\1.jpg`,
+    "显式给旧插件版的根时按旧根拼",
+  );
+  assert.equal(
+    stickerAbsolutePath(home, "../../secrets.txt"),
+    `${home}\\app-data\\biaoqingbao-app\\secrets.txt`,
+    "穿越段被吃掉，不许爬到数据根外面",
+  );
   assert.equal(stickerAbsolutePath(home, ""), "");
+});
+
+test("两代共存：先看应用版，读不到才回退旧插件版", async () => {
+  // fakeCtx 的 dataDir 是 C:\hana\app-data\chahuahui，往上推两层就是 C:\hana
+  const home = "C:\\hana";
+  const appIndex = `${home}\\app-data\\biaoqingbao-app\\public-index.json`;
+  const oldIndex = `${home}\\plugin-data\\biaoqingbao\\public-index.json`;
+
+  // 两代都装着：以应用版为准，不该再去敲旧插件版
+  __clearCatalogCache();
+  const seen = [];
+  const both = fakeCtx(async (req) => {
+    seen.push(req.path);
+    return { content: JSON.stringify(req.path === appIndex ? { ...INDEX, stickerCount: 99 } : INDEX) };
+  });
+  const preferNew = await readCatalogWithReason(both, { now: 0 });
+  assert.equal(preferNew.reason, "ok");
+  assert.equal(preferNew.index.stickerCount, 99, "两份都在时读应用版那份");
+  assert.deepEqual(seen, [appIndex], "应用版读到了就不去敲旧插件版");
+
+  // 只装了旧插件版：回退
+  __clearCatalogCache();
+  const requests = [];
+  const onlyOld = fakeCtx(async (req) => {
+    requests.push(req.path);
+    if (req.path === appIndex) throw new Error("ERR_ACCESS_DENIED");
+    return { content: JSON.stringify(INDEX) };
+  });
+  const fallback = await readCatalogWithReason(onlyOld, { now: 0 });
+  assert.equal(fallback.reason, "ok");
+  assert.equal(fallback.index.stickers.length, 4, "只装旧插件版时照样能读到");
+  assert.deepEqual(requests, [appIndex, oldIndex]);
+  __clearCatalogCache();
 });
 
 const LOOSE_INDEX = {
