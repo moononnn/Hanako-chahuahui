@@ -402,7 +402,7 @@ test("有新探索发现时才从长期兴趣生成内容话题，静态兴趣�
   assert.match(withSeed.userText, /你自己的角度：我认死牛油/);
   assert.match(withSeed.userText, /立场摆出来/);
   assert.doesNotMatch(withSeed.userText, /没有可用的种子或新发现/);
-  assert.match(withSeed.systemPrompt, /能反驳你、能说自己的经验/);
+  assert.match(withSeed.systemPrompt, /允许轻分享/);
 
   const spec = proactiveSpec({
     partnerName: "小花",
@@ -456,7 +456,7 @@ test("主动分享要求兴趣根源、新发现和松弛表达，不固定套�
   assert.match(spec.systemPrompt, /万能问句开场/);
   assert.match(spec.systemPrompt, /不必暗示她马上回复/);
   assert.match(spec.systemPrompt, /日常聊天里用‘我’指代自己/);
-  assert.match(spec.systemPrompt, /这道筛子在心里，不在嘴上/);
+  assert.match(spec.systemPrompt, /不用播报素材来源.*理解这句话所需的场景/);
   assert.doesNotMatch(spec.systemPrompt, /闺闺，我刚刷到|蓝灰色纸胶带贴在米白页/);
 });
 

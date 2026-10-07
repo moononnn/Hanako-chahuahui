@@ -153,6 +153,7 @@ import {
   seedSpec,
   usableSeeds,
 } from "./lib/topic-seeds.js";
+import { needsClarityReview, reviewProactiveClarity, persistClarityRejection } from "./lib/proactive-clarity.js";
 import {
   OFFER_WARM_FLOOR,
   cooldownByMotif,
@@ -1860,8 +1861,11 @@ export function apply(ctx) {
     // 分享版里没写过人设的伙伴，至少把名字锚死。
     const persona = await getPersona(agentId);
     const personaText = renderPersona(persona, { partnerName, userName: USER_NAME, nameFallback: true });
-    const shareableDiscovery = discoveryForProactiveMessage(discovery, { exception });
-    const shareableSeed = exception ? null : seed ?? null;
+    // 问候、回声和提醒没有使用兴趣素材：不注入、不核查，也不消耗候选库存。
+    const interestContent = !exception && kind === "proactive" && !String(todoNudge ?? "").trim()
+      && !followup?.read && !wakeEcho && !firstOfDay;
+    const shareableDiscovery = interestContent ? discoveryForProactiveMessage(discovery, { exception }) : null;
+    const shareableSeed = interestContent ? seed ?? null : null;
     const shareableHobby = shareableSeed
       ? hobby ?? { id: shareableSeed.motifId, name: shareableSeed.motifName }
       : shareableDiscovery ? hobby : null;
@@ -2025,6 +2029,24 @@ export function apply(ctx) {
         head: text.slice(0, 40),
       });
       return { ok: false, reason: "seed-voice-mismatch" };
+    }
+    if (text && needsClarityReview({ seed: shareableSeed, discovery: shareableDiscovery, exception, kind, todoNudge, followup })) {
+      const clarity = await reviewProactiveClarity({
+        text, seed: shareableSeed, discovery: shareableDiscovery,
+        sharedContext: JSON.stringify({
+          conversationMemory: memoryText,
+          samePartnerComputerConversation: workfeedText,
+          environmentFactsNotSharedExperience: contextText,
+          recentScene: sceneEcho ?? null,
+          recentMessages: store.getThread(agentId).messages.slice(-12).map(row => ({ role: row.role, text: row.text })),
+        }),
+        ask: askCheap,
+      });
+      if (!clarity.ok) {
+        persistClarityRejection(store, agentId, clarity, { seed: shareableSeed, discovery: shareableDiscovery });
+        diagnostics({ event: "proactive.clarity-skipped", agentId, seedId: shareableSeed?.id ?? null, discoveryId: shareableDiscovery?.id ?? null, reason: clarity.reason });
+        return { ok: false, reason: "clarity-skipped" };
+      }
     }
     const replyText = marker.keyword ? [text, `[表情:${marker.keyword}]`].filter(Boolean).join("\n") : text;
     const composed = await composeBubbles(agentId, replyText, {

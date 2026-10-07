@@ -876,7 +876,8 @@ test("起跑线：自动量那边的痕迹，也能自己定从哪儿算，只�
   assert.match(app, /const starved = live\.filter\(/, "还有方向空仓就继续补货，后备库才叫充足");
   assert.match(app, /const candidateDiscovery = followup\?\.read \|\| candidateSeed[\s\S]{0,90}?nextDiscovery\(state\.interestLearning, now\)/, "种子在手时不再另找时效发现");
   assert.match(app, /discoveryForProactiveMessage\(candidateDiscovery, \{ exception: gate\.exception \}\)/, "夜间例外不得绑定或消耗兴趣发现");
-  assert.match(app, /const shareableDiscovery = discoveryForProactiveMessage\(discovery, \{ exception \}\)/, "最终发送门变化为夜间例外时，也必须保护待分享发现");
+  assert.match(app, /const interestContent = !exception && kind === "proactive"/, "夜间例外不使用兴趣素材");
+  assert.match(app, /const shareableDiscovery = interestContent \? discoveryForProactiveMessage\(discovery, \{ exception \}\) : null/, "问候、回声、提醒与例外都不消耗候选发现");
   assert.match(app, /if \(shareableDiscovery\) \{[\s\S]{0,250}?markDiscoveryShared\(current\.interestLearning, shareableDiscovery\.id/, "只在实际采用兴趣分享消息后消耗发现");
   assert.match(app, /主动联系不能等用户先说话才有兴趣/);
   assert.match(app, /const personaText = renderPersona\(persona/);
@@ -1310,7 +1311,7 @@ test("等回音也过主动硬门并在真实发送后记配额，暂存意图�
   assert.match(app, /const candidateSeed = followup\?\.read[\s\S]{0,220}?pickSeed\(seedBook, \{[\s\S]{0,220}?mutedIds: mutedMotifIds\(moodBook\)/, "临门先端手上的种子，种子也就那一份");
   assert.match(app, /const candidateDiscovery = followup\?\.read \|\| candidateSeed[\s\S]{0,90}?nextDiscovery\(state\.interestLearning, now\)/, "临门只剩种子或时效发现二选一");
   assert.match(app, /discoveryForProactiveMessage\(candidateDiscovery, \{ exception: gate\.exception \}\)/, "夜间例外不得消耗兴趣发现");
-  assert.match(app, /const shareableDiscovery = discoveryForProactiveMessage\(discovery, \{ exception \}\)/, "发送阶段再次按最终例外状态过滤发现");
+  assert.match(app, /const shareableDiscovery = interestContent \? discoveryForProactiveMessage\(discovery, \{ exception \}\) : null/, "发送阶段只使用实际需要的兴趣素材");
   assert.match(app, /if \(shareableDiscovery\) \{[\s\S]{0,250}?markDiscoveryShared\(current\.interestLearning, shareableDiscovery\.id/, "例外和未采用发现都不落已分享状态");
   assert.doesNotMatch(app, /sent\.gateBlocked && readyTopic/, "用户旧话题不能再从暂存旁路进入主动话题");
 });
