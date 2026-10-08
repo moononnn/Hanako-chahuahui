@@ -1,5 +1,37 @@
 # TESTING · 茶话会
 
+## v0.7.504 · 未送出回复合入追加消息 + 已读上界 + 真实路由编排测试（2026-10-08）
+
+- 主线程独立复跑最终 33 项专项全部通过。随后通过正式 App 管理入口 reload 成功，inspect 为 host=on / agent=on；未重启宿主、未上传。运行时装载已确认，真实聊天观感仍待人工验收。
+
+- 全量 `full-final.log`：显式列出 `tests/` 下 **78 个**文件，**1291/1291**，0 失败/取消/跳过。专项 `after-supersede.log`：**33/33**（`reply-supersede.test.js` 25 条 + `reply-supersede-routes.test.js` 8 条）。
+- **真实路由编排测试**（`tests/reply-supersede-routes.test.js` + `tests/helpers/app-harness.js`）：茶话会不自带 hono，harness 补的只是代码实际用到的那点接口（`app.get/post/put/delete/use/onError`、`c.req.{json,param,query,method,path}`、`c.json`、`c.body`），然后**真调 `apply(ctx)`**、真发 `POST /turns`、真读 `GET /turns/:turnId`，断言看的是**重新打开账本文件后的内容**。假的只有宿主出口：`models.stream` 可挂起、`bus`、`network.fetch` 可挂起（语音合成走的就是它）。
+- 路由测试覆盖：① 生成中补第二条 → 只落**一条** assistant、`repliedTo` 是最新那条、送出的是重生成那份；② 回合结束后才落的话不归旧定时器盖章；③ 重新捕获目标后水位跟着走；④ **一直追到上限 → 一条过期回复都不发、最新目标排进正常排期、排期那轮正常接住**；⑤ 模型配额错误又遇追加 → 失败不被算在旧目标头上，新话被真正读到；⑥ 清空聊天 → 旧稿不写回；⑦ **语音合成在途时追加 → 旧稿连同那份语音一起放掉，最终只落一份带语音的回复，磁盘上只留最终那一个音频文件**；⑧ 删回复退回未读 → 下一轮带上界盖章补上。
+- 红色基线 `baseline-red.log`（修前）：22 条里 10 条红。已读上界的真实行为由路由测试守住；`reply-supersede.test.js` 的源码契约只守接线形状，不冒充行为验证。
+- 用户运行数据 `app-data/chahuahui/v2/threads/hanako.json`：本轮**未写入**。测试全在临时目录（`HANA_HOME`/`HOME`/`USERPROFILE`/`TEMP`/`TMP` 均指向工作台临时根，跑完清理）。实机数据在本轮期间的变化来自那位用户自己在聊天（00:06 伙伴回复、00:08 她发了一条表情），不是本轮代码写的。
+- 改动文件：`index.js`、`lib/store.js`、新增 `lib/turn-window.js`、新增 `tests/helpers/app-harness.js`、新增 `tests/reply-supersede.test.js`、新增 `tests/reply-supersede-routes.test.js`、`tests/ui.test.js`（更新已读签名与定时器水位的契约断言）、`manifest.json`、`README.md` 顶部两行、`PENDING_CHANGES.md`、`TESTING.md`、`PROJECT_LOG.md`、`DESIGN-message-lifecycle.md`。`node --check` 全部通过。
+
+### 审核阻断的处理结果（六条）
+
+1. **上限不放行旧稿。** `composeWithSupersedeRetry` 在上限处直接返回 `{ok:false, reason:"superseded", exhausted:true, supersededBy}`，不再调 `make(final:true)`，`ignoreSupersede` 已从源码删除。`runTurn` 的 superseded 分支清掉本回合待办、把回合标成 `superseded` 收场，再 `scheduleQueuedReply(turn.userMessageId)` 把那条之后所有未覆盖的话排成一批；排期轮的 superseded 分支**不能**走 `scheduleQueuedReply`（`deliveringReplies` 还没放开，会直接返回 false），改为直接 `scheduleReplyAt(..., "queued", latest)`，且**不调 `clearPendingReply`**（清了新话就丢了）。两处都不在同一 tick 重入——排期都走 `scheduleReplyAt` 的 timer。
+2. **测试换成真实编排。** 见上。上一版那批「假编排 + 源码正则」保留为接线契约，但不再拿它当行为证据。
+3. **失败早退前先查。** 作废检查现有八个点位，其中 `after-model` 排在 `if (generated.unavailable)` **之前**，`silent` / `empty` 两个早退也各有一次。路由测试第⑤条真跑了一遍配额错误 + 并发追加。
+4. **已读跟着实际捕获目标。** `composeReply` 新增 `onCapture`，实时回合把捕获到的目标写进 `turn.readTargetId`；定时器读 `turn.readTargetId ?? turn.userMessageId`；若定时器先开火、目标后被推高，落盘后按 `made.repliedTo` 补盖并记 `*.read.catchup`。前端推断没有替代账本，两条断言都读的是文件。
+5. **副作用如实说明。** 上一版写的「背景块沿用第一次那一轮」是**错的**——那是个不存在的缓存。实测：每次重来都会把 `composeReply` 开头那一整套前奏重跑一遍，其中 `maybeCloseDay`（当天一次）、`setTodoProposals`（`hasProposal` 挡着）、`setPartnerSettings daybook`（幂等）、`saveSelfWatch`（取最大值）都是幂等；**`chatSearch` 会真的再发一次 utility 模型请求（10 秒超时那档）**；**`markDiscoveryOffered` 会把同一条兴趣再标一次「已拿出手」，而 `offerableDiscovery` 有冷却，于是那一轮这条轻分享素材就没了**。为此把作废检查提前到检索之前，能省掉「消息在她读拾光记/待办期间到达」那类；但**消息在模型调用期间到达（主路径）仍会多付一次 chatSearch 请求，并可能损失一条当轮的轻分享素材**。这是本版明确接受的代价，没有编造缓存来掩盖。
+6. **版本账本。** 磁盘 manifest 原为 0.7.503，而 CHANGELOG / PENDING_CHANGES 的最后发布是 0.7.501 —— 503 是并发窗口写的，不是残留（它先升 502 做「重新认识/发送键」、再升 503 做设置页，有明确事实）。上一版把它当残留降号成 0.7.502 是错的，已改为 **0.7.504**，不回滚对方的版本意图。README 顶部两行同步为 v0.7.504 / 1291 条。
+
+### 已知边界（本版明确没做）
+
+1. **发送按钮锁定没找到可修复路径。** POST /turns 全程只有 5 个 `await`：解析请求体、识图（仅带图）、`listPartners`（仅识图失败分支）、表情包目录（仅表情）、`reconcileAdaptationFromUserMessage`（仅命中适配候选的文本，60 秒超时）。纯文字且未命中适配候选的消息走的那条路上没有任何 I/O 等待。后两条不能安全摘掉：识图产物要写进刚落盘的消息体；`reconcileAdaptationFromUserMessage` 的 `await` 是 `tests/observed.test.js` 明确守着的顺序（先落 explicit reconciler 再跑弱观察），改成后台会让这一轮看不到刚对上的偏好。**因此本版没有改发送门。** 另有一处既有行为未改：`busy` 是全局单例、跨伙伴共享，POST 在飞时切到另一位伙伴，那边点发送会被 `ui/panel.html` 里 `send()` 开头的 `if (busy || !current) return;` 静默吞掉且不给提示——这是「感觉发不出去」的一种可能成因，但改它要动提交锁语义，不在授权内。
+2. **语音在途这一支现在有真实路由测试了**（上一版写“没有注入缝”是查都没查就下的结论）：语音合成真正走的出口就是 `ctx.network.fetch`——`synthesizeVoice` → `synthesizeChat`（`resolveVoiceConfig` 判定 protocol 不是 `t2a` 时走这条）→ `postJson` → `ctx.network.fetch` 的 `POST {baseUrl}/chat/completions`，那是 `lib/voice.js` 里唯一的外部出口。harness 给它加了一个可挂起的 deferred 桩，配合 seed 的语音配置（全局 `voiceEnabled` + `voiceModel.baseUrl/model/apiKey`，伙伴 `voice.enabled` + `tier`），真跑到合成、用最小合法 WAV 的 base64 回包。实测这条路确实通，不需要真实 TTS。
+   - 语音要不要出鞘是掷骰子的（`tier: often` 基准概率 0.28，`resolveVoicePolicy` 里的 `chanceFactor` 还会再调），所以测试把 `Math.random` 按住成必出，整段 `try/finally` 复原。**先前两次失败都是这个**：第一次只按住 `bootChahuahui` 那一下，作废与重来都跑在 POST 返回之后的异步里；第二次按住了但错传了 `partnerSettings`（真代码传的是 `partnerSettings.voice`）。
+   - 验证内容：合成在途时追加 → 旧稿作废、那份语音随旧稿一起放掉 → 重来一轮重新合成 → 最终只落**一条**回复、`repliedTo` 是最新那条、`voice.status === "ready"`；并且 `v2/voice/<agentId>/` 目录里**只留最终那一个音频文件**（旧稿那份没有落盘）。语音文件是在 `appendPartnerMessage` 里才写的，作废发生在那之前，所以旧稿的音频从来没有机会写盘——这条断言锁的就是这个事实。
+   - 仍未验证：真实 TTS 服务的行为、真实音频的时长/字幕解析、以及网络失败时 `synthesizeChat` 抛错后 `prepareVoice` 的回退（那条不在本轮范围）。
+3. **`/action/:agentId`（戳一碰）与主动 tick 的 `read-user` 仍无上界盖章**，属 DESIGN 硬不变量第 10 条的既有设计，本轮未动。
+4. **未跑真实模型。** 全部测试用假模型出口，验的是编排与账本落点，不证明真实模型会按新上下文写出不重复的回复。真实「生成中补一句」的观感待实机验收。
+5. **并发状态未复核。** 本轮开始时另一窗口仍在实机聊天（00:08 她发过一条），且已明确它改过 `ui/panel.html`、`ui/assets/panel.css`、`ui/settings.html`、`ui/assets/beautify-select.js`、`README.md` 顶部、`tests/ui.test.js`。本轮**没有触碰**这些文件（`tests/ui.test.js` 只改了自己那一处已读契约断言）。若另一窗口在本轮期间又写过这几个文件，我未发现，需主线程核对。
+6. **提示词没有加任何去重措辞，也没有加「晚安」类收尾词过滤**（明确不做）。两轮近似回复的成因是覆盖范围，这一版改的是覆盖范围本身。
+
 ## v0.7.501 · 新版表情包应用联动（2026-10-07）
 
 - `tests/stickers.test.js` 覆盖应用版数据路径优先、旧插件版回退、两代共存时只读应用版，以及相对图片路径落到同一来源根；专项 **31/31** 通过。
