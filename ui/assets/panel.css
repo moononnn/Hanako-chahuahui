@@ -1494,6 +1494,19 @@ body.ob-open { overflow: hidden; }
 .ob-talk-textarea { flex: 1; resize: vertical; }
 .ob-talk-input .ob-pick { width: auto; padding: 12px 18px; text-align: center; }
 
+/* 发送键是这一屏唯一反复按的主按钮，给它实心深绿的身份；
+   底下通栏的「就这样，成型」留白底，两级不打架。 */
+.ob-talk-send {
+  flex: none;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--send-fg, #fff);
+  background: var(--send-bg, var(--primary-ink));
+  border-color: var(--send-border, var(--primary-ink));
+}
+.ob-talk-send:hover { color: var(--send-fg, #fff); background: var(--primary-ink); border-color: var(--primary-ink); }
+.ob-talk-send:disabled { opacity: .55; }
+
 @media (max-width: 720px) {
   .ob-talk { grid-template-columns: minmax(0, 1fr); }
   .ob-talk-log, .ob-talk-side { max-height: 32vh; }

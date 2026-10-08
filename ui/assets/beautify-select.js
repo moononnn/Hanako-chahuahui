@@ -99,6 +99,9 @@
       wrap.classList.remove("open");
       updateLabel(); // 关闭时同步触发栏，防止选中后仍显示旧值（需再次打开才更新的 bug）
       unlift();
+      // 面板收起时它占的那块高度瞬间没了，正在往下看的人会被弹回页首。
+      // 页面把视口守卫挂到 window 上，没有就当没这回事。
+      if (typeof window !== "undefined" && typeof window.holdViewport === "function") window.holdViewport();
     }
     function open() {
       renderPanel();
