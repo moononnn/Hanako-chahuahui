@@ -46,6 +46,7 @@ import {
   withModelDeadline,
 } from "./lib/model.js";
 import { createStore, createDiagnostics } from "./lib/store.js";
+import { composeWithSupersedeRetry, hasNewerUserMessage } from "./lib/turn-window.js";
 import { createThreadRebuildScheduler } from "./lib/rebuild-queue.js";
 import { protectKey, isProtectedKey, encryptionStatus } from "./lib/crypto.js";
 import { listBackgrounds, readBackgroundBytes, writeBackground, removeBackgroundFile, normalizeOpacity, normalizeTone, isBackgroundFile, fileTypeOf } from "./lib/background.js";
@@ -396,7 +397,7 @@ function describeError(error) {
  * **发布副本构建时把它改成 false**，把这一整面关掉——这些入口能触发模型调用和后台写盘，
  * 不该暴露给只是装着玩的人（数据与流程上看，它们对普通使用者也毫无意义）。
  */
-const DEV_TOOLS = false;
+const DEV_TOOLS = true;
 // __CHAHUAHUI_DEV_ONLY_END__
 
 export function apply(ctx) {
@@ -3772,7 +3773,7 @@ export function apply(ctx) {
    * 生成一份回复并落库。同步那条路（她在场）和异步那条路都用它。
    * 只管生成与入账，节奏、提醒那些外面各自接。
    */
-  async function composeReply(agentId, { repliedTo = null, mayPass = false, currentMessageId = null, excludeMessageId = null, replaceMessageId = null, isCurrent = null } = {}) {
+  async function composeReply(agentId, { repliedTo = null, mayPass = false, currentMessageId = null, excludeMessageId = null, replaceMessageId = null, isCurrent = null, onCapture = null } = {}) {
     await loadUserName();
     const startedAt = Date.now();
     // 先把上次没看清的图补上：ta 这会儿要回话，得真看见那张图，而不是照着「没能看清」猜。
@@ -3783,8 +3784,22 @@ export function apply(ctx) {
     const windowed = splitForContext(pending).recent;
     // 回复目标必须是这轮实际看进去的最后一条用户消息；否则连发时会把已经覆盖的话误判成漏回。
     const replyTargetId = [...windowed].reverse().find((row) => row?.role === "user" && !row.recalled)?.id ?? repliedTo;
+    // 这就是本轮真正的目标上界。外面靠它盖章已读，所以得把捕获到的目标报上去。
+    if (replyTargetId) onCapture?.(replyTargetId);
+    // 这轮捕获之后又落进来新的她的话：旧稿不能再原样送出去。返回 superseded 让外层
+    // 在同一条回合里顺序重来（不新开第二个生成）。
+    const superseded = () => (replyTargetId ? hasNewerUserMessage(store.getThread(agentId).messages, replyTargetId) : null);
+    const supersededResult = (stage) => {
+      const check = superseded();
+      if (!check?.superseded) return null;
+      diagnostics({ event: "reply.superseded", agentId, stage, supersededBy: check.newerMessageId });
+      return { ok: false, reason: "superseded", supersededBy: check.newerMessageId, generationMs: Date.now() - startedAt };
+    };
     // 极明显的聊天句号先在只读消息判断阶段收口，不提前消耗日子账本等上下文状态。
+    // 但先看有没有新话顶上来：拿上一轮那个句号安静收尾，会把她刚补的那句晾在未读上没人管。
     if (shouldQuietClose(windowed, currentMessageId || repliedTo)) {
+      const staleClosing = supersededResult("quiet-close");
+      if (staleClosing) return staleClosing;
       const generationMs = Date.now() - startedAt;
       diagnostics({ event: "reply.silent", agentId, generationMs, reason: "obvious-closing-signal" });
       return { ok: false, reason: "silent", generationMs };
@@ -3888,6 +3903,10 @@ export function apply(ctx) {
     const workfeedText = workfeedOn()
       ? buildWorkfeedText(store.readWorkfeed(), agentId, { lifeDay: dayKey(new Date()), userName: USER_NAME })
       : "";
+    // 再往前一步就是真发模型了：她在这串读取期间补的话，连 chatSearch 那次
+    // utility 请求和兴趣「已拿出手」的记账都省下来。
+    const stalePreSearch = supersededResult("before-search");
+    if (stalePreSearch) return stalePreSearch;
     const previousUser = threadMessages.slice(-12).reverse()
       .find((row) => row?.role === "user" && row.id !== latestUser?.id && !row.recalled);
     const sincePrevious = Date.parse(latestUser?.at ?? "") - Date.parse(previousUser?.at ?? "");
@@ -4010,7 +4029,14 @@ export function apply(ctx) {
         throw error;
       }
     };
+    // 发模型之前最后查一次：能省掉一整次生成就别做。
+    const staleBefore = supersededResult("before-model");
+    if (staleBefore) return staleBefore;
     generated = await callModel();
+    // 模型回来了就要先查，不能等 unavailable / 空正文那些早退走完。
+    // 拿一份明知过期的稿子去报「接不上话」或「没生成出内容」，等于把新话晾在未读上没人管。
+    const staleAfterModel = supersededResult("after-model");
+    if (staleAfterModel) return staleAfterModel;
     if (generated.unavailable) {
       return { ok: false, reason: "unavailable", kind: generated.kind, generationMs: Date.now() - startedAt };
     }
@@ -4028,6 +4054,10 @@ export function apply(ctx) {
     if (choice) {
       diagnostics({ event: "model.choice", agentId, source: choice.source, provider: choice.provider, model: choice.model });
     }
+    // 模型回来了，她可能在这期间又补了话：这份稿子按旧上下文写的，直接送出去就是
+    // 替没读的那句签收，还会让人再补一轮同样的话。丢掉重来。
+    const staleAfter = supersededResult("after-retry");
+    if (staleAfter) return staleAfter;
     const generationMs = Date.now() - startedAt;
 
     // ta决定这回安静收尾：看到了（已读已经盖过），但不发伙伴消息。
@@ -4045,6 +4075,8 @@ export function apply(ctx) {
       : badgeLessRaw;
     const cleanedText = cleanVoice(markerlessRaw, "voice");
     if (isNoReply(cleanedText)) {
+      const staleSilent = supersededResult("silent");
+      if (staleSilent) return staleSilent;
       diagnostics({ event: "reply.silent", agentId, generationMs });
       return { ok: false, reason: "silent", generationMs };
     }
@@ -4071,6 +4103,8 @@ export function apply(ctx) {
     });
     const { bubbles } = composed;
     if (bubbles.length === 0) {
+      const staleEmpty = supersededResult("empty");
+      if (staleEmpty) return staleEmpty;
       // 伙伴只想甩图，但这次没有可用匹配：跟安静收尾一样结束，别把图库缺图伪装成模型失败重试。
       if (marker.keyword) {
         diagnostics({ event: "reply.silent", agentId, generationMs, reason: "sticker-unavailable" });
@@ -4114,6 +4148,14 @@ export function apply(ctx) {
     if (isCurrent && !isCurrent()) {
       releaseVoiceGeneration(preparedVoice);
       return { ok: false, reason: "stale", generationMs };
+    }
+    // 语音合成的这几秒里她也可能又说话了。语音和表情都是跟这份旧稿绑的，
+    // 不能跟着旧稿外显：放掉，再让外层按新上下文重来。
+    const staleBeforeSave = superseded();
+    if (staleBeforeSave?.superseded) {
+      releaseVoiceGeneration(preparedVoice);
+      diagnostics({ event: "reply.superseded", agentId, stage: "before-save", supersededBy: staleBeforeSave.newerMessageId });
+      return { ok: false, reason: "superseded", supersededBy: staleBeforeSave.newerMessageId, generationMs };
     }
     const reply = {
       role: "assistant",
@@ -4205,12 +4247,31 @@ export function apply(ctx) {
   async function runTurn(turn) {
     try {
       turn.status = "generating";
-      const made = await composeReply(turn.agentId, {
-        repliedTo: turn.userMessageId,
-        isCurrent: () => threadGeneration(turn.agentId) === turn.threadGeneration,
-      });
+      // 同一伙伴同一时刻只允许一个生成：旧稿作废了就在这条回合里顺序重来，
+      // 不新开一个回合，也不同时开两个模型请求。
+      const made = await composeWithSupersedeRetry(
+        () => composeReply(turn.agentId, {
+          repliedTo: turn.userMessageId,
+          isCurrent: () => threadGeneration(turn.agentId) === turn.threadGeneration,
+          // 重新捕获到的目标要跟上：已读盖章跟着实际读到的那条走，不是钉在最初那条上。
+          onCapture: (targetId) => { turn.readTargetId = targetId; },
+        }),
+        { onSupersede: (attempt, result) => diagnostics({ event: "turn.superseded", agentId: turn.agentId, attempt, supersededBy: result.supersededBy ?? null }) },
+      );
       turn.generationMs = made.generationMs;
       if (!made.ok) {
+        // 一直追不上：这份按旧上下文写的稿子不送出去。她新补的话排进正常排期，
+        // 下一轮按最新上下文重新接；本回合先安静收场，不假装回过了。
+        if (made.reason === "superseded") {
+          turn.status = "ready";
+          turn.bubbles = [];
+          turn.superseded = true;
+          turn.replyMessageId = null;
+          store.clearPendingReplyIf(turn.agentId, turn.userMessageId);
+          scheduleTurnCleanup(turn);
+          const queued = scheduleQueuedReply(turn.agentId, turn.userMessageId);
+          diagnostics({ event: "turn.superseded.queued", agentId: turn.agentId, supersededBy: made.supersededBy ?? null, queued });          return;
+        }
         if (made.reason === "unavailable") {
           // 模型配额/凭据这类挂掉：不拿别的模型顶嘴（那是换 ta 的嗓子和记性），
           // 也不排五分钟重试（额度得等几小时，重试一万次也一样）。就把情况说清楚。
@@ -4268,6 +4329,10 @@ export function apply(ctx) {
       }
       turn.status = "ready";
       turn.replyMessageId = made.messageId;
+      // 已读的水位要跟实际送出去的那份对齐：若重新捕获时把目标推到了更新的一条，
+      // 而定时器已经在那之前开过火，这里把中间欠下的补上。账本对齐，不靠前端猜。
+      const readAfter = store.markUserMessagesRead(turn.agentId, new Date().toISOString(), { throughId: made.repliedTo ?? turn.readTargetId ?? turn.userMessageId });
+      if (readAfter.length) diagnostics({ event: "turn.read.catchup", agentId: turn.agentId, touched: readAfter.length, throughId: made.repliedTo ?? null });
       const pendingWake = store.getPendingReply(turn.agentId);
       const finalizedWake = finalizeWakeReply(pendingWake, made.messageId);
       if (finalizedWake && finalizedWake !== pendingWake) store.setPendingReply(turn.agentId, finalizedWake);
@@ -4482,7 +4547,8 @@ export function apply(ctx) {
         if (replyReady) store.setPendingReply(partner.id, replyReady);
         const target = messages.find((row) => row?.id === targetMessageId);
         if (["normal", "exception"].includes(replyReady?.wakeDecision) && !replyReady?.wakeReadAt) {
-          const touchedIds = target?.readAt ? [] : store.markUserMessagesRead(partner.id);
+          // 重启后只确认这一条被看过：顺手把整条线程都盖成已读，就是替 ta 签收了它没读的话。
+          const touchedIds = target?.readAt ? [] : store.markUserMessagesRead(partner.id, new Date().toISOString(), { throughId: target?.id ?? null });
           commitWakeAtRead(partner.id, {
             touchedIds,
             readConfirmed: Boolean(target?.readAt),
@@ -4578,8 +4644,9 @@ export function apply(ctx) {
       store.setPendingReply(agentId, pending);
       diagnostics({ event: "sleep.wake.later-notice", agentId, messageId: pending.messageId });
     }
-    // 手机拿起来了、也点开了：这条（连同她之前连着发的那几条）就算看到过了
-    const touched = store.markUserMessagesRead(agentId);
+    // 手机拿起来了、也点开了：这条（连同她之前连着发的那几条）就算看到过了。
+    // 只盖到这轮排期真正覆盖的那条为止：后面新落的话 ta 还没看见，不能先签收。
+    const touched = store.markUserMessagesRead(agentId, new Date().toISOString(), { throughId: pending?.messageId ?? null });
     diagnostics({ event: "reply.read", agentId, touched: touched.length });
     commitWakeAtRead(agentId, {
       touchedIds: touched,
@@ -4588,14 +4655,26 @@ export function apply(ctx) {
       wakeKind: pending?.wakeKind,
     });
     pending = store.getPendingReply(agentId) ?? pending;
-    const made = await composeReply(agentId, {
-      mayPass: true,
-      repliedTo: pending?.messageId ?? null,
-      currentMessageId: pending?.messageId ?? null,
-      isCurrent: () => threadGeneration(agentId) === generation,
-    });
+    const made = await composeWithSupersedeRetry(
+      () => composeReply(agentId, {
+        mayPass: true,
+        repliedTo: pending?.messageId ?? null,
+        currentMessageId: pending?.messageId ?? null,
+        isCurrent: () => threadGeneration(agentId) === generation,
+      }),
+      { onSupersede: (attempt, result) => diagnostics({ event: "reply.superseded", agentId, stage: "scheduled", attempt, supersededBy: result.supersededBy ?? null }) },
+    );
     if (!made.ok) {
       if (made.reason === "stale") return { ok: false, reason: "stale" };
+      // 追到上限仍然有新话：不发送这份过期稿，把最新目标直接排下一轮。
+      // 这里不能走 scheduleQueuedReply：deliveringReplies 还没放开，它会直接返回 false。
+      // 也不能清 pending：scheduleReplyAt 会自己写新待办，清了就等于把新消息丢了。
+      if (made.reason === "superseded") {
+        const latest = made.supersededBy ?? pending?.messageId ?? null;
+        const scheduled = latest ? scheduleReplyAt(agentId, Date.now(), "queued", latest) : { scheduled: false };
+        diagnostics({ event: "reply.superseded.queued", agentId, supersededBy: latest, scheduled: scheduled.scheduled === true });
+        return { ok: false, reason: "superseded" };
+      }
       if (made.reason === "unavailable") {
         // 同 runTurn：把「ta 接不上话」挂到触发的那条上，不重试、不换模型。
         const target = pending?.messageId ?? null;
@@ -4621,6 +4700,9 @@ export function apply(ctx) {
     }
     const finalized = finalizeWakeReply(store.getPendingReply(agentId) ?? pending, made.messageId);
     if (finalized) store.setPendingReply(agentId, finalized);
+    // 重新捕获过目标时，开头那次盖章停在旧上界；这里按实际送出去的那份补齐。
+    const readCatchup = store.markUserMessagesRead(agentId, new Date().toISOString(), { throughId: made.repliedTo ?? null });
+    if (readCatchup.length) diagnostics({ event: "reply.read.catchup", agentId, touched: readCatchup.length, throughId: made.repliedTo ?? null });
     if (finalized?.wakeOutcome === "committed") {
       commitWakeExceptionIfReady(agentId, finalized);
       diagnostics({ event: "sleep.wake.committed", agentId, messageId: made.messageId });
@@ -6476,7 +6558,15 @@ export function apply(ctx) {
         // ta把这条看到了（她那边「未读」两个字就是这时候翻成「已读」的）：到点落一笔盘。
         // 不落盘的话，她一刷新就不知道读过没读过——只在屏幕上演一遍是不算数的。
         const readTimer = setTimeout(() => {
-          const touched = store.markUserMessagesRead(agentId);
+          // 清空聊天后的新消息不该被旧回合的定时器盖章：账已经换了一本。
+          if (threadGeneration(agentId) !== turn.threadGeneration) {
+            diagnostics({ event: "turn.read.skipped", agentId, messageId: turn.userMessageId, reason: "thread-changed" });
+            return;
+          }
+          // 只盖到这轮真的读进去的那条：生成期间补进来的新话 ta 压根没看过。
+          // 重新捕获过就把水位跟着新目标走，所以这里读的是 turn.readTargetId。
+          const readThroughId = turn.readTargetId ?? turn.userMessageId;
+          const touched = store.markUserMessagesRead(agentId, new Date().toISOString(), { throughId: readThroughId });
           diagnostics({ event: "turn.read", agentId, mode: plan.mode, touched: touched.length });
           commitWakeAtRead(agentId, {
             touchedIds: touched,
