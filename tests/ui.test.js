@@ -508,6 +508,11 @@ test("跟我聊着捏：三条路里的第三条，能聊、能看实时画像�
   assert.match(panel, /const talk = obNode\("button", "ob-pick", "跟我聊着捏"\)/);
   assert.match(panel, /async function obStartTalk\(partner\)/);
   assert.match(panel, /function obRenderTalk\(\)/);
+  // 2026-10-08：发送键原来写「说」，一个字孤零零杵在输入框边上，
+  // 白底细边又长得跟通栏的「就这样，成型」像兄弟，没有主次。
+  assert.match(panel, /const send = obNode\("button", "ob-pick ob-talk-send", obState\.talkSending \? "递过去…" : "递过去"\)/, "发送键改叫「递过去」，别再写「说」");
+  assert.doesNotMatch(panel, /obNode\("button", "ob-pick", obState\.talkSending \? "说着…" : "说"\)/, "旧的「说」按钮不许留在原地");
+  assert.match(css, /\.ob-talk-send \{[\s\S]{0,240}?background: var\(--send-bg, var\(--primary-ink\)\)/, "发送键要实心深绿，跟白底的成型键分出主次");
   // 三个接口都接上：开一场 / 说一句 / 成型
   assert.match(panel, /co-create\/\$\{encodeURIComponent\(partner\.id\)\}\/open/);
   assert.match(panel, /co-create\/\$\{encodeURIComponent\(partnerId\)\}\/say/);
@@ -833,11 +838,76 @@ test("性格页只提供新版重新认识入口，不暴露旧调参和内测",
   assert.match(panel, /action === "reshape"[\s\S]{0,500}?obStartRecognition\(partner, \{ restart: true \}\)/, "重新认识必须进入新版采访流程，并先把旧的清掉");
   assert.match(panel, /async function obStartRecognition\(partner, options = \{\}\) \{[\s\S]{0,120}?obOpen\(\)/, "新版采访流程要先打开流程层");
   assert.match(panel, /obRenderRecognition\(\)/, "重新认识要渲染新版采访内容，不得回到旧调色盘");
+  // 2026-10-08：「重新认识 ta」以前清完直接落到七题页，把三档选择跳过去了。
+  // 她想去「跟我聊着捏」还得先退出来重选一趟。清完必须退回三档。
+  assert.match(
+    panel,
+    /if \(options\.restart\) \{[\s\S]{0,900}?modeChoice: true, notice: "之前答的已经清掉了，重新挑一条路。"\s*\};\s*\n\s*obRender\(\);\s*\n\s*return;/,
+    "重新认识清完要退回三档选择，不直接把人塞进七题",
+  );
+  assert.match(panel, /obEl\.sub\.textContent = obState\.notice \|\| "想省事一点，还是自己捏？/);
   assert.match(panel, /query\.get\("reshape"\)/, "独立设置页打开时要识别 reshape 参数");
   assert.doesNotMatch(settings, /probe\/taste|analyze\/personality|重新看一次 ta 的样子|回到自动那份/);
   assert.match(app, /body\?\.restore === true/, "后端旧数据恢复接口仍保留，避免历史数据失效");
   assert.match(app, /personalityAuto/, "自动画像仍单独留底");
   assert.match(app, /personalityFrom/, "后端仍记得画像来源");
+});
+
+test("设置页：整个页面的选项都不许把页面抽回最上面（2026-10-08）", () => {
+  // 不只是音色。设置页每一个选项保存后都会重画一块，
+  // 重画的瞬间内容塌下去，浏览器就把文档滚动收回到 0。
+  // 在两个保存出口统一按住视口，比逐个选项打补丁靠得住。
+  assert.match(
+    settings,
+    /function holdViewport\(\) \{\s*\n\s*const y = window\.scrollY;\s*\n\s*if \(y <= 0\) return;/,
+    "已经在页首就不用拦",
+  );
+  assert.match(
+    settings,
+    /if \(window\.scrollY === 0\) window\.scrollTo\(0, y\);/,
+    "只拦「被拽回页首」这一种，别的滚动不碰",
+  );
+  assert.match(settings, /const VIEWPORT_HOLD_EVENTS = \["wheel", "touchstart", "keydown"\];/, "人一动手就得松手，不能跟人抢滚动");
+  assert.match(settings, /window\.removeEventListener\(name, viewportHold\.release, true\);/, "松手时要把监听摘干净");
+  assert.match(settings, /window\.holdViewport = holdViewport;\s*\n\s*window\.releaseViewport = releaseViewport;/, "暴露给自定义下拉用");
+  // 两个保存出口都要挂上：全局设置和单个伙伴的设置
+  assert.match(settings, /say\(successText, "ok"\);\s*\n\s*holdViewport\(\);\s*\n\s*return true;/, "保存全局设置后要按住视口");
+  assert.match(settings, /say\(successText, "ok"\);\s*\n\s*holdViewport\(\);\s*\n\s*return data\.settings;/, "保存伙伴设置后要按住视口");
+  // 移出 / 彻底删除之后焦点要落到新的当前伙伴上，这时守卫得先让位
+  assert.match(settings, /paintRemovedPartners\(\);[\s\S]{0,120}?releaseViewport\(\);/);
+  assert.match(settings, /paintPartnerList\(\);\s*\n\s*releaseViewport\(\);\s*\n\s*if \(currentId\) \{/);
+  // 自定义下拉收起面板时也要叫一下：面板占的那块高度瞬间没了
+  const dd = fs.readFileSync(new URL("../ui/assets/beautify-select.js", import.meta.url), "utf8");
+  assert.match(dd, /typeof window\.holdViewport === "function"\) window\.holdViewport\(\);/, "下拉收起也要按住视口");
+  assert.match(dd, /typeof window\.holdViewport === "function"/, "页面没挂守卫时不能报错");
+});
+
+test("设置页：保存后重开同一页不许把页面抽回最上面（2026-10-08）", () => {
+  // 在大页面里给伙伴换音色，每选一次整页就被抽回顶部。
+  // 根因：saveVoiceId 保存成功后调 openPartner 重开，而 openPartner 会先把
+  // partnerBody 换成一行「正在翻 ta 的小本子…」，内容塌到零高，
+  // 文档滚动当场被 clamp 回 0，内容回来时人已经站在页首了。
+  assert.match(
+    settings,
+    /const reopenSame = currentId === agentId && currentDetailTab === detailTab;\s*\n\s*const keepScrollY = reopenSame \? window\.scrollY : 0;/,
+    "重开前先记住是不是同一位伙伴的同一页",
+  );
+  assert.match(
+    settings,
+    /switchDetail\(detailTab\);\s*\n\s*if \(keepScrollY > 0\) \{\s*\n\s*requestAnimationFrame\(\(\) => \{ window\.scrollTo\(0, keepScrollY\); \}\);/,
+    "内容挂回去后把滚动位置还回来",
+  );
+  // 音色能局部改就局部改，根本不用重开这一页
+  assert.match(
+    settings,
+    /for \(const chip of picker\.querySelectorAll\("\.voice-chip"\)\) chip\.classList\.toggle\("on", chip\.title === next\);/,
+    "换音色只挪高亮，不重开整页",
+  );
+  assert.doesNotMatch(
+    settings,
+    /"音色已保存"\)\)\) \{\s*\n\s*if \(currentId === agentId\) openPartner\(agentId, "contact"\);/,
+    "旧的换音色就重开整页的路不许留在原地",
+  );
 });
 
 test("起跑线：自动量那边的痕迹，也能自己定从哪儿算，只抬相处史", () => {
@@ -1118,10 +1188,15 @@ test("自己的话只突出未读，已读收起且状态仍查得到", () => {
   assert.doesNotMatch(panel, /answeredUserIds|opts\.answered/, "旧的只看「被没被接住」那套要换掉");
 
   // 后端：ta真看到那一刻要落盘（只靠屏幕上演一遍是不算数的）
+  // 已读只盖到这轮真正读进去的目标上界：盖到没读的那句就是替 ta 签收。
   const storeSrc = fs.readFileSync(new URL("../lib/store.js", import.meta.url), "utf8");
-  assert.match(storeSrc, /const markUserMessagesRead = \(agentId, at = new Date\(\)\.toISOString\(\)\) =>/);
+  assert.match(storeSrc, /const markUserMessagesRead = \(agentId, at = new Date\(\)\.toISOString\(\), \{ throughId = null \} = \{\}\) =>/);
+  assert.match(storeSrc, /boundSeq = throughId \? Number\(thread\.messages\.find\(\(row\) => row\.id === throughId\)\?\.seq \?\? -1\) : null/);
+  assert.match(storeSrc, /if \(boundSeq !== null && !\(Number\(row\.seq \?\? 0\) <= boundSeq\)\) break;/);
   assert.match(storeSrc, /markUserMessagesRead,/, "store 要把ta导出");
-  assert.match(app, /store\.markUserMessagesRead\(agentId\)/);
+  assert.match(app, /const readThroughId = turn\.readTargetId \?\? turn\.userMessageId;/);
+  assert.match(app, /markUserMessagesRead\(agentId, new Date\(\)\.toISOString\(\), \{ throughId: readThroughId \}\)/);
+  assert.match(app, /store\.markUserMessagesRead\(agentId, new Date\(\)\.toISOString\(\), \{ throughId: pending\?\.messageId \?\? null \}\)/);
   assert.match(app, /event: "turn\.read"/);
   assert.match(app, /event: "reply\.read"/);
 

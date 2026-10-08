@@ -3998,6 +3998,7 @@
         loadingDraft: false,
         error: null,
         warn: null,
+        notice: null,
         steps: [],
         progress: null,
         portrait: [],
@@ -4084,6 +4085,12 @@
             obState.recognitionDraftSaveTimer = null;
           }
           await api("POST", `recognition/${encodeURIComponent(partner.id)}/restart`);
+          // 「重新认识」是从头挑一条路，不是默认把人塞进七道题。
+          // 以前清完直接落到采访页，三档选择被跳过去了——想走「聊着捏」
+          // 还得自己退出来重选。退回三档让她自己决定。
+          obState = { ...emptyObState(), partner, modeChoice: true, notice: "之前答的已经清掉了，重新挑一条路。" };
+          obRender();
+          return;
         }
         const data = await api("GET", `recognition/${encodeURIComponent(partner.id)}`);
         const questions = data?.questions ?? [];
@@ -4251,7 +4258,9 @@
           void obSendTalk();
         }
       });
-      const send = obNode("button", "ob-pick", obState.talkSending ? "说着…" : "说");
+      // 「递过去」而不是「说」：这一句是交给 ta，让 ta 接着往下问，
+      // 不是你在自说自话。跟底部「先放着」一样三个字，重量才对得上。
+      const send = obNode("button", "ob-pick ob-talk-send", obState.talkSending ? "递过去…" : "递过去");
       send.type = "button";
       send.disabled = Boolean(obState.talkSending);
       send.addEventListener("click", () => void obSendTalk());
@@ -4496,7 +4505,7 @@
 
       if (obState.modeChoice) {
         obEl.title.textContent = `先和「${obState.partner.name}」认识一下`;
-        obEl.sub.textContent = "想省事一点，还是自己捏？三条路之后都能接着补。";
+        obEl.sub.textContent = obState.notice || "想省事一点，还是自己捏？三条路之后都能接着补。";
         obEl.step.textContent = "选择认识方式";
         obEl.back.hidden = false;
         obEl.back.textContent = "先回去聊";

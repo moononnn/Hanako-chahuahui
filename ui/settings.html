@@ -621,6 +621,41 @@
       return box;
     }
 
+    /**
+     * 设置页有一类反复出现的毛病：动完一个选项，下面那一大块会被重画一遍
+     * （换模型、重建下拉、翻回这一页）。重画的瞬间内容塌得很矮，
+     * 浏览器顺手把滚动位置收回到 0，人就站回了页首。
+     *
+     * 这里按住一小会儿：只拦「被拽回页首」这一种，别的滚动不碰；
+     * 滚轮、点、按键一动就立刻松手，不跟人抢。
+     */
+    let viewportHold = null;
+    const VIEWPORT_HOLD_EVENTS = ["wheel", "touchstart", "keydown"];
+    function releaseViewport() {
+      if (!viewportHold) return;
+      clearTimeout(viewportHold.timer);
+      if (viewportHold.raf) cancelAnimationFrame(viewportHold.raf);
+      for (const name of VIEWPORT_HOLD_EVENTS) window.removeEventListener(name, viewportHold.release, true);
+      viewportHold = null;
+    }
+    function holdViewport() {
+      const y = window.scrollY;
+      if (y <= 0) return;
+      releaseViewport();
+      const release = () => releaseViewport();
+      const step = () => {
+        if (!viewportHold) return;
+        if (window.scrollY === 0) window.scrollTo(0, y);
+        viewportHold.raf = requestAnimationFrame(step);
+      };
+      viewportHold = { release, raf: 0, timer: 0 };
+      for (const name of VIEWPORT_HOLD_EVENTS) window.addEventListener(name, release, true);
+      viewportHold.timer = setTimeout(release, 900);
+      viewportHold.raf = requestAnimationFrame(step);
+    }
+    window.holdViewport = holdViewport;
+    window.releaseViewport = releaseViewport;
+
     function saveGlobal(patch, successText = "已保存") {
       const run = globalSaveChain.then(async () => {
         const payload = { ...patch };
@@ -631,6 +666,7 @@
           if (Array.isArray(data.voiceChoices)) voiceChoices = data.voiceChoices;
           if (Array.isArray(data.voiceGroups)) voiceGroups = data.voiceGroups;
           say(successText, "ok");
+          holdViewport();
           return true;
         } catch (error) {
           say(`没存上：${error.message}`, "err");
@@ -1464,6 +1500,7 @@
         const row = partners.find((p) => p.id === agentId);
         if (row) row.settings = data.settings;
         say(successText, "ok");
+        holdViewport();
         return data.settings;
       } catch (error) {
         say(`没存上：${error.message}`, "err");
@@ -1487,6 +1524,11 @@
     async function openPartner(agentId, detailTab = "contact") {
       const requestSeq = ++partnerRequestSeq;
       if (personDraftTimer && currentId !== agentId) { clearInterval(personDraftTimer); personDraftTimer = null; }
+      // 保存后重开这一页时，别把滚动位置弄丢：partnerBody 清空的那一瞬内容塌到零高，
+      // 文档滚动会被浏览器 clamp 回 0，等内容回来人已经站在最上面了。
+      // 只有「同一位伙伴的同一页」才恢复；换个伙伴点进来，照样从头顶开始。
+      const reopenSame = currentId === agentId && currentDetailTab === detailTab;
+      const keepScrollY = reopenSame ? window.scrollY : 0;
       currentId = agentId;
       currentDetailTab = detailTab;
       paintPartnerList();
@@ -1678,9 +1720,12 @@
         picker.className = "voice-picker";
         const groups = voiceGroups.length ? voiceGroups : [{ id: "default", label: "音色", voices: voiceChoices }];
         const saveVoiceId = async (next) => {
-          if (await savePartner(agentId, { voice: { ...(s.voice ?? {}), voiceId: next, voiceByProfile: { ...(s.voice?.voiceByProfile || {}), [profileId]: next } } }, "音色已保存")) {
-            if (currentId === agentId) openPartner(agentId, "contact");
-          }
+          if (!await savePartner(agentId, { voice: { ...(s.voice ?? {}), voiceId: next, voiceByProfile: { ...(s.voice?.voiceByProfile || {}), [profileId]: next } } }, "音色已保存")) return;
+          // 换一个音色只是挪一张高亮，犯不着把整页拆开重翻一遍：
+          // 这里以前调 openPartner，每选一次音色整页就重建，
+          // 页面被拽回最上面，还得重新往下翻。语音开关、出现频率也是同一条路，
+          // 那几处改不了（确实要刷新状态），由 openPartner 的滚动恢复兜着。
+          for (const chip of picker.querySelectorAll(".voice-chip")) chip.classList.toggle("on", chip.title === next);
         };
         for (const group of groups) {
           const details = document.createElement("details");
@@ -2933,6 +2978,9 @@
       el.partnerBody.replaceChildren(root);
       dressSelects(root);
       switchDetail(detailTab);
+      if (keepScrollY > 0) {
+        requestAnimationFrame(() => { window.scrollTo(0, keepScrollY); });
+      }
     }
 
     document.getElementById("confirm-reset").addEventListener("click", async () => {
@@ -2980,6 +3028,9 @@
         closeModal("purge-modal", false);
         paintPartnerList();
         paintRemovedPartners();
+        // 删掉之后焦点落到新的当前伙伴上，这个是对的；
+        // 但守卫得先松手，不然它会把视口按在原处，焦点所在的地方反而看不到。
+        releaseViewport();
         if (currentId) {
           await openPartner(currentId);
           document.querySelector(".partner-pick.on")?.focus();
@@ -3010,6 +3061,7 @@
         currentId = partners[0]?.id ?? null;
         closeModal("remove-modal", false);
         paintPartnerList();
+        releaseViewport();
         if (currentId) {
           await openPartner(currentId);
           document.querySelector(".partner-pick.on")?.focus();
