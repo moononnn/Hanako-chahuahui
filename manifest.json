@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "chahuahui",
   "name": "茶话会",
-  "version": "0.7.518",
+  "version": "0.7.519",
   "entry": "index.js",
   "description": "像聊聊天软件一样和 AI 伙伴唠嗑，ta 也会根据自己的兴趣爱好主动找你聊天搭话。搭配「表情包」可以互相斗图，搭配「拾光记」还能聊天气、提醒待办。",
   "icon": "assets/icon.png",
