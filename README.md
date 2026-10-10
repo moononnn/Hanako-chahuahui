@@ -1,8 +1,8 @@
 # 茶话会
 
-> 主对话框里你们面对面谈正事，这里回房间聊八卦。
+> 像聊聊天软件一样和 AI 伙伴唠嗑，ta 也会根据自己的兴趣爱好主动找你聊天搭话。
 
-**当前版本：** v0.7.515
+**当前版本：** v0.7.518
 **当前版本最近一次自动测试结果：** 见 GitHub Actions 的 CI 记录（2026-10-10）
 
 <img src="https://raw.githubusercontent.com/moononnn/Hanako-chahuahui/main/attachments/chahuahui-icon.png" width="96" alt="茶话会">

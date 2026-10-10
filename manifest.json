@@ -2,9 +2,9 @@
   "manifestVersion": 2,
   "id": "chahuahui",
   "name": "茶话会",
-  "version": "0.7.515",
+  "version": "0.7.518",
   "entry": "index.js",
-  "description": "茶话会：像 QQ 一样跟伙伴闲聊。主对话框面对面谈正事，这里围炉聊八卦。",
+  "description": "像聊聊天软件一样和 AI 伙伴唠嗑，ta 也会根据自己的兴趣爱好主动找你聊天搭话。搭配「表情包」可以互相斗图，搭配「拾光记」还能聊天气、提醒待办。",
   "icon": "assets/icon.png",
   "minAppVersion": "0.1020.0",
   "capabilities": [
