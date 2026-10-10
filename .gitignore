@@ -1,8 +1,10 @@
 # 本地开发用的东西，不进公开仓库
 
 DESIGN-*.md
+PLAN-*.md
 PENDING_CHANGES.md
 PUBLISHING.md
+PROJECT_LOG.md
 
 # 运行产物
 data/
