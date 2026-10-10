@@ -1703,6 +1703,19 @@ test("表情包图库：建分组就地起名，不许用原生弹窗（webview 
   assert.match(panel, /closeNewGroupRow\(\);/, "关抽屉顺手把这一行收掉");
 });
 
+test("表情抽屉：打开时按钮也得回一声，亮法跟图片按钮一样，摇完就停", () => {
+  // 高亮：开着的时候跟图片按钮 is-busy 同一套颜色，不然两个按钮两副样子
+  assert.match(panelCss, /\.emoji-btn\.is-open \{[^}]*color: var\(--primary-deep\)[^}]*background: var\(--accent-soft\)[^}]*border-color: var\(--primary\)/);
+  // 摇：一次性，不是像选文件那样一直转——抽屉常开着，没有结束点
+  assert.match(panelCss, /\.emoji-btn\.is-open svg \{[^}]*animation: emoji-open-nudge [^}]*1;/, "只播一遍");
+  assert.doesNotMatch(panelCss, /emoji-open-nudge[^}]*infinite/, "不能一直摇，看着像卡住了");
+  assert.match(panelCss, /@keyframes emoji-open-nudge \{[\s\S]*?0% \{ transform: rotate\(0deg\); \}[\s\S]*?100% \{ transform: rotate\(0deg\); \}/, "摇完回到原位，不能歪在那儿");
+  assert.match(panel, /el\.emojiButton\.classList\.add\("is-open", "is-pop"\);/);
+  assert.match(panel, /void el\.emojiButton\.offsetWidth;/, "强制回流，连着开关才看得出又摇了一次");
+  assert.match(panel, /animationend", \(\) => el\.emojiButton\.classList\.remove\("is-pop"\), \{ once: true \}/);
+  assert.match(panel, /el\.emojiButton\.classList\.remove\("is-open", "is-pop"\);/, "收起就灭掉，别留一块亮在那儿");
+});
+
 test("表情包抽屉：点外面就收，不再挂「收起」按钮", () => {
   assert.doesNotMatch(panel, /put\("收起"/, "那个按钮去掉了");
   assert.doesNotMatch(panelCss, /\.emoji-close/, "样式也别留半截死代码");

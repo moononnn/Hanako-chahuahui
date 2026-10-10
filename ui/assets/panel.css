@@ -1130,6 +1130,15 @@ body.slot-embedded .friends-head { padding-top: calc(16px + var(--host-safe-top)
 .emoji-btn:disabled { opacity: .45; cursor: default; }
 .emoji-btn.is-busy { color: var(--primary-deep); background: var(--accent-soft); border-color: var(--primary); cursor: wait; }
 .emoji-btn.is-busy svg { animation: image-pick-spin .8s ease-in-out infinite; }
+/* 表情抽屉开着：跟图片按钮选中时一个亮法，开的那一刻图标摇一下头，摇完停住。 */
+.emoji-btn.is-open { color: var(--primary-deep); background: var(--accent-soft); border-color: var(--primary); }
+.emoji-btn.is-open svg { transform-box: fill-box; transform-origin: center; animation: emoji-open-nudge .55s cubic-bezier(.34, 1.36, .5, 1) 1; }
+@keyframes emoji-open-nudge {
+  0% { transform: rotate(0deg); }
+  32% { transform: rotate(-15deg); }
+  64% { transform: rotate(11deg); }
+  100% { transform: rotate(0deg); }
+}
 .emoji-drawer {
   position: absolute;
   z-index: 5;

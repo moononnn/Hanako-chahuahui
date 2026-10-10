@@ -827,6 +827,14 @@
        * 得先点一下「表情包」它们才冒出来。
        */
       void loadStickerLibrary();
+      /*
+       * 按钮得回一声。图片按钮点下去会亮起来转圈，这边照那个样子：开着的时候保持亮，
+       * 开的那一刻图标摇一下，摇完就停——抽屉是常开的，不像选文件那样有个结束点，
+       * 一直转下去反而像卡住了。
+       */
+      el.emojiButton.classList.add("is-open", "is-pop");
+      void el.emojiButton.offsetWidth; // 强制回流，连着开关也能重新播一遍
+      el.emojiButton.addEventListener("animationend", () => el.emojiButton.classList.remove("is-pop"), { once: true });
     }
 
     function closeEmojiDrawer() {
