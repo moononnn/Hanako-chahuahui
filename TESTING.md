@@ -1,5 +1,67 @@
 # TESTING · 茶话会
 
+## v0.7.515 · 生理期成为主动消息的由头（2026-10-10）
+
+- 范围：动了 `lib/daybook.js`（共享情境拼装 + 新的纯函数判定）、`index.js`（主动联系那条路的一小段）、`lib/compose.js`（背景块标题）。没碰其他主动逻辑，所以只跑这三处直接相关的测试文件。
+- 命令：`node --test tests/compose.test.js tests/daybook.test.js tests/ui.test.js`，**191/191** 通过，0 失败/取消/跳过。语法：`index.js`、`lib/daybook.js`、`lib/compose.js` 均 `node --check` 通过。
+- 新增用例：① 由头文案得写明「不追问、不提第几天、不给医疗建议」，且不碰日子账本、不在非经期编造；② `periodNoteDecision` 的四种情形——首次给、没送出去还能再给、已关心过就不再给、中断几天后算新的一段重新给；③ 接线：开关归「今日情境」、只认快照布尔、记账必须在 `appendPartnerMessage` 之后。
+- 修正一条旧断言：「主动消息那条路也要听开关」原本匹配一行式 `daybookOn() ? ... : ""`，本次改成读完快照才拼背景，断言跟着改（新写法仍要求 `if (daybookOn())` 才读）。
+- **模拟测试证明不了 ta 真的会关心**：这版只证明标记、记账与文案边界正确。真发一次主动消息才能看到实际语气，那需要真实模型调用，本轮没有做。
+- 未跑全量测试、未调真实模型、未重启 Hana。
+
+## v0.7.514 · 提示音设置：按伙伴选音色 + 音量（2026-10-10）
+
+- 范围：只动了两份前端页面 + 一个新模块 + UI 源码契约测试，没碰后端路由，所以只跑 `tests/ui.test.js`，没扩大到消息落账路由或全量套件。
+- 命令：`node --test tests/ui.test.js`，**133/133** 通过，0 失败/取消/跳过（新增 1 条：设置页的开关/音量/音色/伙伴行接线，以及两页共用 `ui/assets/message-sound.js`）。语法：`ui/assets/message-sound.js`、`tests/ui.test.js`，以及 `panel.html`、`settings.html` 的内联 module 均 `node --check` 通过。
+- 静态测试只证明接线与形状对，证明不了耳朵里响不响。真实听感（音量百分比是否合适、ta 们的音色是否好分）仍待昐儿在设备上确认。
+- 未跑全量测试、未调真实模型、未重启 Hana。
+
+## v0.7.512 · 提示音试听无声修补（2026-10-10）
+
+- 修复范围：把音调峰值增益从 0.035 提到 0.14；新消息到达时音频上下文若暂停会尝试恢复；用户开启提示音时会试听，并在音频未能启动时显示真实状态。
+- 命令：`node --test tests/reply-supersede-routes.test.js tests/ui.test.js`，**142/142** 通过，0 失败/取消/跳过。相关语法：`index.js`、两份测试文件及 `ui/panel.html` 内联 module 通过 `node --check`。
+- Hana 1.0.11-beta 静态 App 校验 `validate-app.mjs --json`：`ok:true`、0 errors、1 条动态依赖 warning。
+- 自动测试不能验证扬声器是否真发声。App Manager 已返回当前磁盘代码重载成功，inspect 为 `host=on / agent=on`，并确认茶话会·并排卡仍 mounted/visible；真实试听仍待用户确认。未做真实模型/API 调用，也未跑全量测试。
+
+## v0.7.511 · 伙伴新消息提示音（2026-10-09）
+
+- 范围：只跑消息事件落账路由与 UI 接线相关的两个测试文件，没有扩大到全量套件。
+- 命令：`node --test tests/reply-supersede-routes.test.js tests/ui.test.js`，**142/142** 通过，0 失败/取消/跳过；新增两条真 `apply(ctx)` 路由测试，覆盖新伙伴消息只发一次无正文事件、用户消息不触发、事件权限失败不影响消息落账；UI 源码契约检查 SDK、提示音开关、能力声明及不调用系统通知。
+- 相关语法检查：`index.js`、测试 harness、两份测试文件、随 Hana 1.0.6-beta 提供的 App UI SDK 均 `node --check` 通过；`ui/panel.html` 内联 module 脚本也通过。App 静态校验 `validate-app.mjs --json` 为 `ok:true`、0 errors、1 条既有动态依赖 warning。
+- 自动验证不代表权限已批准或声音已实机听过。用户反馈已重新加载；inspect 仅确认 `host=on / agent=on`，实时 UI 中茶话会·并排卡已挂载且可见，但版本与新能力授权状态均不可见，故仍未确认 v0.7.511 运行态。尚未触发新消息事件试听。隐藏但挂载时的播放、浏览器首次用户手势限制需实机确认。未跑全量测试、未调用真实模型、未重启 Hana。
+
+## v0.7.510 · 工作背景来源与主动表达边界（2026-10-09）
+
+- 修复前新增检查的第一轮为 8 项中 7 项失败，指出外显正文清洗、旧背景来源、背景标签和表达约束的缺口；这不是付费模型的语义复现。
+- 本轮最小必要范围：`conversation-grounding`、`workfeed`、`compose`、`proactive-clarity`、`prompt`、`clock` 六个测试文件，**121/121** 通过，0 失败/取消/跳过。相关 10 个 JS 文件 `node --check` 通过。没有全量回归，不能据此写全应用全绿。
+- 命令：`node --test tests/conversation-grounding.test.js tests/workfeed.test.js tests/compose.test.js tests/proactive-clarity.test.js tests/prompt.test.js tests/clock.test.js`。临时目录与 HOME / USERPROFILE / HANA_HOME 指向独立测试根，不写真实聊天数据。
+- 行为覆盖：宿主 `isolated` 标记拒绝后台委派/审查，正常审查类请求不按关键词误杀；未知来源、路径身份不一致的事件不当作共同对话；MOOD/分析标签在 800 字预算之前移除，用户原话不改；来源不明旧记录不注入、不算仍在工作；会话编号、方向和时间字段保存后重开仍在；本地偏移时间戳可还原到同一 UTC 秒。
+- 真实 App 接线覆盖：测试实际调用 `apply(ctx)` 注册消息监听器，给监听器投递隔离任务和普通正文，重开临时账本验证只有普通外显正文进入；模型/网络调用数为 0。宿主接口为桩，不等于真实宿主已验收。
+- 提示词/协议覆盖：保留“买花硬接图片去重”和“开工确认拼成叫醒、未见饰品却说越看越顺眼”两条失败原文，验证规则进入现有核查及拒绝解析；保留正常换话题、成立的比喻、带解释的冷门兴趣放行契约。**ask 返回值由测试指定，不证明真实模型会拒绝或放行**，这些原文仍是后续实机回归基线。
+- 独立静态审查指出的必要修补已完成：当前时间及背景记录都带实际时区偏移；来源未知不推成收工；工作事件拒绝有诊断；睡前/回声的背景标签统一；生成侧不放具体失败反例；测试明确不冒充语义验证。
+- 边界：依据本机 Hana 1.0.6-beta 的隔离事件标记，未假定所有未来宿主或未标记的同会话任务都能辨认；若来源无法核实则保守不注入。未删除、迁移真实聊天历史；未调用真实模型，后续聊天表现仍待观察。
+
+
+## v0.7.507 · 戳一碰必须先已读（2026-10-08）
+
+- **触发实情**：她点戳一碰，小花回戳了，但那条话仍挂着未读。查 `v2/threads/hanako.json`：那条 `m_muzc1xgm_dd0i1` 带 `notice.code = MODEL_UNAVAILABLE`，`store.markUserMessagesRead` 有一道**故意不盖**的分支（「模型那会儿用不了，这条 ta 压根没看到：盖了就成假收据」），所以未读一直在。
+- **根因**：两处越权。`POST /action/:agentId` 里「她敲了一下 → 顺手把未读收掉」；`answerAction` 完全不查未读。设计硬不变量第 10 条写的是「她的话还没被看到时，伙伴不主动开口也不戳」，主动通道 `proactive.tick` 有 `hasUnseenUserMessage` 门禁，**只有戳这条绕过去了**。所以不是「以前修过又坏了」，是当时只修了主动通道。
+- **改动**（`index.js`）：动作路由删掉 `markUserMessagesRead`；新增 `readyToPoke(agentId)`，在 `answerAction` 里 `deliverAction` 之前把关——有未读先读掉再戳；**盖不到已读就不戳**（记 `action.answer.blocked`）。
+- **测试**：`tests/ui.test.js` 在既有「戳完只用动作回」用例旁加 3 条接线契约（回戳前必须过 `readyToPoke`；`readyToPoke` 必须先问 `hasUnseenUserMessage` 再盖章；动作路由不得再出现 `markUserMessagesRead`）。
+- **全量**：**1294/1294**，0 失败/取消/跳过。`node --check index.js` 通过。
+- **如实说明**：这三条是**源码契约**，守的是接线形状，不是行为本身——`answerAction` 由 15–75s 随机 timer 触发，路由 harness 里跑不起来，本轮**没有真正的行为测试**覆盖「未读时 ta 不戳」。真实观感（「ta 没接上话时她戳了会怎样」）待实机验收。
+- **改动文件**：`index.js`、`tests/ui.test.js`、`manifest.json`（0.7.506 → 0.7.507）、`README.md` 顶部版本行、`PENDING_CHANGES.md`、`TESTING.md`。
+
+## v0.7.506 · provider 报错原地重试（2026-10-08）
+
+- **触发实情**：截图里一条「小花这会儿也说不出话：模型那边用不了」。查 `app-data/chahuahui/v2/diagnostics.jsonl`：`2026-10-08T09:27:23Z` 与 `10:12:25Z` 两次 `models.stream.empty` + `models.stream.unavailable`，provider `openai-codex / gpt-6-luna`，错误 `APP_MODEL_PROVIDER_ERROR`；同一时段 `knowing.hobbies.*` 的 utility 调用也报同一个错。同一条线成功与失败交替（17:15 本地还有一次 `models.stream.ok`），是间歇性故障。
+- **同时核过「消息有没有存上」**：那条失败的消息 `m_muzc1xgm_dd0i1` 在 `v2/threads/hanako.json` 里完好（正文、未读、notice、`modelRetryCount:1`），并排了 45 分钟后的回头接。不存在丢消息。（界面显示 17:14、存档记 09:27Z 是时区差 8 小时，不是错乱。）
+- **改动**：`lib/model.js` 把流式路线抽成 `streamOnce()`，外层循环。provider 类失败按 1.5s / 4s / 9s 原地重试至多 3 次，总时限 150s；quota 不重试；transient 仍走原 utility 兜底；不换模型、不借别的模型顶嘴。
+- **测试**：`tests/model.test.js` 新增 4 条，覆盖 ① 四次尝试后才报不可用且不碰 utility ② 第一次抖第二次成 → 直接出话、不借 utility ③ 四次尝试同一个 provider/model、四个不同 requestId ④ quota 只问一次。另有间隔递增的静态断言。
+- **全量**：显式列出 `tests/` 下全部 `*.test.js`，**1294/1294**，0 失败/取消/跳过（此前基线 1291）。`node --check lib/model.js` 通过。
+- **改动文件**：`lib/model.js`、`tests/model.test.js`、`manifest.json`（0.7.505 → 0.7.506）、`README.md` 顶部两行、`PENDING_CHANGES.md`、`TESTING.md`。
+- **未验证**：真实模型间歇性故障无法在自动测试里造出来，重试体感（最多约 15 秒等待 + 调用耗时）待实机验收；重试期间前端的「正在打字」表现未改也未单独测。
+
 ## v0.7.504 · 未送出回复合入追加消息 + 已读上界 + 真实路由编排测试（2026-10-08）
 
 - 主线程独立复跑最终 33 项专项全部通过。随后通过正式 App 管理入口 reload 成功，inspect 为 host=on / agent=on；未重启宿主、未上传。运行时装载已确认，真实聊天观感仍待人工验收。
@@ -8,7 +70,7 @@
 - **真实路由编排测试**（`tests/reply-supersede-routes.test.js` + `tests/helpers/app-harness.js`）：茶话会不自带 hono，harness 补的只是代码实际用到的那点接口（`app.get/post/put/delete/use/onError`、`c.req.{json,param,query,method,path}`、`c.json`、`c.body`），然后**真调 `apply(ctx)`**、真发 `POST /turns`、真读 `GET /turns/:turnId`，断言看的是**重新打开账本文件后的内容**。假的只有宿主出口：`models.stream` 可挂起、`bus`、`network.fetch` 可挂起（语音合成走的就是它）。
 - 路由测试覆盖：① 生成中补第二条 → 只落**一条** assistant、`repliedTo` 是最新那条、送出的是重生成那份；② 回合结束后才落的话不归旧定时器盖章；③ 重新捕获目标后水位跟着走；④ **一直追到上限 → 一条过期回复都不发、最新目标排进正常排期、排期那轮正常接住**；⑤ 模型配额错误又遇追加 → 失败不被算在旧目标头上，新话被真正读到；⑥ 清空聊天 → 旧稿不写回；⑦ **语音合成在途时追加 → 旧稿连同那份语音一起放掉，最终只落一份带语音的回复，磁盘上只留最终那一个音频文件**；⑧ 删回复退回未读 → 下一轮带上界盖章补上。
 - 红色基线 `baseline-red.log`（修前）：22 条里 10 条红。已读上界的真实行为由路由测试守住；`reply-supersede.test.js` 的源码契约只守接线形状，不冒充行为验证。
-- 用户运行数据 `app-data/chahuahui/v2/threads/hanako.json`：本轮**未写入**。测试全在临时目录（`HANA_HOME`/`HOME`/`USERPROFILE`/`TEMP`/`TMP` 均指向工作台临时根，跑完清理）。实机数据在本轮期间的变化来自那位用户自己在聊天（00:06 伙伴回复、00:08 她发了一条表情），不是本轮代码写的。
+- 用户运行数据 `app-data/chahuahui/v2/threads/hanako.json`：本轮**未写入**。测试全在临时目录（`HANA_HOME`/`HOME`/`USERPROFILE`/`TEMP`/`TMP` 均指向工作台临时根，跑完清理）。实机数据在本轮期间的变化来自用户自己在聊天（00:06 伙伴回复、00:08 她发了一条表情），不是本轮代码写的。
 - 改动文件：`index.js`、`lib/store.js`、新增 `lib/turn-window.js`、新增 `tests/helpers/app-harness.js`、新增 `tests/reply-supersede.test.js`、新增 `tests/reply-supersede-routes.test.js`、`tests/ui.test.js`（更新已读签名与定时器水位的契约断言）、`manifest.json`、`README.md` 顶部两行、`PENDING_CHANGES.md`、`TESTING.md`、`PROJECT_LOG.md`、`DESIGN-message-lifecycle.md`。`node --check` 全部通过。
 
 ### 审核阻断的处理结果（六条）
