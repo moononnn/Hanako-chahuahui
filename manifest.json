@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "chahuahui",
   "name": "茶话会",
-  "version": "0.7.504",
+  "version": "0.7.515",
   "entry": "index.js",
   "description": "茶话会：像 QQ 一样跟伙伴闲聊。主对话框面对面谈正事，这里围炉聊八卦。",
   "icon": "assets/icon.png",
@@ -13,7 +13,8 @@
     "app/resources.read",
     "app/services.provide",
     "app/services.call",
-    "app/public-data.read"
+    "app/public-data.read",
+    "app/events.emit"
   ],
   "network": {
     "allowedHosts": [

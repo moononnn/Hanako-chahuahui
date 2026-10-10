@@ -71,6 +71,17 @@ html, body {
   position: relative;
 }
 
+/* 宿主在并排小卡顶上摆了一排自己的窗口按钮（打开/最小化/最大化/关闭），那一排会压住茶话会自己的顶部控件。
+   嵌入小卡时在顶上让出一条空带：聊天头部、展板、设置与收藏浮层都从这条带下面开始，谁也不会被盖住。
+   整页打开（左侧导航那一项）时那排按钮不在页面里，所以一条带都不留。
+   改这条带的高度只改 --host-safe-top 一处。 */
+body.slot-embedded { --host-safe-top: 36px; --shell-pad-top: 12px; }
+body.slot-embedded .shell { padding-top: calc(var(--shell-pad-top) + var(--host-safe-top)); }
+/* 这两个是绝对定位在 .shell 上的，.shell 的 padding 管不到，得单独挪。 */
+body.slot-embedded .settings-view,
+body.slot-embedded .favorites-view { top: calc(12px + var(--host-safe-top)); }
+body.slot-embedded .friends-head { padding-top: calc(16px + var(--host-safe-top)); }
+
 /* 设置从聊天页打开，仍留在同一张茶话会卡里；iframe 只复用现有设置页，不另造一套表单。 */
 .settings-view {
   position: absolute;
@@ -458,6 +469,8 @@ html, body {
 }
 .head-tool:hover:not(:disabled) { color: var(--primary-ink); background: var(--accent-soft); }
 .head-tool:disabled { opacity: .35; cursor: default; }
+.head-tool.is-muted { color: var(--ink-faint); }
+.head-tool.is-muted .sound-wave, .head-tool:not(.is-muted) .sound-off { display: none; }
 .head-tool svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round; }
 .appearance-popover {
   position: absolute; z-index: 20; top: 56px; right: 12px; width: min(340px, calc(100% - 24px));
@@ -1891,3 +1904,11 @@ body.ob-open { overflow: hidden; }
   .todo-proposal { flex-wrap: wrap; }
   .todo-proposal-actions { width: 100%; justify-content: flex-end; }
 }
+
+/* 窄窗里展板是浮上来的（top: 8px），让位带得单独算，不然展板标题照样贴着宿主那排按钮。 */
+@media (max-width: 600px) {
+  body.slot-embedded .shell { --shell-pad-top: 8px; }
+  body.slot-embedded .friends { top: calc(8px + var(--host-safe-top)); }
+  body.slot-embedded .friends-head { padding-top: calc(8px + var(--host-safe-top)); }
+}
+

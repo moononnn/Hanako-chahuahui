@@ -479,7 +479,9 @@ test("设置页小动作改成好友固定前缀加填空，并随叫法换动�
   assert.match(app, /actionStyles: ACTION_STYLES\.map/, "聊天窗的表情要跟叫法表同源");
   assert.match(panel, /actionEmoji\.get\(m\.actionId\)/, "聊天窗的动作也要带上自己的表情");
   assert.doesNotMatch(panel, /actionLabel/, "聊天窗不能把「拍一拍」这种叫法当正文");
-  assert.match(app, /renderActionLine\(styleId, readTemplateEntry\(settings\)\?\.text, USER_NAME\)/, "存进聊天的正文是动词句");
+  assert.match(app, /renderActionLine\(styleId, readMyTemplateEntry\(globalSettings\)\?\.text, partnerName\)/, "伙伴做给她：用她写的那句，「你」就是她");
+  assert.match(app, /renderMyActionLine\(styleId, readTemplateEntry\(settings\)\?\.text, partnerName\)/, "她做给伙伴：人称对调，「你」得是她自己，伙伴才是被戳的那个");
+  assert.match(app, /iDoIt: renderMyActionLine\(styleId, theirs\?\.text, partnerName\)/, "设置页预览「你做的」也跟着对调");
   assert.match(settings, /myActionTail/);
   assert.match(settings, /maxlength="34"/);
   assert.doesNotMatch(settings, /\{name\}|\{verb\}/);
@@ -1080,6 +1082,21 @@ test("戳一下不马上接、也不摆「正在回复」的姿态", () => {
     /async function answerAction\(agentId, \{ partnerName \}\)[\s\S]{0,600}?deliverAction\(agentId, \{ partnerName, from: "partner" \}\)/,
     "戳完只用动作回一个，不再出话",
   );
+  assert.match(
+    app,
+    /async function answerAction\(agentId, \{ partnerName \}\)[\s\S]{0,400}?if \(!readyToPoke\(agentId\)\) return \{ answered: false, reason: "unseen" \};[\s\S]{0,300}?deliverAction/,
+    "回戳之前先问 ta 看没看到她的消息（QQ 那套：不看就戳等于隔空敲窗）",
+  );
+  assert.match(
+    app,
+    /function readyToPoke\(agentId\)[\s\S]{0,900}?hasUnseenUserMessage[\s\S]{0,900}?markUserMessagesRead/,
+    "盖不到已读（ta 压根没接上话那句话）时就不戳",
+  );
+  assert.doesNotMatch(
+    actionRoute,
+    /markUserMessagesRead/,
+    "戳的那条路由不替ta 签收未读：收未读是 ta 读到才做的事",
+  );
   assert.doesNotMatch(app, /ACTION_WORD_CHANCE/, "顺口应那句已经拆了，动作不再用话接");
 
   const at = panel.indexOf("async function doAction(agentId)");
@@ -1444,7 +1461,7 @@ test("她一口气说了好几条：全看到、挑着回、剩下的话头进�
 
 test("时间感是茶话会自己带的，不靠别的插件", () => {
   const promptSrc = fs.readFileSync(new URL("../lib/prompt.js", import.meta.url), "utf8");
-  assert.match(app, /import \{ spokenClock, timeBlock \} from "\.\/lib\/clock\.js"/, "自己有一块表");
+  assert.match(app, /import \{[^}]*\bspokenClock\b[^}]*\btimeBlock\b[^}]*\} from "\.\/lib\/clock\.js"/, "自己有一块表");
   assert.match(app, /currentMessageId: currentMessageId \|\| repliedTo/, "普通回复要锚定正在接的话");
   assert.match(app, /messages: store\.getThread\(agentId\)\.messages/, "拿的是这个人自己的聊天记录");
   assert.match(app, /timeText,/, "得递进提示词");
@@ -2042,7 +2059,7 @@ test("拾光记今日情境：装了拾光记才有得开，默认关，没装�
   assert.match(app, /async function shiguangjiInstalled\(\)/);
   assert.match(app, /function daybookOn\(\)/);
   assert.match(app, /if \(daybookOn\(\)\) \{\s*const read = await readDaybookVerbose\(ctx\)/, "没开就不读快照");
-  assert.match(app, /contextText = daybookOn\(\) \? buildAmbientContextText/, "主动消息那条路也要听开关");
+  assert.match(app, /if \(daybookOn\(\)\) \{\s*\n\s*const snapshot = await readDaybook\(ctx\);/, "主动消息那条路也要听开关：没开连快照都不读");
   assert.match(app, /patch\.daybookEnabled = patch\.daybookEnabled === true/);
   assert.match(settingsCss, /\.switch:disabled/);
 });
@@ -2155,4 +2172,68 @@ test("出题资格：母题加被接住过的癖好，冷掉的收回（2026-10-
   assert.match(app, /setHobbyOffers\(hobbies, promoted, true, now\)/, "接住过的方向放出来");
   assert.match(app, /setHobbyOffers\(hobbies, demoted, false, now\)/, "冷掉的收回");
   assert.match(app, /sharedMaterial,/, "补母题时带上真实相处素材");
+});
+
+test("生理期也能成为主动找我的由头：一个周期只给一次，真送出去才算", () => {
+  assert.match(app, /periodNoteDecision,/, "周期判断得用共用那段纯逻辑");
+  assert.match(app, /if \(daybookOn\(\)\) \{\s*\n\s*const snapshot = await readDaybook\(ctx\);/, "生理期由头归「拾光记今日情境」这一个开关管，不另开一层");
+  assert.match(app, /const decision = periodNoteDecision\(store\.getGlobalSettings\(\)\.proactivePeriodNote, \{\s*\n\s*day: today,\s*\n\s*period: daybookEntry\(snapshot, ""\)\?\.period === true,/, "只认共享快照里的那个布尔，不去猜天数");
+  assert.match(app, /buildAmbientContextText\(snapshot, \{ periodNote: decision\.include \}\)/);
+  assert.match(app, /if \(periodNotePending\) \{\s*\n\s*store\.setGlobalSettings\(\{ proactivePeriodNote: \{ day: dayKey\(now\), noted: true \} \}\)/, "记账得在真的发出去之后，不能在拼提示词时就算数");
+  assert.match(app, /periodNotePending = decision\.include;/);
+  // 记账必须落在 appendPartnerMessage 之后：前面那些空正文、重复措辞、清楚度复核拦下的都不算。
+  const markerAt = app.indexOf("store.setGlobalSettings({ proactivePeriodNote: { day: dayKey(now), noted: true } });");
+  assert.ok(markerAt > app.indexOf("const stored = appendPartnerMessage(agentId,"), "记账位置在消息落库之后");
+  assert.match(app, /proactive\.period-note\.sent/, "得留一条诊断，方便以后查是不是真发过");
+});
+
+test("并排小卡要给宿主那排窗口按钮让位，整页打开时不留空带", () => {
+  const css = fs.readFileSync(new URL("../ui/assets/panel.css", import.meta.url), "utf8");
+  assert.match(panel, /const EMBEDDED_SLOTS = new Set\(\["card", "widget", "function-panel"\]\)/, "形态只看 lifecycle 的 slot，不写死卡片 id");
+  assert.match(panel, /document\.body\.classList\.toggle\("slot-embedded", EMBEDDED_SLOTS\.has\(String\(snapshot\?\.slot \?\? ""\)\)\)/);
+  assert.match(panel, /applySlotSafeArea\(hana\.lifecycle\?\.getSnapshot\?\.\(\)\)/, "开页先按当前形态摆一次，不能等下一次快照");
+  assert.match(panel, /hana\.lifecycle\?\.subscribe\?\.\(applySlotSafeArea\)/);
+  assert.match(css, /body\.slot-embedded \{ --host-safe-top: 36px;/, "顶上要空出一条带，宿主那排按钮才不会盖住我们的控件");
+  assert.match(css, /body\.slot-embedded \.shell \{ padding-top: calc\(var\(--shell-pad-top\) \+ var\(--host-safe-top\)\); \}/);
+  assert.match(css, /body\.slot-embedded \.settings-view,\nbody\.slot-embedded \.favorites-view \{ top: calc\(12px \+ var\(--host-safe-top\)\); \}/, "绝对定位的浮层不跟着 padding 走，得单独挪");
+  assert.doesNotMatch(css, /\.shell \{ padding-top: 3\dpx/, "不能让整页也背上这条带");
+});
+
+test("新消息提示音走本机应用事件，不走系统通知", () => {
+  const manifest = JSON.parse(fs.readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
+  const sdk = fs.readFileSync(new URL("../ui/assets/hana-app-sdk-ui.js", import.meta.url), "utf8");
+  const sound = fs.readFileSync(new URL("../ui/assets/message-sound.js", import.meta.url), "utf8");
+  assert.ok(manifest.capabilities.includes("app/events.emit"), "事件发送能力要由 App 清单明确申请");
+  assert.match(panel, /import \{ hana \} from "\.\/assets\/hana-app-sdk-ui\.js"/);
+  assert.match(sdk, /appEvents:\s*\{/);
+  assert.match(app, /ctx\.appEvents\.emit\("partner-message-arrived", \{ agentId, messageId \}\)/);
+  assert.match(app, /if \(!replaceMessageId && entry\.role === "assistant"\) emitPartnerMessageArrived\(agentId, stored\.id\)/);
+  assert.match(panel, /hana\.appEvents\?\.on\?\.\(MESSAGE_ARRIVAL_EVENT, receiveMessageArrival\)/);
+  assert.match(panel, /import \{ ensureAudio, normalizeSettings, play as playMessageSound, profileFor \} from "\.\/assets\/message-sound\.js"/);
+  assert.match(panel, /提示音已开启，但页面没能发出声音/, "音频没解锁时不能假报试听成功");
+  assert.match(panel, /hana\.storage\.global\.set\(MESSAGE_SOUND_KEY, next\)/);
+  assert.match(panel, /playMessageChime\(typeof payload\?\.agentId === "string" \? payload\.agentId : null\)/, "谁来的消息就响 ta 自己那份音色");
+  assert.match(panel, /if \(keys\.includes\(MESSAGE_SOUND_KEY\)\) void loadMessageSoundPreference\(\)/, "设置页改完，聊天页当场要跟着变");
+  assert.match(sound, /new AudioContextType\(\)/);
+  assert.match(sound, /gain\.gain\.exponentialRampToValueAtTime\(peak, noteStart \+ 0\.012\)/, "提示音要有实际可听的幅度");
+  assert.match(sound, /export const MAX_GAIN = 0\.3/, "音量拉满也不能刺耳");
+  assert.doesNotMatch(panel, /new Notification|Notification\.requestPermission/);
+});
+
+test("提示音设置页能按伙伴挑音色、调音量，两处共用一份声音模块", () => {
+  const settings = fs.readFileSync(new URL("../ui/settings.html", import.meta.url), "utf8");
+  const sound = fs.readFileSync(new URL("../ui/assets/message-sound.js", import.meta.url), "utf8");
+  assert.match(settings, /import \{ PROFILES, DEFAULT_PROFILE_ID, ensureAudio, normalizeSettings, play as playMessageSound \} from "\.\/assets\/message-sound\.js"/);
+  assert.match(settings, /id="msg-sound-switch"/, "总开关要有");
+  assert.match(settings, /id="msg-sound-volume"/, "音量滑块要有");
+  assert.match(settings, /id="msg-sound-profile-cell"/, "默认音色要有");
+  assert.match(settings, /id="msg-sound-partners"/, "按伙伴分开的音色列表要有");
+  assert.match(settings, /hana\.storage\.global\.get\(MESSAGE_SOUND_KEY\)/, "跟聊天页读同一个键");
+  assert.match(settings, /hana\.storage\.global\.set\(MESSAGE_SOUND_KEY, next\)/);
+  assert.match(settings, /hana\.storage\.global\.get\("messageSoundEnabled"\)/, "旧版那个开关的关闭要接过来");
+  assert.match(settings, /soundPreviewButton\(\(\) => \(\{ agentId: partner\.id, volume: messageSound\.volume \}\), `\$\{partner\.name \|\| partner\.id\} 的提示音`\)/, "试听某位伙伴时要听到 ta 自己那份");
+  assert.match(settings, /button\.textContent = "▶"/, "试听按钮跟语音那边一样用小三角，别写成两行字");
+  assert.match(sound, /export function profileFor\(sound, agentId\)/, "按伙伴取音色的判断得在共用模块里");
+  assert.match(sound, /export function normalizeSettings\(raw\)/, "读到的账本形状不对要退回默认");
+  assert.doesNotMatch(sound, /Notification/);
 });

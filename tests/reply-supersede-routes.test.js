@@ -281,3 +281,30 @@ test("撤回复退回未读：下一轮带上界的盖章能把欠下的补上",
   rows = reopenThread(app.dataDir, AGENT);
   assert.equal(rows.find((row) => row.id === mine.repliedTo).readAt, null, "删掉回复后原话退回未读");
 });
+
+test("只在新伙伴消息落账后发本地应用事件，且不带消息正文", async () => {
+  const app = await bootChahuahui({ seed: seedReady });
+  const first = await post(app.request, { text: "我回来了", clientMessageId: "m_sound_user_0001" });
+  assert.equal(app.emittedAppEvents.length, 0, "她自己的消息不触发伙伴提示音事件");
+
+  await app.models.waitForCall(0);
+  app.models.release(0, "我在呢");
+  const done = await waitTurn(app.request, first.body.turnId, (state) => state.status === "ready" && state.replyMessageId);
+  assert.deepEqual(app.emittedAppEvents, [{
+    type: "partner-message-arrived",
+    payload: { agentId: AGENT, messageId: done.replyMessageId },
+  }]);
+  assert.equal(JSON.stringify(app.emittedAppEvents).includes("我在呢"), false, "事件只带身份与消息编号，不复制正文");
+});
+
+test("应用事件权限不可用时，伙伴消息仍正常落账", async () => {
+  const app = await bootChahuahui({ seed: seedReady });
+  app.ctx.appEvents.emit = async () => {
+    throw Object.assign(new Error("permission denied"), { code: "APP_CAPABILITY_DENIED" });
+  };
+  const first = await post(app.request, { text: "我回来了", clientMessageId: "m_sound_user_0002" });
+  await app.models.waitForCall(0);
+  app.models.release(0, "你回来啦");
+  const done = await waitTurn(app.request, first.body.turnId, (state) => state.status === "ready" && state.replyMessageId);
+  assert.ok(reopenThread(app.dataDir, AGENT).some((row) => row.id === done.replyMessageId && row.text === "你回来啦"));
+});

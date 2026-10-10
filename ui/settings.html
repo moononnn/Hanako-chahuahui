@@ -36,6 +36,7 @@
 
     <nav class="tabs" aria-label="设置分类" role="tablist">
       <button class="tab on" id="tab-chat" data-tab="chat" role="tab" aria-selected="true" aria-controls="panel-chat">聊天显示</button>
+      <button class="tab" id="tab-sound" data-tab="sound" role="tab" aria-selected="false" aria-controls="panel-sound">提示音</button>
       <button class="tab" id="tab-voice" data-tab="voice" role="tab" aria-selected="false" aria-controls="panel-voice">语音</button>
       <button class="tab" id="tab-immersion" data-tab="immersion" role="tab" aria-selected="false" aria-controls="panel-immersion">沉浸感</button>
       <button class="tab" id="tab-model" data-tab="model" role="tab" aria-selected="false" aria-controls="panel-model">模型</button>
@@ -95,6 +96,46 @@
           <input type="text" id="my-action-text" maxlength="34" placeholder="填这里，比如肚皮并发出海豹音" aria-label="动作后面的内容">
         </label>
         <small class="action-note">选中的叫法会自动换到前面，留空就用默认句。</small>
+      </article>
+    </section>
+
+    <section id="panel-sound" role="tabpanel" aria-labelledby="tab-sound" tabindex="0" hidden>
+      <div class="section-head">
+        <div><h2>提示音</h2><p>伙伴发来新消息时，聊天页里轻轻响一声。不弹系统通知，只有声音。</p></div>
+      </div>
+      <div class="switch-grid">
+        <article class="setting-card compact">
+          <div class="setting-copy">
+            <h3>新消息提示音</h3>
+            <p>关掉以后，伙伴来消息时一点声音都没有。</p>
+          </div>
+          <button class="switch" id="msg-sound-switch" type="button" role="switch" aria-checked="true">
+            <span class="track"><span></span></span><span class="switch-label">已开启</span>
+          </button>
+        </article>
+      </div>
+      <article class="setting-card">
+        <div class="setting-copy">
+          <h3>音量与默认音色</h3>
+          <p>音量是总的，不分人。没单独挑过的伙伴都跟默认音色走。</p>
+        </div>
+        <label class="sound-volume">
+          <span>音量</span>
+          <input type="range" id="msg-sound-volume" min="0" max="100" step="1">
+          <b class="sound-volume-value">50%</b>
+        </label>
+        <div class="sound-row">
+          <span class="choice-label">默认音色</span>
+          <div class="voice-cell" id="msg-sound-profile-cell"></div>
+        </div>
+        <small class="detail-field-note" id="msg-sound-note">试听就是聊天页里真实的响法，不调用模型，也不写进聊天记录。</small>
+      </article>
+
+      <div class="section-head roomy">
+        <div><h2>给伙伴换音色</h2><p>谁来找你，就听得出是谁。选「跟随默认」就跟上面那一份一样。</p></div>
+      </div>
+      <article class="setting-card">
+        <div class="sound-partner-list" id="msg-sound-partners"></div>
       </article>
     </section>
 
@@ -367,6 +408,7 @@
   <script src="./assets/beautify-select.js"></script>
   <script type="module">
     import { hana as localHana } from "./assets/sdk.js";
+    import { PROFILES, DEFAULT_PROFILE_ID, ensureAudio, normalizeSettings, play as playMessageSound } from "./assets/message-sound.js";
 
     // 嵌在聊天卡里时复用外层宿主桥；单独打开时仍保留原来的 SDK 兜底。
     const hana = window.parent !== window && window.parent.__chahuahuiHana ? window.parent.__chahuahuiHana : localHana;
@@ -399,6 +441,9 @@
     let globalSettings = {};
     // 安静时间关掉之前的那一段：恢复时原样回去，而不是每次都塞一段默认的 23:00~08:00。
     let lastQuietRange = null;
+    // 提示音偏好存在 App 自己的全局存储里（跟聊天页共用），不走后端设置。
+    const MESSAGE_SOUND_KEY = "messageSound";
+    let messageSound = normalizeSettings(null);
     let daybookInstalled = false;
     let styleCatalog = [];
     let modelCatalog = [];
@@ -459,6 +504,7 @@
     /** 每栏一句副标题；台面上分得清「这一页管什么」 */
     const TAB_SUBTITLES = {
       chat: "只管聊天窗长什么样，不影响聊过的内容。",
+      sound: "伙伴来消息时响什么、响多大，都在这一页。",
       voice: "伙伴偶尔发一条语音，念得带点情绪；怎么念、用哪个模型都在这一页。",
       immersion: "让伙伴多知道一点你这边今天的事。",
       model: "决定聊天时用哪个模型。给某位伙伴单独挑了就用挑的。",
@@ -1170,6 +1216,155 @@
       const next = !Boolean(globalSettings.messageRefine);
       if (await saveGlobal({ messageRefine: next }, next ? "回复修整入口已打开" : "回复修整入口已关闭")) paintGlobal();
     });
+
+    // ── 提示音：开关、音量、默认音色、按伙伴各自挑的音色 ──
+    // 存在 App 全局存储里，聊天页也读同一个键，所以这儿改完那边当场就变。
+    const soundSwitch = document.getElementById("msg-sound-switch");
+    const soundVolume = document.getElementById("msg-sound-volume");
+    const soundVolumeValue = document.querySelector(".sound-volume-value");
+    const soundNote = document.getElementById("msg-sound-note");
+    const soundProfileCell = document.getElementById("msg-sound-profile-cell");
+    const soundPartnerList = document.getElementById("msg-sound-partners");
+
+    function profileLabel(id) {
+      return PROFILES[id]?.label ?? PROFILES[DEFAULT_PROFILE_ID].label;
+    }
+
+    function buildSoundProfileSelect(current, { withFollow = false } = {}) {
+      const sel = document.createElement("select");
+      if (withFollow) {
+        const follow = document.createElement("option");
+        follow.value = "";
+        follow.textContent = "跟随默认";
+        sel.appendChild(follow);
+      }
+      for (const profile of Object.values(PROFILES)) {
+        const opt = document.createElement("option");
+        opt.value = profile.id;
+        opt.textContent = `${profile.label}·${profile.hint}`;
+        sel.appendChild(opt);
+      }
+      sel.value = current ?? (withFollow ? "" : DEFAULT_PROFILE_ID);
+      return sel;
+    }
+
+    function soundPreviewButton(getOptions, label) {
+      const button = document.createElement("button");
+      button.type = "button";
+      // 跟语音那边的试听同一个样式：就一个小三角，不写字。
+      button.className = "voice-play";
+      button.textContent = "▶";
+      button.title = `试听${label}`;
+      button.setAttribute("aria-label", `试听${label}`);
+      button.addEventListener("click", async () => {
+        const ready = await ensureAudio();
+        if (!ready) {
+          soundNote.textContent = "浏览器没放行声音，点一下页面再试试听。";
+          return;
+        }
+        const played = playMessageSound({ ...getOptions(), sound: messageSound });
+        if (played) {
+          button.classList.add("playing");
+          setTimeout(() => button.classList.remove("playing"), 600);
+        }
+        soundNote.textContent = played ? "刚才是真实响法，聊天页里也是这个声音。" : "这一声没响出来，点一下页面再试试听。";
+      });
+      return button;
+    }
+
+    async function saveMessageSound(next, successText) {
+      applyMessageSound(next);
+      try {
+        const saved = await hana.storage.global.set(MESSAGE_SOUND_KEY, next);
+        if (saved?.ok !== true) throw new Error("保存失败");
+        paintMessageSound();
+        if (successText) say(successText);
+        return true;
+      } catch {
+        say("提示音没保存上，再试一哈", "err");
+        return false;
+      }
+    }
+
+    function applyMessageSound(next) {
+      messageSound = normalizeSettings(next);
+    }
+
+    async function loadMessageSound() {
+      let stored = null;
+      try { stored = (await hana.storage.global.get(MESSAGE_SOUND_KEY))?.value; } catch { /* 读不到就用默认 */ }
+      if (!stored) {
+        try {
+          const legacy = await hana.storage.global.get("messageSoundEnabled");
+          if (typeof legacy?.value === "boolean") stored = { enabled: legacy.value };
+        } catch { /* 旧键不在就是全新装的 */ }
+      }
+      applyMessageSound(stored);
+      paintMessageSound();
+    }
+
+    function paintMessageSound() {
+      const enabled = messageSound.enabled;
+      soundSwitch.classList.toggle("on", enabled);
+      soundSwitch.setAttribute("aria-checked", String(enabled));
+      soundSwitch.querySelector(".switch-label").textContent = enabled ? "已开启" : "已关闭";
+      const percent = Math.round(messageSound.volume * 100);
+      soundVolume.value = String(percent);
+      soundVolumeValue.textContent = `${percent}%`;
+
+      soundProfileCell.replaceChildren();
+      const profileSelect = buildSoundProfileSelect(messageSound.profile);
+      profileSelect.setAttribute("aria-label", "默认提示音");
+      profileSelect.addEventListener("change", async () => {
+        if (!await saveMessageSound({ ...messageSound, profile: profileSelect.value }, `以后默认是「${profileLabel(profileSelect.value)}」`)) paintMessageSound();
+      });
+      soundProfileCell.append(profileSelect, soundPreviewButton(() => ({ volume: messageSound.volume, profileId: messageSound.profile }), "默认音色"));
+      dressSelects(soundProfileCell);
+
+      soundPartnerList.replaceChildren();
+      if (!partners.length) {
+        const empty = document.createElement("small");
+        empty.className = "detail-field-note";
+        empty.textContent = "茶话会里还没有伙伴。";
+        soundPartnerList.appendChild(empty);
+      }
+      for (const partner of partners) {
+        const row = document.createElement("div");
+        row.className = "sound-partner-row";
+        const name = document.createElement("span");
+        name.className = "sound-partner-name";
+        name.textContent = partner.name || partner.id;
+        const cell = document.createElement("div");
+        cell.className = "voice-cell";
+        const own = messageSound.byPartner[partner.id] ?? "";
+        const select = buildSoundProfileSelect(own, { withFollow: true });
+        select.setAttribute("aria-label", `${partner.name || partner.id} 的提示音`);
+        select.addEventListener("change", async () => {
+          const byPartner = { ...messageSound.byPartner };
+          if (select.value) byPartner[partner.id] = select.value;
+          else delete byPartner[partner.id];
+          if (!await saveMessageSound({ ...messageSound, byPartner }, select.value ? `以后是「${profileLabel(select.value)}」来提醒你` : `${partner.name || partner.id} 跟回默认音色`)) paintMessageSound();
+        });
+        cell.append(select, soundPreviewButton(() => ({ agentId: partner.id, volume: messageSound.volume }), `${partner.name || partner.id} 的提示音`));
+        row.append(name, cell);
+        soundPartnerList.appendChild(row);
+      }
+      dressSelects(soundPartnerList);
+    }
+
+    soundSwitch.addEventListener("click", async () => {
+      const next = !messageSound.enabled;
+      if (!await saveMessageSound({ ...messageSound, enabled: next }, next ? "新消息提示音已打开" : "新消息提示音已关闭")) paintMessageSound();
+      else if (next && !(await ensureAudio())) say("设置已保存，但这一页没能出声；点一下页面再试试听", "err");
+    });
+    soundVolume.addEventListener("input", () => {
+      soundVolumeValue.textContent = `${soundVolume.value}%`;
+    });
+    soundVolume.addEventListener("change", async () => {
+      const volume = Math.min(1, Math.max(0, Number(soundVolume.value) / 100));
+      if (!await saveMessageSound({ ...messageSound, volume }, `音量改到 ${Math.round(volume * 100)}%`)) return;
+      if (await ensureAudio()) playMessageSound({ volume, profileId: messageSound.profile, sound: messageSound });
+    });
     document.getElementById("voice-switch").addEventListener("click", async () => {
       const next = !Boolean(globalSettings.voiceEnabled);
       if (await saveGlobal({ voiceEnabled: next }, next ? "伙伴语音消息已打开" : "伙伴语音消息已关闭")) paintGlobal();
@@ -1706,7 +1901,10 @@
       });
       voiceCard.appendChild(field("语音开关", voiceSwitch));
       const profileId = voiceProfileId();
-      const savedVoiceId = s.voice?.voiceByProfile?.[profileId] || s.voice?.voiceId || "";
+      // 这条必须能改：音色存下去以后，下面那个「试听这位伙伴的声音」要拿的正是它。
+      // 原来写成 const，保存完只挪了高亮，试听还发的是切换前那一个音色，
+      // 于是听着像「选哪个都一样」。
+      let savedVoiceId = s.voice?.voiceByProfile?.[profileId] || s.voice?.voiceId || "";
       const pickedVoice = voiceChoices.some((item) => item.id === savedVoiceId);
       const voiceId = savedVoiceId || voiceChoices[0]?.id || "";
       if (!globalSettings.voiceReady) {
@@ -1715,12 +1913,55 @@
         warn.textContent = "上面那条朗读模型还缺必填项，现在一条语音也合成不出来。";
         voiceCard.appendChild(warn);
       }
+      // 试听小喇叭：只播，不改设置。
+      // 同一时刻只让一段在响：再点别的自动接上，同一个再点一下就是停。
+      // 「playing」这个 class 顺手当作在途请求的凭据——中途又点了别的，
+      // 老请求回来时发现这个 class 已经被人摘掉，就直接把音频丢掉，不播。
+      // 这两个函数要放在音色分支外面：下面那个「试听这位伙伴的声音」按钮也用得到。
+      let voicePreview = null;
+      const stopVoicePreview = () => {
+        if (!voicePreview) return;
+        voicePreview.audio.pause();
+        voicePreview.audio.removeAttribute("src");
+        voicePreview.button.classList.remove("playing");
+        voicePreview = null;
+      };
+      const playVoicePreview = async (previewVoiceId, button) => {
+        const wasSame = voicePreview?.voiceId === previewVoiceId;
+        stopVoicePreview();
+        if (wasSame) return;
+        button.classList.add("playing");
+        try {
+          const response = await hana.api.fetch("voice/test", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              voiceId: previewVoiceId,
+              modelConfig: globalSettings.voiceModel,
+              text: `你好呀，我是${partner.name}。这是我的声音试听。`,
+            }),
+          });
+          if (!response.ok) throw new Error((await response.text()).slice(0, 200) || `HTTP ${response.status}`);
+          const audio = new Audio(URL.createObjectURL(await response.blob()));
+          if (!button.classList.contains("playing")) { audio.pause(); return; }
+          audio.addEventListener("ended", () => {
+            button.classList.remove("playing");
+            if (voicePreview?.audio === audio) voicePreview = null;
+          }, { once: true });
+          await audio.play();
+          voicePreview = { voiceId: previewVoiceId, audio, button };
+        } catch (error) {
+          button.classList.remove("playing");
+          say(`试听没通过：${error.message}`, "err");
+        }
+      };
       if (voiceChoices.length) {
         const picker = document.createElement("div");
         picker.className = "voice-picker";
         const groups = voiceGroups.length ? voiceGroups : [{ id: "default", label: "音色", voices: voiceChoices }];
         const saveVoiceId = async (next) => {
           if (!await savePartner(agentId, { voice: { ...(s.voice ?? {}), voiceId: next, voiceByProfile: { ...(s.voice?.voiceByProfile || {}), [profileId]: next } } }, "音色已保存")) return;
+          savedVoiceId = next;
           // 换一个音色只是挪一张高亮，犯不着把整页拆开重翻一遍：
           // 这里以前调 openPartner，每选一次音色整页就重建，
           // 页面被拽回最上面，还得重新往下翻。语音开关、出现频率也是同一条路，
@@ -1736,13 +1977,23 @@
           const grid = document.createElement("div");
           grid.className = "voice-grid";
           for (const item of group.voices) {
+            const cell = document.createElement("div");
+            cell.className = "voice-cell";
             const chip = document.createElement("button");
             chip.type = "button";
             chip.className = `voice-chip${item.id === voiceId ? " on" : ""}`;
             chip.textContent = item.name;
             chip.title = item.id;
             chip.addEventListener("click", () => saveVoiceId(item.id));
-            grid.appendChild(chip);
+            const play = document.createElement("button");
+            play.type = "button";
+            play.className = "voice-play";
+            play.textContent = "▶";
+            play.title = `试听 ${item.name}`;
+            play.setAttribute("aria-label", `试听 ${item.name}`);
+            play.addEventListener("click", () => { void playVoicePreview(item.id, play); });
+            cell.append(chip, play);
+            grid.appendChild(cell);
           }
           details.append(summary, grid);
           picker.appendChild(details);
@@ -1787,6 +2038,7 @@
         previewButton.disabled = true;
         previewButton.textContent = "正在生成试听…";
         previewNote.textContent = "只生成试听，不会写进聊天记录。";
+        stopVoicePreview();
         try {
           const response = await hana.api.fetch("voice/test", {
             method: "POST",
@@ -3148,6 +3400,7 @@
       try {
         hana.ready?.({ ok: true });
         await reloadSettings();
+        await loadMessageSound();
       } catch (error) {
         const message = String(error?.message ?? "");
         // 权限没批是分享版新手最容易撞上的一堵墙，别只丢一句「读不出来」。

@@ -225,6 +225,12 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 .voice-chip { border: 1px solid transparent; background: var(--mint-soft); color: var(--mint-deep); font-size: 12px; padding: 4px 10px; border-radius: 8px; cursor: pointer; transition: background 160ms ease, border-color 160ms ease; }
 .voice-chip.on { background: var(--mint); color: #fff; font-weight: 600; }
 @media (hover: hover) and (pointer: fine) { .voice-chip:not(.on):hover { background: #d8ebe2; } }
+/* 音色格子里的小喇叭：只试听、不改设置；名字归名字，声音归声音，两件事分开才敢慢慢挑 */
+.voice-cell { display: inline-flex; align-items: stretch; }
+.voice-cell .voice-chip { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.voice-play { width: 28px; flex: none; border: 1px solid var(--line-soft); border-left: 0; background: var(--mint-soft); color: var(--mint-deep); font-size: 10px; line-height: 1; border-radius: 0 8px 8px 0; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: background 160ms ease, color 160ms ease; }
+@media (hover: hover) and (pointer: fine) { .voice-play:hover { background: #d8ebe2; } }
+.voice-play.playing { background: var(--mint); color: #fff; }
 .voice-custom { display: flex; gap: 8px; align-items: center; }
 .voice-custom input { flex: 1 1 auto; min-width: 0; }
 /* 缺必填项时的那句话：不能只靠她自己试出来 */
@@ -319,6 +325,17 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 .room-gallery[hidden] { display: none; }
 .room-gallery button { min-width: 0; aspect-ratio: 1; padding: 3px; border: 1px solid var(--line-soft); border-radius: var(--r-sm); background: var(--paper); cursor: pointer; overflow: hidden; }
 .room-gallery button:hover, .room-gallery button.on { border-color: var(--mint-deep); background: var(--mint-soft); }
+/* 提示音：音量滑块 + 音色选择 + 每位伙伴一行 */
+.sound-volume { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; margin: 4px 0 10px; color: var(--ink-soft); font-size: 12px; }
+.sound-volume input { min-width: 0; width: 100%; accent-color: var(--mint-deep); }
+.sound-volume-value { min-width: 38px; color: var(--mint-deep); text-align: right; font-variant-numeric: tabular-nums; }
+.sound-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.sound-partner-list { display: flex; flex-direction: column; gap: 10px; }
+.sound-partner-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sound-partner-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 13px; }
+/* 提示音的下拉被套了壳，四个角都是圆的；试听按钮跟着改成整圆，中间留一道缝，
+   不然按钮的直角紧贴圆角会看着别扭（语音那边是方的，因为那边下拉右边也是方的）。 */
+#panel-sound .voice-play { border-radius: 8px; border-left: 1px solid var(--line-soft); margin-left: 6px; }
 .room-gallery img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .room-note { display: block; color: var(--ink-soft); font-size: 11.5px; }
 

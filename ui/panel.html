@@ -62,6 +62,9 @@
         <button class="head-tool" id="btn-appearance" type="button" title="聊天背景" aria-label="打开聊天背景" disabled>
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 15.5 13.8 5.7a2.1 2.1 0 0 1 3 3L7 18.5H4v-3Z"/><path d="m11.8 7.7 2.5 2.5M5.5 4.5v3M4 6h3M15.5 13.5v3M14 15h3"/></svg>
         </button>
+        <button class="head-tool" id="btn-message-sound" type="button" title="消息提示音已开启，点击关闭" aria-label="消息提示音已开启，点击关闭" aria-pressed="true">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 8v4h3l4 3V5L6 8H3Z"/><path class="sound-wave" d="M12 7.2a4 4 0 0 1 0 5.6M14.4 5a7 7 0 0 1 0 10"/><path class="sound-off" d="m13 8 4 4m0-4-4 4"/></svg>
+        </button>
         <button class="head-tool" id="btn-settings" type="button" title="茶话会设置" aria-label="打开茶话会设置">
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8.2 2.8h3.6l.5 2a5.9 5.9 0 0 1 1.2.7l1.9-.8 1.8 3.1-1.5 1.4a6.7 6.7 0 0 1 0 1.5l1.5 1.4-1.8 3.1-1.9-.8a5.9 5.9 0 0 1-1.2.7l-.5 2H8.2l-.5-2a5.9 5.9 0 0 1-1.2-.7l-1.9.8-1.8-3.1 1.5-1.4a6.7 6.7 0 0 1 0-1.5L2.8 7.8l1.8-3.1 1.9.8a5.9 5.9 0 0 1 1.2-.7l.5-2Z"/><circle cx="10" cy="10" r="2.2"/></svg>
         </button>
@@ -213,8 +216,9 @@
   </div>
 
   <script type="module">
-    import { hana } from "./assets/sdk.js";
+    import { hana } from "./assets/hana-app-sdk-ui.js";
     import { analyzeBackgroundUrl, buttonThemeFromSample } from "./assets/background-adaptive.js";
+    import { ensureAudio, normalizeSettings, play as playMessageSound, profileFor } from "./assets/message-sound.js";
 
     const el = {
       shell: document.getElementById("shell"),
@@ -256,6 +260,7 @@
       favoritesBack: document.getElementById("favorites-back"),
       favoritesList: document.getElementById("favorites-list"),
       appearanceButton: document.getElementById("btn-appearance"),
+      messageSoundButton: document.getElementById("btn-message-sound"),
       settingsView: document.getElementById("settings-view"),
       settingsFrame: document.getElementById("settings-frame"),
       appearancePopover: document.getElementById("appearance-popover"),
@@ -349,6 +354,17 @@
     let showMessageAvatars = false;
     /** 默认关闭：打开后才给伙伴回复显示修正入口，戳一戳只提供删除。 */
     let messageRefineEnabled = false;
+    const MESSAGE_SOUND_KEY = "messageSound";
+    // 旧版只存了一个开关；没有新键时把那次的手动关闭接过来，别让人白关一次。
+    const LEGACY_MESSAGE_SOUND_KEY = "messageSoundEnabled";
+    const LAST_MESSAGE_SOUND_KEY = "messageSoundLastPlayed";
+    const MESSAGE_ARRIVAL_EVENT = "partner-message-arrived";
+    // 开关、音量、默认音色、按伙伴单挑的音色，都在这一个键里；设置页改的也是它。
+    let messageSound = normalizeSettings(null);
+    let messageSoundEnabled = true;
+    let messageSoundPreferenceReady = false;
+    const pendingMessageSoundEvents = [];
+    const seenMessageSoundIds = new Set();
     /** id → 表情。跟叫法表同源（后端随 /partners 发下来），不在前端另拄一份 */
     let actionEmoji = new Map();
     /** 画当前这一屏时用的是哪种外观；跟设置对不上就整段重画 */
@@ -1356,6 +1372,115 @@
         statusTimer = null;
       }, 3200);
     }
+
+    function paintMessageSoundButton() {
+      if (!el.messageSoundButton) return;
+      const label = messageSoundEnabled ? "消息提示音已开启，点击关闭" : "消息提示音已关闭，点击开启";
+      el.messageSoundButton.classList.toggle("is-muted", !messageSoundEnabled);
+      el.messageSoundButton.setAttribute("aria-pressed", String(messageSoundEnabled));
+      el.messageSoundButton.setAttribute("aria-label", label);
+      el.messageSoundButton.title = label;
+    }
+
+    function applyMessageSoundSettings(raw) {
+      messageSound = normalizeSettings(raw);
+      messageSoundEnabled = messageSound.enabled;
+      paintMessageSoundButton();
+    }
+
+    async function loadMessageSoundPreference() {
+      let stored = null;
+      try { stored = (await hana.storage.global.get(MESSAGE_SOUND_KEY))?.value; } catch { /* 读不到就用默认 */ }
+      if (!stored) {
+        try {
+          const legacy = await hana.storage.global.get(LEGACY_MESSAGE_SOUND_KEY);
+          if (typeof legacy?.value === "boolean") stored = { enabled: legacy.value };
+        } catch { /* 旧键也不在就是全新装的 */ }
+      }
+      applyMessageSoundSettings(stored);
+    }
+
+    function ensureMessageSoundAudio() {
+      if (!messageSoundEnabled) return Promise.resolve(false);
+      return ensureAudio();
+    }
+
+    /** agentId 为空时（开关试听）响默认音色；来了消息就响 ta 自己那一份。 */
+    function playMessageChime(agentId = null) {
+      if (!messageSoundEnabled) return false;
+      return playMessageSound({ agentId, sound: messageSound });
+    }
+
+    async function claimMessageSound(messageId) {
+      const claim = async () => {
+        try {
+          const stored = await hana.storage.global.get(LAST_MESSAGE_SOUND_KEY);
+          const last = stored?.value;
+          const now = Date.now();
+          if (last?.messageId === messageId && now - Number(last.at) < 12000) return false;
+          await hana.storage.global.set(LAST_MESSAGE_SOUND_KEY, { messageId, at: now });
+        } catch { return true; }
+        return true;
+      };
+      if (typeof navigator.locks?.request === "function") {
+        try { return await navigator.locks.request("chahuahui.message-sound", claim); } catch { /* 旧版 WebView 回退到应用存储去重 */ }
+      }
+      return claim();
+    }
+
+    async function playIncomingMessageSound(payload) {
+      const messageId = typeof payload?.messageId === "string" ? payload.messageId : "";
+      if (!messageSoundEnabled || !messageId || !await ensureMessageSoundAudio()) return;
+      if (seenMessageSoundIds.has(messageId)) return;
+      seenMessageSoundIds.add(messageId);
+      if (seenMessageSoundIds.size > 100) seenMessageSoundIds.delete(seenMessageSoundIds.values().next().value);
+      if (!await claimMessageSound(messageId) || !messageSoundEnabled) return;
+      playMessageChime(typeof payload?.agentId === "string" ? payload.agentId : null);
+    }
+
+    function receiveMessageArrival(payload) {
+      if (!messageSoundPreferenceReady) {
+        if (pendingMessageSoundEvents.length < 12) pendingMessageSoundEvents.push(payload);
+        return;
+      }
+      void playIncomingMessageSound(payload);
+    }
+
+    async function toggleMessageSound() {
+      const previous = messageSound;
+      const next = { ...previous, enabled: !previous.enabled };
+      applyMessageSoundSettings(next);
+      const audioReady = next.enabled ? ensureMessageSoundAudio() : null;
+      try {
+        const saved = await hana.storage.global.set(MESSAGE_SOUND_KEY, next);
+        if (saved?.ok !== true) throw new Error("保存失败");
+        if (next.enabled) {
+          if (await audioReady) {
+            playMessageChime();
+            setStatus("提示音已开启，刚才那声是试听");
+          } else {
+            setStatus("提示音已开启，但页面没能发出声音；点一下聊天区后再试试听");
+          }
+        } else {
+          setStatus("新消息提示音已关闭");
+        }
+      } catch {
+        applyMessageSoundSettings(previous);
+        setStatus("提示音设置没保存，再试一哈");
+      }
+    }
+
+    window.addEventListener("pointerdown", () => { if (messageSoundEnabled) void ensureMessageSoundAudio(); }, { capture: true, passive: true });
+    window.addEventListener("keydown", () => { if (messageSoundEnabled) void ensureMessageSoundAudio(); }, { capture: true });
+
+    // 嵌入小卡（茶话会·并排卡）时，宿主在顶上摆了一排自己的窗口按钮，会盖住我们的顶部控件；
+    // 整页打开时那排按钮不在页面里。哪种形态只看 lifecycle 的 slot，不靠猜卡片 id；
+    // 宿主把卡片换形态时会再推一次快照，跟着换就行。留多少空带由 CSS 的 --host-safe-top 决定。
+    const EMBEDDED_SLOTS = new Set(["card", "widget", "function-panel"]);
+    function applySlotSafeArea(snapshot) {
+      document.body.classList.toggle("slot-embedded", EMBEDDED_SLOTS.has(String(snapshot?.slot ?? "")));
+    }
+
     let autoScrollAllowed = true;
     let renderingAll = false;
     let bottomFeedbackTimer = null;
@@ -5222,7 +5347,17 @@
 
     (async () => {
       try {
+        el.messageSoundButton?.addEventListener("click", () => { void toggleMessageSound(); });
+        hana.appEvents?.on?.(MESSAGE_ARRIVAL_EVENT, receiveMessageArrival);
+        hana.storage.global.onChanged((keys) => {
+          if (keys.includes(MESSAGE_SOUND_KEY)) void loadMessageSoundPreference();
+        });
         hana.ready?.({ ok: true });
+        applySlotSafeArea(hana.lifecycle?.getSnapshot?.());
+        hana.lifecycle?.subscribe?.(applySlotSafeArea);
+        await loadMessageSoundPreference();
+        messageSoundPreferenceReady = true;
+        for (const payload of pendingMessageSoundEvents.splice(0)) void playIncomingMessageSound(payload);
         const query = new URLSearchParams(window.location.search);
         launchAction = query.get("create") === "1"
           ? { create: true }
