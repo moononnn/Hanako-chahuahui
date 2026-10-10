@@ -14,6 +14,7 @@ import {
   chatModelOptions,
   resolveModelChoice,
   modelKey,
+  STREAM_RETRY_DELAYS_MS,
 } from "../lib/model.js";
 
 const ndjson = (...events) => events.map((e) => JSON.stringify(e)).join("\n");
@@ -292,7 +293,7 @@ function fakeCtx(raw, { utilityText = "借来的声音" } = {}) {
   };
 }
 
-test("provider 挂掉时不借别的模型顶嘴，直接报模型不可用", async () => {
+test("provider 挂掉时不借别的模型顶嘴，同一个模型原地重试到底才报模型不可用", async () => {
   const raw = ndjson({ type: "error", requestId: "r", code: "APP_MODEL_PROVIDER_ERROR", message: "The model provider could not complete the request." });
   const ctx = fakeCtx(raw);
   await assert.rejects(
@@ -301,13 +302,60 @@ test("provider 挂掉时不借别的模型顶嘴，直接报模型不可用", as
       messages: [],
       modelRef: { provider: "openai-codex", model: "gpt-6-luna" },
       catalog: { models: [{ provider: "openai-codex", model: "gpt-6-luna" }] },
+      retryDelaysMs: [0, 0, 0],
     }),
     { code: "MODEL_UNAVAILABLE", kind: "provider" },
   );
+  assert.equal(ctx.seen.stream, 4, "一次加三次重试");
   assert.equal(ctx.seen.utility, 0, "不许拿另一个模型的嘴替 ta 说话");
 });
 
-test("配额用完同样不兜底", async () => {
+test("provider 抖一下就好：原地重试接上，不挂「接不上话」也不借别的模型", async () => {
+  const bad = ndjson({ type: "error", requestId: "r", code: "APP_MODEL_PROVIDER_ERROR", message: "The model provider could not complete the request." });
+  const good = ndjson({ type: "text-delta", delta: "在呢" }, { type: "done", requestId: "r", stopReason: "stop" });
+  const ctx = fakeCtx(bad);
+  let call = 0;
+  ctx.models.stream = async () => {
+    call += 1;
+    return { text: async () => (call === 1 ? bad : good) };
+  };
+  const events = [];
+  const out = await generateReply(ctx, {
+    systemPrompt: "", messages: [],
+    modelRef: { provider: "openai-codex", model: "gpt-6-luna" },
+    catalog: { models: [{ provider: "openai-codex", model: "gpt-6-luna" }] },
+    retryDelaysMs: [0, 0, 0],
+    diagnostics: (row) => events.push(row),
+  });
+  assert.equal(out.text, "在呢");
+  assert.equal(out.via, "stream:openai-codex/gpt-6-luna");
+  assert.equal(ctx.seen.utility, 0, "不需要借 utility，也就没有换嗓子");
+  assert.equal(events.filter((row) => row.event === "models.stream.retry").length, 1);
+});
+
+test("重试的是同一个模型：每次尝试都带同一个 provider/model 和不同 requestId", async () => {
+  const bad = ndjson({ type: "error", requestId: "r", code: "APP_MODEL_PROVIDER_ERROR", message: "The model provider could not complete the request." });
+  const calls = [];
+  const ctx = fakeCtx(bad);
+  ctx.models.stream = async (request) => {
+    calls.push(request);
+    return { text: async () => bad };
+  };
+  await assert.rejects(generateReply(ctx, {
+    systemPrompt: "", messages: [],
+    modelRef: { provider: "openai-codex", model: "gpt-6-luna" },
+    catalog: { models: [{ provider: "openai-codex", model: "gpt-6-luna" }] },
+    retryDelaysMs: [0, 0, 0],
+  }), { code: "MODEL_UNAVAILABLE", kind: "provider" });
+  assert.equal(calls.length, 4);
+  for (const call of calls) {
+    assert.equal(call.provider, "openai-codex");
+    assert.equal(call.model, "gpt-6-luna");
+  }
+  assert.equal(new Set(calls.map((call) => call.requestId)).size, 4, "同一 requestId 不能复用于两次活动请求");
+});
+
+test("配额用完不重试也不兜底", async () => {
   const raw = ndjson({ type: "error", requestId: "r", code: "429", message: "usage limit reached" });
   const ctx = fakeCtx(raw);
   await assert.rejects(
@@ -316,10 +364,20 @@ test("配额用完同样不兜底", async () => {
       messages: [],
       modelRef: { provider: "openai-codex", model: "gpt-6-luna" },
       catalog: { models: [{ provider: "openai-codex", model: "gpt-6-luna" }] },
+      retryDelaysMs: [0, 0, 0],
     }),
     { code: "MODEL_UNAVAILABLE", kind: "quota" },
   );
+  assert.equal(ctx.seen.stream, 1, "钱包在哭的时候不该再敲");
   assert.equal(ctx.seen.utility, 0);
+});
+
+test("重试间隔是拉开的，不是连着敲门", () => {
+  assert.equal(STREAM_RETRY_DELAYS_MS.length, 3);
+  assert.equal(STREAM_RETRY_DELAYS_MS[0], 1500);
+  for (let i = 1; i < STREAM_RETRY_DELAYS_MS.length; i += 1) {
+    assert.ok(STREAM_RETRY_DELAYS_MS[i] > STREAM_RETRY_DELAYS_MS[i - 1]);
+  }
 });
 
 test("超时这类临时故障仍然借 utility 顶一下", async () => {

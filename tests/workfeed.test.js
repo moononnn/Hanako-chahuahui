@@ -46,6 +46,8 @@ test("只接收 message_end 的用户或伙伴正文", () => {
     at,
     role: "user",
     text: "今天继续修茶话会",
+    sourceKind: "computer-conversation",
+    conversationId: "a",
   });
   assert.equal(row.sessionPath, undefined, "新事件不应持久化主对话路径");
   assert.equal(normalizeWorkEvent({ type: "turn_end", message: base.message }, "C:/hana/agents/hanako/sessions/a.jsonl"), null);
@@ -72,7 +74,7 @@ test("工作事件去重、限量并按伙伴和生活日取最近几条", () =>
 test("给伙伴的工作背景有明确边界，不变成任务清单", () => {
   const feed = {
     events: [
-      { id: "a", agentId: "hanako", lifeDay: "2026-09-17", at, role: "user", text: "讨论电脑和手机的边界" },
+      { id: "a", agentId: "hanako", lifeDay: "2026-09-17", at, role: "user", text: "讨论电脑和手机的边界", sourceKind: "computer-conversation", conversationId: "main" },
     ],
   };
   const text = buildWorkfeedText(feed, "hanako", { lifeDay: "2026-09-17" });
@@ -85,8 +87,8 @@ test("给伙伴的工作背景有明确边界，不变成任务清单", () => {
 test("工作背景里的用户名标签跟着运行时走，不写死", () => {
   const feed = {
     events: [
-      { id: "a", agentId: "hanako", lifeDay: "2026-09-17", at, role: "user", text: "讨论电脑和手机的边界" },
-      { id: "b", agentId: "hanako", lifeDay: "2026-09-17", at: at + 1, role: "assistant", text: "嗯" },
+      { id: "a", agentId: "hanako", lifeDay: "2026-09-17", at, role: "user", text: "讨论电脑和手机的边界", sourceKind: "computer-conversation", conversationId: "main" },
+      { id: "b", agentId: "hanako", lifeDay: "2026-09-17", at: new Date(localEarly.getTime() + 1000).toISOString(), role: "assistant", text: "嗯", sourceKind: "computer-conversation", conversationId: "main" },
     ],
   };
   const text = buildWorkfeedText(feed, "hanako", { lifeDay: "2026-09-17", userName: "阿舟" });
@@ -123,6 +125,8 @@ const row = (agentId, date, text) => ({
   at: date.toISOString(),
   role: "user",
   text,
+  sourceKind: "computer-conversation",
+  conversationId: "main",
 });
 
 test("电脑那边的动静只算这个伙伴自己的", () => {
