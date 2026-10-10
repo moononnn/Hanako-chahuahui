@@ -467,6 +467,10 @@ test("过滤与搜索主题无关的结果，并区分没出词与网络请求�
   let bingRequests = 0;
   const irrelevant = await searchForChat({
     text: "最近娱乐圈有啥八卦？",
+    // 时钟必须钉住：这份夹具的 pubDate 是 2026-09-26，而时效窗口只有 14 天。
+    // 不钉的话这条用例会随日期慢慢腐烂（2026-10-10 实测：被当成过期，reason 变成 no-recent-results），
+    // 到期那天的红就分不清是搜索退化了还是夹具老了。
+    now: new Date("2026-09-27T00:30:00Z"),
     ask: async () => '{"searchQuery":"明星翻车 近期"}',
     fetcher: async (url) => {
       if (!url.includes("bing.com")) return { ok: true, async text() { return "{}"; } };
