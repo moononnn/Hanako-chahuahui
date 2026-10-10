@@ -477,10 +477,10 @@ test("今天第一句可以没由头，招呼不必先端出话题", () => {
   assert.match(first.userText, /这是你今天第一次开口/);
   assert.match(first.userText, /打个招呼/);
   assert.doesNotMatch(first.userText, /不要临时抽旧兴趣或共同话题凑一条内容消息/, "第一句不该又被那道筛子拦住");
-  assert.match(first.systemPrompt, /不许提「我看到」/, "两边同一个人的红线要跟着第一句一起进去");
+  assert.match(first.systemPrompt, /按每条的时间、来源会话和说话人理解/, "第一句也要保留工作背景来路");
 });
 
-test("电脑那边的近况得按「我自己刚经历的事」说，不能写成监视播报", () => {
+test("电脑那边的近况自然参与闲聊，但不硬认作刚刚亲历", () => {
   const spec = proactiveSpec({
     partnerName: "小花",
     userName: "小林",
@@ -488,10 +488,10 @@ test("电脑那边的近况得按「我自己刚经历的事」说，不能写�
     workfeedText: "【电脑那边最近发生的事】\n小林：先把窗口修好",
     firstOfDay: true,
   });
-  assert.match(spec.userText, /电脑那边（Hana）最近的近况/);
-  assert.match(spec.systemPrompt, /不许提「我看到」/);
+  assert.match(spec.userText, /电脑那边（Hana）最近的工作对话/);
+  assert.match(spec.systemPrompt, /不默认它发生在当前茶话会/);
   assert.match(spec.systemPrompt, /那边就是空的/);
-  assert.equal(LINKUP_DISCIPLINE.includes("我看到"), true);
+  assert.equal(LINKUP_DISCIPLINE.includes("按每条的时间"), true);
   const withoutFeed = proactiveSpec({ partnerName: "小花", userName: "小林", personaText: "我是小花。" });
   assert.doesNotMatch(withoutFeed.systemPrompt, /那边就是空的/, "没有近况就不提这茬");
 });
@@ -499,11 +499,12 @@ test("电脑那边的近况得按「我自己刚经历的事」说，不能写�
 test("睡前收尾允许没由头，并且分得清她还在忙还是已经收工", () => {
   const done = farewellSpec({ partnerName: "小花", userName: "小林", personaText: "我是小花。", busy: false, sleepStart: "23:30", currentTimeText: "晚上 11 点 15 分" });
   assert.match(done.systemPrompt, /去睡了本身就是理由/);
-  assert.match(done.userText, /已经安静下来了/);
+  assert.match(done.userText, /最近没有新的已核实对话/);
+  assert.match(done.userText, /不据此断言她已经收工/);
   assert.match(done.userText, /你自己的睡点是 23:30 前后/);
   assert.match(done.systemPrompt, /我是小花/, "睡前那条也是 ta 本人在说，得带人格");
   const busy = farewellSpec({ partnerName: "小花", userName: "小林", busy: true, sleepStart: "23:30" });
-  assert.match(busy.userText, /还剩动静|还有动静/);
+  assert.match(busy.userText, /已核实的对话动静/);
   assert.match(busy.systemPrompt, /不是安心去睡的时候/);
 });
 

@@ -179,6 +179,36 @@ test("关系 more 不能突破全局日上限和静默时段", () => {
   assert.equal(gateCheck({ now: at(23, 30), settings: {}, globalSettings: { quiet: DEFAULT_QUIET }, relationalPolicy: policy }).reason, "quiet");
 });
 
+test("到点待办提醒绕过日上限和相邻间隔（2026-10-09）", () => {
+  const now = at(9, 11);
+  const globalSettings = { globalGate: { maxPerDay: 1, minGapMinutes: 30 }, quiet: DEFAULT_QUIET };
+  // 全体今日已到上限
+  const full = { sentToday: { day: dailyKey(now), count: 1 } };
+  assert.equal(gateCheck({ now, settings: {}, globalSettings, globalState: full }).reason, "global-daily-max");
+  assert.equal(gateCheck({ now, settings: {}, globalSettings, globalState: full, todoReminder: true }).ok, true);
+  // 上一条刚过 5 分钟，还在半小时冷却里
+  const cooling = { lastAnySentAt: new Date(now.getTime() - 5 * 60 * 1000).toISOString() };
+  assert.equal(gateCheck({ now, settings: {}, globalSettings, globalState: cooling }).reason, "global-gap");
+  assert.equal(gateCheck({ now, settings: {}, globalSettings, globalState: cooling, todoReminder: true }).ok, true);
+  // 安静时段和总闸照旧管着
+  assert.equal(gateCheck({ now: at(23, 30), settings: {}, globalSettings: { quiet: DEFAULT_QUIET }, todoReminder: true }).reason, "quiet");
+  assert.equal(gateCheck({ now, settings: {}, globalSettings: { rhythmProactiveEnabled: false }, todoReminder: true }).reason, "global-off");
+});
+
+test("到点待办提醒不占今日配额，但仍写时间戳", () => {
+  const now = at(9, 11);
+  const state = { sentToday: { day: dailyKey(now), count: 2 } };
+  const globalState = { sentToday: { day: dailyKey(now), count: 5 }, lastAnySentAt: "2026-10-09T00:00:00.000Z" };
+  const free = noteSent({ state, globalState, now }, { freeOfQuota: true });
+  assert.equal(free.state.sentToday.count, 2);
+  assert.equal(free.globalState.sentToday.count, 5);
+  assert.equal(free.state.lastSentAt, now.toISOString());
+  assert.equal(free.globalState.lastAnySentAt, now.toISOString());
+  const normal = noteSent({ state, globalState, now }, {});
+  assert.equal(normal.state.sentToday.count, 3);
+  assert.equal(normal.globalState.sentToday.count, 6);
+});
+
 test("落点在区间内随机，不是固定周期", () => {
   const plan = planFor("clingy");
   assert.equal(rollIntervalMs("clingy", () => 0), plan.minMs);

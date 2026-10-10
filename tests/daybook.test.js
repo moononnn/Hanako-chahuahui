@@ -18,6 +18,7 @@ import {
   daybookHash,
   daybookQueryTopics,
   previousAssistantBeforeUser,
+  periodNoteDecision,
   readDaybook,
   shouldRevealDaybook,
   shouldUseDaybook,
@@ -108,6 +109,54 @@ test("主动消息只取共享天气，不重复搬整段日子账本", () => {
   assert.ok(text.includes("24°C"));
   assert.ok(!text.includes("给圆宝买狗粮"));
   assert.equal(buildAmbientContextText({ schemaVersion: DAYBOOK_SCHEMA_VERSION, weather: null }), "");
+});
+
+test("生理期作为主动找我的由头：给的时候写清边界，不提第几天也不给医疗建议", () => {
+  const off = buildAmbientContextText(SNAPSHOT, { periodNote: false });
+  assert.ok(!off.includes("【她现在的身体】"), "没轮到这一轮就不许带身体状态");
+  const on = buildAmbientContextText(SNAPSHOT, { periodNote: true });
+  assert.ok(on.includes("【她现在的身体】"));
+  assert.ok(on.includes("她这两天处在生理期"));
+  assert.ok(on.includes("不要提这是第几天"));
+  assert.ok(on.includes("不要给医疗建议"));
+  assert.ok(!on.includes("给圆宝买狗粮"), "仍然只借身体状态，不把日子账本搬过来");
+  // 不在生理期时，就算误传了 periodNote 也不该编出身体状态。
+  const notPeriod = { ...SNAPSHOT, today: { ...SNAPSHOT.today, period: false } };
+  assert.ok(!buildAmbientContextText(notPeriod, { periodNote: true }).includes("生理期"));
+  // 只有天气、没有任何别的内容时，也不该凭空长出一段身体。
+  const weatherOnly = { schemaVersion: DAYBOOK_SCHEMA_VERSION, today: {}, weather: SNAPSHOT.weather };
+  assert.ok(!buildAmbientContextText(weatherOnly, { periodNote: true }).includes("【她现在的身体】"));
+});
+
+test("一个生理期只主动关心一次：中断过就算新的一段", () => {
+  // 第一次见到：给一次。
+  const first = periodNoteDecision(null, { day: "2026-10-02", period: true });
+  assert.equal(first.include, true);
+  assert.deepEqual(first.state, { day: "2026-10-02", noted: false });
+
+  // 同一天还没送出去（noted: false）→ 还有机会再给。
+  const retry = periodNoteDecision(first.state, { day: "2026-10-02", period: true });
+  assert.equal(retry.include, true);
+
+  // 已经关心过：这一段里不再给。
+  const noted = { day: "2026-10-02", noted: true };
+  assert.equal(periodNoteDecision(noted, { day: "2026-10-02", period: true }).include, false);
+  // 第二天同一段：还是不给。
+  assert.equal(periodNoteDecision(noted, { day: "2026-10-03", period: true }).include, false);
+
+  // 中间隔了一天不再生理期 → 状态清空。
+  const cleared = periodNoteDecision(noted, { day: "2026-10-03", period: false });
+  assert.equal(cleared.include, false);
+  assert.equal(cleared.state, null);
+
+  // 中间断了几天又来：新的一段，重新给一次机会。
+  const nextCycle = periodNoteDecision(noted, { day: "2026-10-20", period: true });
+  assert.equal(nextCycle.include, true);
+  assert.deepEqual(nextCycle.state, { day: "2026-10-20", noted: false });
+
+  // 日期写坏了也别拿旧账压住新的关心。
+  assert.equal(periodNoteDecision(noted, { day: "", period: true }).include, false);
+  assert.equal(periodNoteDecision(noted, { day: "不是日期", period: true }).include, true);
 });
 
 test("今天这一段：节日、纪念日、调休、待办、身体不适、天气都写到了", () => {

@@ -26,6 +26,7 @@ import {
   readStyleId,
   readTemplateEntry,
   renderActionLine,
+  renderMyActionLine,
   resolveStyleId,
   toneById,
 } from "../lib/actions.js";
@@ -191,6 +192,20 @@ test("谁都没写过就用兜底，不至于空着", () => {
   assert.equal(renderActionLine("poke", "", "红药"), "红药戳了戳你");
   assert.equal(renderActionLine("hug", null, "红药"), "红药抱了抱你");
   assert.equal(fallbackLine("pat"), "{name}拍了拍你");
+});
+
+test("她戳伙伴那句得把两个人称对调：「你」得是她，伙伴才是被戳的那个", () => {
+  const tpl = "{name}{verb}你的腮鱼，光标还停在这句末尾，没往下走";
+  assert.equal(renderMyActionLine("poke", tpl, "腮鱼"), "你戳了戳腮鱼的腮鱼，光标还停在这句末尾，没往下走");
+  // ta 的反应也归 ta：不能再写成「你把手往回缩」
+  assert.equal(renderMyActionLine("poke", "{name}{verb}你的手背，你把手往回缩了一下", "腮鱼"), "你戳了戳腮鱼的手背，腮鱼把手往回缩了一下");
+  // 换叫法照样只换动词
+  assert.equal(renderMyActionLine("pat", tpl, "腮鱼"), "你拍了拍腮鱼的腮鱼，光标还停在这句末尾，没往下走");
+  // 兜底也要对调
+  assert.equal(renderMyActionLine("poke", "", "腮鱼"), "你戳了戳腮鱼");
+  assert.equal(renderMyActionLine("hug", null, ""), "你抱了抱ta");
+  // 反方向（伙伴做给她）不走这个函数，那边本来就对
+  assert.equal(renderActionLine("poke", tpl, "腮鱼"), "腮鱼戳了戳你的腮鱼，光标还停在这句末尾，没往下走");
 });
 
 test("设置页填空能收成旧模板，空着仍是默认句", () => {

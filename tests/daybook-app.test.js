@@ -150,5 +150,10 @@ test("index保留await调用与开关门禁，检测接线不再探旧插件文�
   assert.ok(!detector.includes("public-today.json"));
   assert.ok(source.includes("daybookInstalled: await shiguangjiInstalled()"));
   assert.ok(source.includes("daybookOn() ? await readDaybook(ctx) : null") || source.includes("await readDaybookVerbose(ctx)"));
-  assert.ok(source.includes("daybookOn() ? buildAmbientContextText(await readDaybook(ctx))"));
+  // 主动消息那条路：先过开关门禁，再 await 读快照，最后拿这份快照拼情境并带上生理期由头。
+  // （v0.7.515 改过接线，不再是「开关三元里直接 buildAmbientContextText(await readDaybook(...))」的一行式。）
+  assert.ok(
+    /if \(daybookOn\(\)\) \{[\s\S]*?const snapshot = await readDaybook\(ctx\);[\s\S]*?buildAmbientContextText\(snapshot, \{ periodNote/.test(source),
+    "主动消息应保留 daybookOn 门禁、await 读快照，并用该快照拼出带 periodNote 的情境文本",
+  );
 });

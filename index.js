@@ -31,10 +31,10 @@ import { hasPalette, isPaletteDone, normalizePalette, paletteToText } from "./li
 import { createAvatarReader, looksLikeImage, toBytes } from "./lib/avatar.js";
 import { registerTavernImportService, renderImportedPersona } from "./lib/character-import.js";
 import { buildSystemPrompt, buildTeaseText, identityBlock, replyChoiceBlock, shouldQuietClose, threadToMessages } from "./lib/prompt.js";
-import { buildAmbientContextText, buildDaybookText, daybookAvailable, daybookHash, daybookQueryTopics, previousAssistantBeforeUser, readDaybook, readDaybookVerbose, shouldUseDaybook } from "./lib/daybook.js";
+import { buildAmbientContextText, buildDaybookText, daybookAvailable, daybookEntry, daybookHash, daybookQueryTopics, periodNoteDecision, previousAssistantBeforeUser, readDaybook, readDaybookVerbose, shouldUseDaybook } from "./lib/daybook.js";
 import { dueTodosFromSnapshot, nudgeKey, nudgeSeen, pickTodoNudger, todoNudgeText } from "./lib/todo-nudge.js";
 import { hasProposal, confirmProposal, makeProposal, proposalAskText, proposeFromMessage } from "./lib/todo-propose.js";
-import { spokenClock, timeBlock } from "./lib/clock.js";
+import { spokenClock, timeBlock, zonedTimestamp } from "./lib/clock.js";
 import {
   askUtility,
   classifyModelFailure,
@@ -265,6 +265,7 @@ import {
   readStyleId,
   readTemplateEntry,
   renderActionLine,
+  renderMyActionLine,
 } from "./lib/actions.js";
 import { SLEEP_SHAPE, baseHoursFor, dozingNow, isSleepSet, parseSleep, sleepSpec, sleepWindows } from "./lib/sleep.js";
 import { DOZE_SLOWDOWN, mergeDueAt, planReply } from "./lib/reply.js";
@@ -397,7 +398,7 @@ function describeError(error) {
  * **发布副本构建时把它改成 false**，把这一整面关掉——这些入口能触发模型调用和后台写盘，
  * 不该暴露给只是装着玩的人（数据与流程上看，它们对普通使用者也毫无意义）。
  */
-const DEV_TOOLS = true;
+const DEV_TOOLS = false;
 // __CHAHUAHUI_DEV_ONLY_END__
 
 export function apply(ctx) {
@@ -708,6 +709,23 @@ export function apply(ctx) {
     if (active?.generationToken === prepared.generation.generationToken) voiceGenerations.delete(prepared.generationKey);
   }
 
+  let partnerMessageEventWarningLogged = false;
+  function emitPartnerMessageArrived(agentId, messageId) {
+    if (typeof ctx.appEvents?.emit !== "function") return;
+    try {
+      const result = ctx.appEvents.emit("partner-message-arrived", { agentId, messageId });
+      Promise.resolve(result).catch((error) => {
+        if (partnerMessageEventWarningLogged) return;
+        partnerMessageEventWarningLogged = true;
+        diagnostics({ event: "message.arrival.event.failed", code: String(error?.code ?? "unknown") });
+      });
+    } catch (error) {
+      if (partnerMessageEventWarningLogged) return;
+      partnerMessageEventWarningLogged = true;
+      diagnostics({ event: "message.arrival.event.failed", code: String(error?.code ?? "unknown") });
+    }
+  }
+
   /** 消息和音频一起完成后才提交语音额度；合成失败只留下文字回退。 */
   function appendPartnerMessage(agentId, message, prepared = null, replaceMessageId = null) {
     const entry = { ...message };
@@ -728,6 +746,7 @@ export function apply(ctx) {
       releaseVoiceGeneration(prepared);
       return null;
     }
+    if (!replaceMessageId && entry.role === "assistant") emitPartnerMessageArrived(agentId, stored.id);
     if (!prepared?.ok) return stored;
 
     prepared.generation.resultMessageId = stored.id;
@@ -1872,7 +1891,7 @@ export function apply(ctx) {
       : shareableDiscovery ? hobby : null;
     const searchContext = shareableDiscovery ? formatSearchContext(shareableDiscovery.results) : "";
     const now = new Date();
-    const currentTimeText = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日，${spokenClock(now)}`;
+    const currentTimeText = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日，${spokenClock(now)}（时间戳：${zonedTimestamp(now)}）`;
     const rhythmSettings = store.getGlobalSettings();
     const userRhythm = rhythmSettings.rhythmEnabled
       ? userRhythmText(store.getThread(agentId).messages, {
@@ -1886,10 +1905,25 @@ export function apply(ctx) {
     const relationNote = relationshipNote(effectiveRelationship(knowing), knowing.relationSeed);
     const adaptationText = adaptationTextFor(agentId, knowing, now, { kind: "proactive", lifeDay: dayKey(now) });
     let contextText = "";
+    // 生理期作为主动找你的由头：一个周期只给一次，给没给出去以「真的发出去」为准。
+    let periodNotePending = false;
     if (!exception) {
       try {
         // 今日情境要她自己打开才带：没开就当没这回事
-        contextText = daybookOn() ? buildAmbientContextText(await readDaybook(ctx)) : "";
+        if (daybookOn()) {
+          const snapshot = await readDaybook(ctx);
+          const today = dayKey(now);
+          const decision = periodNoteDecision(store.getGlobalSettings().proactivePeriodNote, {
+            day: today,
+            period: daybookEntry(snapshot, "")?.period === true,
+          });
+          contextText = buildAmbientContextText(snapshot, { periodNote: decision.include });
+          periodNotePending = decision.include;
+          const previous = store.getGlobalSettings().proactivePeriodNote;
+          if (JSON.stringify(previous ?? null) !== JSON.stringify(decision.state)) {
+            store.setGlobalSettings({ proactivePeriodNote: decision.state });
+          }
+        }
       } catch (error) {
         diagnostics({ event: "proactive.context.failed", agentId, error: describeError(error) });
       }
@@ -1947,7 +1981,7 @@ export function apply(ctx) {
             adaptationText,
             currentTimeText,
             workfeedText,
-            busy: Boolean(activity?.active),
+            busy: activity?.at ? Boolean(activity.active) : null,
             sleepStart,
             stickerText,
           })
@@ -2035,11 +2069,12 @@ export function apply(ctx) {
       const clarity = await reviewProactiveClarity({
         text, seed: shareableSeed, discovery: shareableDiscovery,
         sharedContext: JSON.stringify({
+          currentTime: currentTimeText,
           conversationMemory: memoryText,
           samePartnerComputerConversation: workfeedText,
           environmentFactsNotSharedExperience: contextText,
           recentScene: sceneEcho ?? null,
-          recentMessages: store.getThread(agentId).messages.slice(-12).map(row => ({ role: row.role, text: row.text })),
+          recentMessages: store.getThread(agentId).messages.slice(-12).map(row => ({ at: row.at, role: row.role, text: row.text })),
         }),
         ask: askCheap,
       });
@@ -2083,6 +2118,12 @@ export function apply(ctx) {
     }, preparedVoice);
     if (!stored) return { ok: false, reason: "message-missing" };
     recordPartnerStickerUsage(agentId, bubbles, stored.at);
+    // 生理期这一段真的送出去了，这一轮就算已经关心过：没送出去（空正文、重复措辞、
+    // 清楚度复核拦下）就别记账，下一轮还有机会。
+    if (periodNotePending) {
+      store.setGlobalSettings({ proactivePeriodNote: { day: dayKey(now), noted: true } });
+      diagnostics({ event: "proactive.period-note.sent", agentId });
+    }
     if (topic) {
       // 旧共同话题仍留在本子里供兼容，不再作为常规主动话题来源。
       store.saveTopicBook(
@@ -2792,6 +2833,7 @@ export function apply(ctx) {
       });
       const farewellSend = Boolean(farewellPlan.due) && !followup?.read && shouldSendFarewell(state, farewellPlan.night);
       const contactPolicy = contactPolicyFor(agentId, now, "proactive");
+      // 这轮是不是由到点待办托着：由的话，日上限和相邻间隔都不算在它头上（2026-10-09）。
       const gate = gateCheck({
         now,
         // ta今天的睡觉窗口先算好再递进去：主睡加可能的午觉，而且每天时长还会浮动
@@ -2800,6 +2842,7 @@ export function apply(ctx) {
         state,
         globalState: store.getGlobalRuntime(),
         relationalPolicy: contactPolicy,
+        todoReminder: todoHere,
       });
       const wakeEcho = gate.ok && !gate.exception && !followup?.read
         ? wakeEchoFor(thread.messages, { now: now.getTime(), consumedId: settings.wakeEcho?.sourceId ?? null })
@@ -2926,7 +2969,7 @@ export function apply(ctx) {
       const stamp = threadStamp(agentId);
       const sent = await withAutonomousLane(agentId, () => withGlobalAutonomousLane(async () => {
         if (hasReplyInFlight(agentId) || threadStamp(agentId) !== stamp) return { ok: false, reason: "reply-in-flight" };
-        const finalGate = autonomousGateNow(agentId, "proactive");
+        const finalGate = autonomousGateNow(agentId, "proactive", { todoReminder: todoHere });
         if (!finalGate.ok) return { ok: false, reason: finalGate.reason, gateBlocked: true };
         // 这一轮到底有没有把那段由头带出去：只有真带了才记「今天说过了」，
         // 否则被 farewell 或夜间例外占掉的那一轮会把待办默默标记为已说过，今天不再来。
@@ -2951,7 +2994,7 @@ export function apply(ctx) {
         const sentAt = new Date();
         const noted = noteSent(
           { state: { ...store.getProactiveState(agentId), staged: pending.rest }, globalState: store.getGlobalRuntime(), now: sentAt },
-          { exception: Boolean(finalGate.exception), quiet: store.getGlobalSettings().quiet },
+          { exception: Boolean(finalGate.exception), quiet: store.getGlobalSettings().quiet, freeOfQuota: todoHere && carriedTodo },
         );
         store.setProactiveState(agentId, noted.state);
         store.setGlobalRuntime(noted.globalState);
@@ -3195,7 +3238,7 @@ export function apply(ctx) {
     const line =
       from === "partner"
         ? renderActionLine(styleId, readMyTemplateEntry(globalSettings)?.text, partnerName)
-        : renderActionLine(styleId, readTemplateEntry(settings)?.text, USER_NAME);
+        : renderMyActionLine(styleId, readTemplateEntry(settings)?.text, partnerName);
     const stored = store.appendMessage(agentId, {
       role: from === "partner" ? "assistant" : "user",
       kind: "action",
@@ -3237,6 +3280,28 @@ export function apply(ctx) {
 
 
   /**
+   * QQ 那套规矩：戳人得先看见她的消息。
+   *
+   * 头像就在那儿，不看人家的消息就伸爪子戳，这不叫互动，叫隔空敲窗。
+   * 所以回戳之前先问一句ta 看没看到；看到了（顺手盖个已读）就可以戳——
+   * 「读完不用回、直接戳一下」正是这个意思。
+   * 真的读不到时（她那句话 ta 压根没接上话，比如模型那会儿用不了），这一下就不戳：
+   * 盖不出已读说明 ta 手里根本没有那句话的内容，戳了就是空敲。
+   *
+   * @returns {boolean} 现在能不能戳
+   */
+  function readyToPoke(agentId) {
+    if (!hasUnseenUserMessage(store.getThread(agentId).messages)) return true;
+    const touched = store.markUserMessagesRead(agentId);
+    if (!touched.length) {
+      diagnostics({ event: "action.answer.blocked", agentId, reason: "unseen" });
+      return false;
+    }
+    diagnostics({ event: "action.saw-user", agentId, touched: touched.length });
+    return true;
+  }
+
+  /**
    * 她做了个动作之后，伙伴怎么接。
    *
    * 注意：**这不是配对**。动作本身只是一条文案，发完就完了；
@@ -3251,6 +3316,8 @@ export function apply(ctx) {
       diagnostics({ event: "action.no-answer", agentId, reason: "streak" });
       return { answered: false, reason: "streak" };
     }
+    // 先看得见她的消息才谈得上戳（理由见 readyToPoke）。
+    if (!readyToPoke(agentId)) return { answered: false, reason: "unseen" };
     await deliverAction(agentId, { partnerName, from: "partner" });
     return { answered: true, form: "poke" };
   }
@@ -4389,7 +4456,7 @@ export function apply(ctx) {
     });
   }
 
-  function autonomousGateNow(agentId, kind = "proactive", { ignoreSleep = false } = {}) {
+  function autonomousGateNow(agentId, kind = "proactive", { ignoreSleep = false, todoReminder = false } = {}) {
     const now = new Date();
     const settings = store.getPartnerSettings(agentId);
     const globalSettings = store.getGlobalSettings();
@@ -4403,6 +4470,7 @@ export function apply(ctx) {
         globalState: store.getGlobalRuntime(),
         relationalPolicy: contactPolicy,
         ignoreSleep,
+        todoReminder,
       }),
       contactPolicy,
       now,
@@ -6925,7 +6993,7 @@ export function apply(ctx) {
           myTemplate: mine?.text ?? "",
           partnerTemplate: theirs?.text ?? "",
           partnerDoesIt: renderActionLine(styleId, mine?.text, partnerName),
-          iDoIt: renderActionLine(styleId, theirs?.text, USER_NAME),
+          iDoIt: renderMyActionLine(styleId, theirs?.text, partnerName),
         };
       }
 
@@ -6960,10 +7028,9 @@ export function apply(ctx) {
           const partner = (await listPartners()).find((row) => row.id === agentId);
           const partnerName = partner?.name ?? agentId;
           const stored = await deliverAction(agentId, { partnerName, from: "user", ensure: true });
-          // 她主动敲了一下：说明她人就在这儿。那她说的话 ta 也就看过了——
-          // 不把「未读」收掉的话，就会出现「戳得动、话却还挂着未读」的矛盾。
-          const sawUser = store.markUserMessagesRead(agentId);
-          if (sawUser.length) diagnostics({ event: "action.saw-user", agentId, touched: sawUser.length });
+          // 这里**不替ta 把未读收掉**：戳是她敲了一下，不代表 ta 已经看过她那几条。
+          // 以前在这儿先收一次，于是变成「戳得动、话却还挂着未读」——收不掉的那些
+          // （ta 压根没接上话的那句）就一直悬着。收未读挪到回戳那一刻，由 readyToPoke 看着办。
           // 用户又主动互动了，旧的等回音到此翻篇。
           store.setPartnerSettings(agentId, { awaiting: null });
           // 不马上接：排一个随机时刻，到点ta自己决定接不接（她看不到这一段）
@@ -8201,6 +8268,8 @@ export function apply(ctx) {
           if (entry) {
             const feed = store.appendWorkEvent(entry);
             diagnostics({ event: "workfeed.event", agentId: entry.agentId, role: entry.role, lifeDay: entry.lifeDay, chars: entry.text.length, total: feed.events.length });
+          } else {
+            diagnostics({ event: "workfeed.skipped", reason: event?.isolated != null && event.isolated !== false ? "isolated" : "unusable-or-unverified" });
           }
           return;
         }

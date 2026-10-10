@@ -224,6 +224,7 @@ export async function bootChahuahui({ seed } = {}) {
   const store = createStore(dataDir);
   const models = createModelStub();
   const net = createNetworkStub();
+  const emittedAppEvents = [];
 
   const partner = { id: "nova", name: "小花", description: "测试用伙伴", personality: "嘴上不饶人，但心里有数" };
   const ctx = {
@@ -242,6 +243,12 @@ export async function bootChahuahui({ seed } = {}) {
     network: { fetch: net.fetch },
     resources: { read: async () => null, list: async () => [] },
     tools: { call: async () => null },
+    appEvents: {
+      async emit(type, payload) {
+        emittedAppEvents.push({ type, payload });
+        return { ok: true };
+      },
+    },
     inputBanner: null,
   };
   const host = createHost();
@@ -251,7 +258,7 @@ export async function bootChahuahui({ seed } = {}) {
   apply(ctx);
 
   const request = (method, url, options) => host.dispatch(method, url, options);
-  return { dataDir, store, models, net, ctx, request, host };
+  return { dataDir, store, models, net, ctx, request, host, emittedAppEvents };
 }
 
 /** 临时目录下的真账本读回：证明写进去的是文件里的东西，不是内存里的残留。 */

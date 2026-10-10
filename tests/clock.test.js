@@ -192,7 +192,7 @@ test("午觉前犯困那一档，挑个真会睡午觉的日子验", () => {
 
 test("困意接在时间后面，跟钟点分得开", () => {
   const text = timeBlock({ now: at("00:40"), messages: [], sleep: SLEEP });
-  assert.match(text, /凌晨 12 点 40 分。\n按你自己的作息/);
+  assert.match(text, /凌晨 12 点 40 分。\n当前时间戳（本地日期与时区偏移）：[^\n]+\n按你自己的作息/);
   assert.match(text, /困了就直说/);
   // 没作息就不冒这一行
   assert.doesNotMatch(timeBlock({ now: at("00:40"), messages: [] }), /按你自己的作息/);
