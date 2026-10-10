@@ -190,6 +190,7 @@ import {
   readStickerLibrary,
   removeSticker,
   removeStickerGroup,
+  renameStickerGroup,
 } from "./lib/sticker-library.js";
 import { canAnswerPoke } from "./lib/poke.js";
 import { badgeGuide, badgeText, fallbackBadge, normalizeBadge, parseBadgeMarker } from "./lib/badges.js";
@@ -7345,6 +7346,15 @@ export function apply(ctx) {
         try {
           const body = await c.req.json();
           return c.json({ ok: true, group: createStickerGroup(ctx.dataDir, body?.name) });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 400);
+        }
+      });
+
+      app.patch("/library/groups/:id", async (c) => {
+        try {
+          const body = await c.req.json();
+          return c.json({ ok: true, group: renameStickerGroup(ctx.dataDir, String(c.req.param("id") ?? ""), body?.name) });
         } catch (error) {
           return c.json({ ok: false, error: describeError(error) }, 400);
         }

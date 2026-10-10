@@ -1625,6 +1625,24 @@ test("表情包：分组升格成顶层 tab，加号在后面，管理态才能�
   assert.match(panel, /if \(!manageMode\) selectSticker\(row\)/);
 });
 
+test("表情包：管理态能改分组名，改不成就留在原地让她重试", () => {
+  assert.match(panel, /id="sticker-group-rename"[^>]*>改名</);
+  assert.match(panel, /id="sticker-rename-row"[\s\S]{0,300}?id="sticker-rename-ok"/, "改名是就地一行，不弹窗");
+  assert.match(panel, /function openRenameRow\(group\) \{[\s\S]{0,300}?el\.stickerRenameName\.value = group\.name;/, "打开就把现在的名字摆进去，改的是同一个不是空白");
+  assert.match(panel, /async function submitRenameGroup\(\)[\s\S]{0,1400}?await api\("PATCH", `library\/groups\/\$\{encodeURIComponent\(group\.id\)\}`, \{ name \}\)/);
+  assert.match(panel, /catch \(error\) \{\s*setStatus\(`名字没改成：\$\{error\.message\}`\);/, "没改成不收起输入框");
+  assert.doesNotMatch(panel, /async function submitRenameGroup\(\)[\s\S]{0,1400}?catch \(error\) \{[\s\S]{0,200}?closeRenameRow\(\)/, "失败时把改名行收掉就等于把她填的字吞了");
+  assert.match(panel, /el\.stickerRenameName\.addEventListener\("keydown"[\s\S]{0,300}?event\.key === "Enter"/);
+  assert.match(panel, /event\.key === "Escape"[\s\S]{0,120}?closeRenameRow\(\)/, "Esc 能退出，不逼她");
+  // 改名和删分组一样，只在管理态、且停在自定义分组上时出现
+  assert.match(panel, /el\.stickerGroupRename\.hidden = !\(manageMode && activeStickerGroup !== "__all"\)/);
+  assert.match(panel, /if \(el\.stickerGroupRename\.hidden\) closeRenameRow\(\);/);
+  assert.match(app, /app\.patch\("\/library\/groups\/:id"/);
+  assert.match(app, /renameStickerGroup\(ctx\.dataDir, String\(c\.req\.param\("id"\) \?\? ""\), body\?\.name\)/);
+  // 名字里不能留「它」指伙伴
+  assert.doesNotMatch(panel, /sticker-[a-z-]*(group|rename)[a-z-]*[\s\S]{0,60}?它/);
+});
+
 test("表情包面板：[hidden] 要有样式兜底，不然两块会同时冒出来", () => {
   assert.match(panelCss, /\.emoji-grid\[hidden\], \.sticker-grid\[hidden\], \.sticker-picker\[hidden\] \{ display: none; \}/);
   assert.match(panelCss, /\.sticker-import\[hidden\]/);

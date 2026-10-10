@@ -11,6 +11,7 @@ import {
   readStickerLibrary,
   removeSticker,
   removeStickerGroup,
+  renameStickerGroup,
 } from "../lib/sticker-library.js";
 
 function tempDir() { return fs.mkdtempSync(path.join(os.tmpdir(), "chahuahui-library-")); }
@@ -86,4 +87,32 @@ test("茶话会图库：删分组不删组里的图，那些图退回「全部�
   assert.deepEqual(library.stickers.find((row) => row.id === onlyCats.sticker.id).groupIds, [], "只属于被删分组的那张退回全部");
 
   assert.equal(removeStickerGroup(dir, cats.id), false);
+});
+
+test("茶话会图库：改分组名只改名字，id 和组里的图都不动", () => {
+  const dir = tempDir();
+  const cats = createStickerGroup(dir, "猫猫");
+  const dogs = createStickerGroup(dir, "狗狗");
+  const inside = importStickerBytes(dir, { id: "s1", contentType: "image/png" }, Buffer.from("a"), [cats.id]);
+
+  const renamed = renameStickerGroup(dir, cats.id, "  古装小圆子  ");
+  assert.equal(renamed.name, "古装小圆子", "首尾空白自己吃掉");
+  const library = listStickerLibrary(dir);
+  assert.equal(library.groups.length, 2);
+  assert.equal(library.groups.find((row) => row.name === "古装小圆子").id, cats.id, "id 不变，tab 不会跳回去");
+  assert.deepEqual(library.stickers.find((row) => row.id === inside.sticker.id).groupIds, [cats.id], "图不用重新归位");
+
+  // 撞名要报错，不能像建组那样静默返回同名的旧组
+  assert.throws(() => renameStickerGroup(dir, cats.id, "狗狗"), /已经有叫/);
+  assert.throws(() => renameStickerGroup(dir, cats.id, "   "), /不能为空/);
+  assert.throws(() => renameStickerGroup(dir, "grp_没有这个组", "随便"), /没找到/);
+  // 失败后名字纹丝不动
+  assert.deepEqual(listStickerLibrary(dir).groups.map((row) => row.name).sort(), ["古装小圆子", "狗狗"]);
+});
+
+test("茶话会图库：改成原来那个名字就当没改，幂等且不报错", () => {
+  const dir = tempDir();
+  const cats = createStickerGroup(dir, "猫猫");
+  assert.equal(renameStickerGroup(dir, cats.id, "猫猫").name, "猫猫");
+  assert.deepEqual(listStickerLibrary(dir).groups.map((row) => row.name), ["猫猫"]);
 });

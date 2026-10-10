@@ -103,9 +103,15 @@
             <div class="sticker-picker-head">
               <span id="sticker-picker-title">表情包</span>
               <span class="picker-spacer"></span>
+              <button class="sticker-tool" id="sticker-group-rename" type="button" hidden>改名</button>
               <button class="sticker-tool" id="sticker-group-delete" type="button" hidden>删分组</button>
               <button class="sticker-tool" id="sticker-manage" type="button">管理</button>
               <button class="sticker-add" id="sticker-add" type="button">添加</button>
+            </div>
+            <div class="sticker-new-group" id="sticker-rename-row" hidden>
+              <input id="sticker-rename-name" type="text" maxlength="12" placeholder="这个分组叫什么" aria-label="分组新名字">
+              <button class="sticker-tool" id="sticker-rename-ok" type="button">改好了</button>
+              <button class="sticker-tool" id="sticker-rename-cancel" type="button">算了</button>
             </div>
             <div class="sticker-tools" id="sticker-search-row">
               <input id="sticker-search" type="search" placeholder="在图库里找一张…" aria-label="搜索表情包">
@@ -294,6 +300,11 @@
       stickerAddEmpty: document.getElementById("sticker-add-empty"),
       stickerManage: document.getElementById("sticker-manage"),
       stickerGroupDelete: document.getElementById("sticker-group-delete"),
+      stickerGroupRename: document.getElementById("sticker-group-rename"),
+      stickerRenameRow: document.getElementById("sticker-rename-row"),
+      stickerRenameName: document.getElementById("sticker-rename-name"),
+      stickerRenameOk: document.getElementById("sticker-rename-ok"),
+      stickerRenameCancel: document.getElementById("sticker-rename-cancel"),
       stickerGrid: document.getElementById("sticker-grid"),
       stickerEmpty: document.getElementById("sticker-empty"),
       stickerEmptyText: document.getElementById("sticker-empty-text"),
@@ -718,6 +729,8 @@
     let manageMode = false;
     let armedStickerId = "";
     let armedGroupDelete = false;
+    /** 正在改名的分组 id（空 = 没在改）。改名是就地一行的编辑，不弹窗。 */
+    let renamingGroupId = "";
     /**
      * 来源一批批往下画，画完在末尾留个哨兵：它一露头就补下一批（见 renderSourceMore）。
      * 批次不能取消——每张图都是一次请求加一次解码，三百多张一起上，卡的是宿主，
@@ -797,6 +810,7 @@
       el.stickerManage.textContent = "管理";
       el.stickerGroupDelete.textContent = "删分组";
       el.stickerGroupDelete.hidden = true;
+      closeRenameRow();
       setEmojiPage("sticker");
       renderStickerRows();
       void ensureStickerLibrary();
@@ -820,7 +834,9 @@
       armedStickerId = "";
       armedGroupDelete = false;
       closeNewGroupRow();
+      closeRenameRow();
       hideStickerPreview();
+      el.emojiButton.classList.remove("is-open", "is-pop"); // 亮态跟着抽屉一起收
     }
 
     function renderEmojiGrid() {
@@ -1104,6 +1120,54 @@
       }
     }
 
+    /** 改分组名。改名不换 id，组里的图不用动。 */
+    function openRenameRow(group) {
+      renamingGroupId = group.id;
+      el.stickerRenameRow.hidden = false;
+      el.stickerRenameName.value = group.name;
+      el.stickerRenameName.focus();
+      el.stickerRenameName.select();
+    }
+
+    function closeRenameRow() {
+      renamingGroupId = "";
+      el.stickerRenameRow.hidden = true;
+      el.stickerRenameName.value = "";
+    }
+
+    /**
+     * 提交改名。没改成的一律留在原地：输入框不收、按钮还在，
+     * 说清为什么，她改一个字就能再试，不用从头填一遍。
+     */
+    async function submitRenameGroup() {
+      const group = stickerGroups.find((row) => row.id === renamingGroupId);
+      if (!group) return closeRenameRow();
+      const name = el.stickerRenameName.value.trim();
+      if (!name) {
+        el.stickerRenameName.focus();
+        setStatus("总得有个名字吧");
+        return;
+      }
+      if (name === group.name) {
+        closeRenameRow();
+        setStatus("没改名，不动它");
+        return;
+      }
+      el.stickerRenameOk.disabled = true;
+      el.stickerRenameOk.textContent = "在改了…";
+      try {
+        await api("PATCH", `library/groups/${encodeURIComponent(group.id)}`, { name });
+        closeRenameRow();
+        await loadStickerLibrary();
+        setStatus(`「${group.name}」改成「${name}」了`);
+      } catch (error) {
+        setStatus(`名字没改成：${error.message}`);
+      } finally {
+        el.stickerRenameOk.disabled = false;
+        el.stickerRenameOk.textContent = "改好了";
+      }
+    }
+
     /** 删分组同样两步。图不跟着删，只退回「全部」。 */
     async function armOrRemoveGroup() {
       const group = stickerGroups.find((row) => row.id === activeStickerGroup);
@@ -1118,6 +1182,7 @@
       try {
         await api("DELETE", `library/groups/${encodeURIComponent(group.id)}`);
         activeStickerGroup = "__all";
+        closeRenameRow();
         await loadStickerLibrary();
         setStatus(`分组「${group.name}」删了，里面的图退回「全部」`);
       } catch (error) {
@@ -1245,9 +1310,25 @@
       el.stickerManage.textContent = manageMode ? "完成" : "管理";
       el.stickerGroupDelete.textContent = "删分组";
       el.stickerGroupDelete.hidden = !(manageMode && activeStickerGroup !== "__all");
+      el.stickerGroupRename.hidden = !(manageMode && activeStickerGroup !== "__all");
+      if (el.stickerGroupRename.hidden) closeRenameRow();
       renderStickerRows();
     });
     el.stickerGroupDelete.addEventListener("click", () => void armOrRemoveGroup());
+    el.stickerGroupRename.addEventListener("click", () => {
+      const group = stickerGroups.find((row) => row.id === activeStickerGroup);
+      if (!group) return;
+      armedGroupDelete = false;
+      el.stickerGroupDelete.textContent = "删分组";
+      if (renamingGroupId === group.id) return closeRenameRow();
+      openRenameRow(group);
+    });
+    el.stickerRenameOk.addEventListener("click", () => void submitRenameGroup());
+    el.stickerRenameCancel.addEventListener("click", () => closeRenameRow());
+    el.stickerRenameName.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); void submitRenameGroup(); }
+      if (event.key === "Escape") { event.preventDefault(); closeRenameRow(); }
+    });
     document.addEventListener("click", (event) => {
       if (el.appearancePopover.hidden) return;
       const target = event.target;
