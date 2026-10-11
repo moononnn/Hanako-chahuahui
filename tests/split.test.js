@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { splitReply } from "../lib/split.js";
+import { splitReply, stripTimeHeader } from "../lib/split.js";
 
 test("按标点切分成多条气泡", () => {
   const out = splitReply("今天下雨了。你带伞没？我带了两把！");
@@ -61,4 +61,21 @@ test("一个问号、一个感叹号能单独成条（催人的时候就这样�
 test("没有标点的长句也会成为一条", () => {
   const out = splitReply("就是随口说两句没什么大事");
   assert.deepEqual(out, ["就是随口说两句没什么大事"]);
+});
+
+test("正文顶上那个时间戳标题先摘掉（deepseek-flash 实机每条都带）", () => {
+  const out = splitReply("【2026年10月10日 15:00】\n睡得还行就行，这条先翻过去。");
+  assert.deepEqual(out, ["睡得还行就行，这条先翻过去"]);
+  assert.deepEqual(splitReply("【2026-10-10 15:01】怕我憋坏，还是自己想得慌"), ["怕我憋坏，还是自己想得慌"]);
+  assert.deepEqual(stripTimeHeader("【现在】\n【15:00】\n下午 3 点 06 分。"), "下午 3 点 06 分。");
+  // 整段只有一个标题：没话可说，交回空数组让上层按空回复处理
+  assert.deepEqual(splitReply("【2026年10月10日 15:00】"), []);
+});
+
+test("当情绪用的方括号不动，剥壳只认死形状", () => {
+  assert.deepEqual(splitReply("【生气】你今天话真多"), ["【生气】你今天话真多"]);
+  assert.deepEqual(splitReply("【明天见】早点睡"), ["【明天见】早点睡"]);
+  assert.deepEqual(stripTimeHeader("【小声】这事别往外说。"), "【小声】这事别往外说。");
+  // 不是开头也不剥：正文中提到日期是人家聊天的一部分
+  assert.deepEqual(splitReply("你昨天不是说 15:00 见面吗"), ["你昨天不是说 15:00 见面吗"]);
 });

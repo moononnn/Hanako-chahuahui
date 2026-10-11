@@ -192,8 +192,15 @@ test("午觉前犯困那一档，挑个真会睡午觉的日子验", () => {
 
 test("困意接在时间后面，跟钟点分得开", () => {
   const text = timeBlock({ now: at("00:40"), messages: [], sleep: SLEEP });
-  assert.match(text, /凌晨 12 点 40 分。\n当前时间戳（本地日期与时区偏移）：[^\n]+\n按你自己的作息/);
+  assert.match(text, /凌晨 12 点 40 分。（对表用：此刻是 [^\n]+，凡是带偏移的时间戳都按它换算，别按 UTC 猜。）\n按你自己的作息/);
   assert.match(text, /困了就直说/);
   // 没作息就不冒这一行
   assert.doesNotMatch(timeBlock({ now: at("00:40"), messages: [] }), /按你自己的作息/);
+});
+
+test("时区锚点不再单独摆一行，那一行会被模型当标题抄走（2026-10-10 实机）", () => {
+  const text = timeBlock({ now: at("15:00"), messages: [] });
+  assert.doesNotMatch(text, /^当前时间戳（本地日期与时区偏移）：/m, "「当前时间戳：…」独立成行是模型抄壳的源头");
+  assert.doesNotMatch(text, /【\d{4} ?年 ?\d{1,2} ?月 ?\d{1,2} ?日 ?\d{1,2}:\d{2}】/, "背景块自己不能长成正文标题的样子");
+  assert.match(text, /回复正文的第一行不许出现【日期 时间】这种标题/);
 });
