@@ -220,6 +220,7 @@ import {
 import { inspectPersona, renderDossier } from "./lib/persona-standard.js";
 import {
   MAX_SUGGESTIONS,
+  advanceAfterApply,
   applySuggestions,
   chatSpec,
   commitChange,
@@ -7767,6 +7768,7 @@ export function apply(ctx) {
           expired: Boolean(store.getReviewSession(agentId) && !session),
           mechanical: { items: mechanical.items, counts: mechanical.counts, render: mechanical.render.note },
           history: historyRows(knowing),
+          log: store.getReviewLog(agentId),
           maxSuggestions: MAX_SUGGESTIONS,
         });
       });
@@ -7830,6 +7832,7 @@ export function apply(ctx) {
             diagnosis: session.diagnosis,
             messages,
             suggestions: session.suggestions,
+            applied: session.applied,
           });
           const raw = await askRecognition(spec.systemPrompt, spec.userText, 1200);
           const parsed = parseChatReply(raw);
@@ -7838,8 +7841,7 @@ export function apply(ctx) {
             stage: session.suggestions.length || parsed.suggestions.length ? "chatting" : session.stage,
             messages: parsed.reply ? [...messages, { role: "hua", text: parsed.reply, at: new Date().toISOString() }] : messages,
             suggestions: mergeSuggestions(session.suggestions, parsed.suggestions),
-          });
-          store.saveReviewSession(agentId, next);
+          });          store.saveReviewSession(agentId, next);
           return c.json({ ok: true, session: next });
         } catch (error) {
           return c.json({ ok: false, error: describeError(error) }, 500);
@@ -7850,8 +7852,31 @@ export function apply(ctx) {
       app.post("/persona-review/:agentId/drop", (c) => {
         const agentId = String(c.req.param("agentId") ?? "").trim();
         if (!agentId) return c.json({ ok: false, error: { message: "要带伙伴编号" } }, 400);
+        // 结束前先把这轮的真实账数读出来：前端不能再说那句写死的「ta 没有变动」，
+        // 这轮到底换了没换、还剩几条没落，得让它自己知道。
+        const session = readReviewSession(agentId);
+        const tally = {
+          changed: (session?.applied ?? []).length,
+          dropped: (session?.dropped ?? []).length,
+          pending: (session?.suggestions ?? []).length,
+        };
+        // 归档要在清会话之前跑：确认之后又聊的那几句也得留住，
+        // 否则「最后确认」到「聊完了」之间的话照样跟着会话一起没了。
+        // 已经归档过同样的内容就别再存一遍，免得回看时同两段话连着出现。
+        if (session) {
+          const archived = store.getReviewLog(agentId)[0]?.messages?.length ?? 0;
+          const live = (session.messages ?? []).length;
+          if (live > archived) {
+            store.appendReviewLog(agentId, {
+              change: tally.changed ? "这轮到此结束" : "这轮没改动 ta",
+              applied: [],
+              skipped: [],
+              messages: session.messages ?? [],
+            });
+          }
+        }
         store.clearReviewSession(agentId);
-        return c.json({ ok: true });
+        return c.json({ ok: true, ...tally });
       });
 
       /** 确认修改：先存档，再写盘，最后把会话消费掉。 */
@@ -7874,9 +7899,22 @@ export function apply(ctx) {
           }
           const change = describeChange(knowing, after);
           const saved = store.saveKnowing(agentId, commitChange(knowing, after, { reason: `和小花聊聊：${change}` }));
-          store.clearReviewSession(agentId);
-          diagnostics({ event: "persona-review.apply", agentId, applied: applied.length, skipped: skipped.length, change });
-          return c.json({ ok: true, applied, skipped, change, personality: saved.personality, history: historyRows(saved), revision: saved.revision });
+          // 协商不结束：落上的那几条拿掉、没勾的留着、画像版本推进到刚落完的这一版，
+          // 对话接着往下走。以前这里是销毁会话，一改就把整段会话连同剩下的建议一起没了。
+          const next = advanceAfterApply(session ?? emptySession(agentId), { applied, skipped, change, revision: saved.revision });
+          store.saveReviewSession(agentId, next);
+          store.appendReviewLog(agentId, { change, applied, skipped, messages: next.messages });
+          diagnostics({ event: "persona-review.apply", agentId, applied: applied.length, skipped: skipped.length, change, left: next.suggestions.length });
+          return c.json({
+            ok: true,
+            applied,
+            skipped,
+            change,
+            session: next,
+            personality: saved.personality,
+            history: historyRows(saved),
+            revision: saved.revision,
+          });
         } catch (error) {
           return c.json({ ok: false, error: describeError(error) }, 500);
         }

@@ -375,6 +375,8 @@
     let messageSoundEnabled = true;
     let messageSoundPreferenceReady = false;
     const pendingMessageSoundEvents = [];
+    const pendingMessageSoundById = new Map();
+    const renderedMessageSoundIds = new Set();
     const seenMessageSoundIds = new Set();
     /** id → 表情。跟叫法表同源（后端随 /partners 发下来），不在前端另拄一份 */
     let actionEmoji = new Map();
@@ -1528,12 +1530,40 @@
       playMessageChime(typeof payload?.agentId === "string" ? payload.agentId : null);
     }
 
+    function playMessageSoundAfterPaint(payload) {
+      const play = () => { void playIncomingMessageSound(payload); };
+      if (typeof requestAnimationFrame !== "function") { setTimeout(play, 0); return; }
+      requestAnimationFrame(() => requestAnimationFrame(play));
+    }
+
+    function queueMessageSoundUntilVisible(payload) {
+      const messageId = typeof payload?.messageId === "string" ? payload.messageId : "";
+      if (!messageId) return;
+      if (renderedMessageSoundIds.has(messageId)) {
+        playMessageSoundAfterPaint(payload);
+        return;
+      }
+      if (pendingMessageSoundById.size >= 100) pendingMessageSoundById.delete(pendingMessageSoundById.keys().next().value);
+      pendingMessageSoundById.set(messageId, { payload, at: Date.now() });
+    }
+
+    function markMessageSoundVisible(message) {
+      const messageId = message?.role === "assistant" && typeof message.id === "string" ? message.id : "";
+      if (!messageId) return;
+      renderedMessageSoundIds.add(messageId);
+      if (renderedMessageSoundIds.size > 100) renderedMessageSoundIds.delete(renderedMessageSoundIds.values().next().value);
+      const pending = pendingMessageSoundById.get(messageId);
+      if (!pending) return;
+      pendingMessageSoundById.delete(messageId);
+      if (Date.now() - pending.at <= 12000) playMessageSoundAfterPaint(pending.payload);
+    }
+
     function receiveMessageArrival(payload) {
       if (!messageSoundPreferenceReady) {
         if (pendingMessageSoundEvents.length < 12) pendingMessageSoundEvents.push(payload);
         return;
       }
-      void playIncomingMessageSound(payload);
+      queueMessageSoundUntilVisible(payload);
     }
 
     async function toggleMessageSound() {
@@ -2627,6 +2657,7 @@
         if (voice && !Array.isArray(opts.assistantPieces)) {
           renderVoiceMessage(m, opts);
           voiceStates.set(m.id, voiceStateKey(m));
+          markMessageSoundVisible(m);
           return true;
         }
         const rawList = Array.isArray(opts.assistantPieces)
@@ -2645,6 +2676,7 @@
           && (m.role !== "assistant" || isLatestAssistantMessage(m))) bindMessageActions(lastRow, m);
         if (lastRow) renderMessageFeed(lastRow.querySelector(".msg-col"), m);
       }
+      markMessageSoundVisible(m);
       return true;
     }
 
@@ -5447,7 +5479,7 @@
         hana.lifecycle?.subscribe?.(applySlotSafeArea);
         await loadMessageSoundPreference();
         messageSoundPreferenceReady = true;
-        for (const payload of pendingMessageSoundEvents.splice(0)) void playIncomingMessageSound(payload);
+        for (const payload of pendingMessageSoundEvents.splice(0)) receiveMessageArrival(payload);
         const query = new URLSearchParams(window.location.search);
         launchAction = query.get("create") === "1"
           ? { create: true }

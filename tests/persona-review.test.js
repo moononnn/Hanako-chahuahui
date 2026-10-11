@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   HISTORY_LIMIT,
   SESSION_TTL_MS,
+  advanceAfterApply,
   applySuggestions,
   chatSpec,
   commitChange,
@@ -166,6 +167,84 @@ test("历史版本：存改前那版，回退能来回切，最多留两版", ()
   assert.equal(listHistory(thrice).length, HISTORY_LIMIT);
 
   assert.equal(revertTo(committed, "2020-01-01T00:00:00.000Z").ok, false);
+});
+
+test("确认修改之后：会话不销毁，没改的留着，版本推进到刚落完的那版", () => {
+  const base = touchSession(emptySession("alan"), {
+    stage: "chatting",
+    baseRevision: "194",
+    diagnosis: { openings: ["先对一遍"], keep: [], grow: [] },
+    messages: [{ role: "user", text: "ta 占有欲有点重", at: "2026-10-10T07:50:00.000Z" }],
+    suggestions: [
+      { label: "给掌控加一条行为", op: "derivative_add", colorId: "c1", text: "说完不解释，直接等你应" },
+      { label: "给坦率加一条行为", op: "derivative_add", colorId: "c2", text: "看见她想赖账就当场点出来" },
+    ],
+  });
+  const next = advanceAfterApply(base, {
+    applied: [{ label: "给掌控加一条行为", op: "derivative_add", colorId: "c1" }],
+    change: "多了 1 条行为",
+    revision: 195,
+  });
+  assert.equal(next.baseRevision, "195", "版本得推到刚落完的那版，不然下一轮会被版本守卫顶回来");
+  assert.equal(next.suggestions.length, 1, "没改的那条还在清单里");
+  assert.equal(next.suggestions[0].label, "给坦率加一条行为");
+  assert.equal(next.applied.length, 1, "换上的要记一笔，模型靠它知道别再提");
+  assert.equal(next.messages.length, 1, "原话得留着，接着聊才有上下文");
+  assert.ok(normalizeSession(next), "写回去的会话能读出来");
+});
+
+test("确认修改之后：提示词里写清哪些已经换上去了", () => {
+  const spec = chatSpec({
+    partnerName: "阿岚",
+    applied: [{ label: "给掌控加一条行为" }],
+    suggestions: [{ label: "给坦率加一条行为" }],
+  });
+  assert.match(spec.userText, /【已经换上档案的条目（别再提）】\n- 给掌控加一条行为/);
+  assert.match(spec.systemPrompt, /别再当成待改的提一遍/);
+  const none = chatSpec({ partnerName: "阿岚" });
+  assert.doesNotMatch(none.userText, /已经换上档案/);
+});
+
+test("模型吐进别的语种字形：落盘前就洗掉，不让乱码进档案", () => {
+  const suggestion = normalizeSuggestion({
+    label: "改一条行为",
+    op: "derivative_update",
+    derivativeId: "d1",
+    text: "不靠长篇安慰表达温度，而是用简短确认维持连接\u0ac7\u0aa3",
+  });
+  assert.ok(suggestion);
+  assert.equal(suggestion.text, "不靠长篇安慰表达温度，而是用简短确认维持连接");
+  const spec = chatSpec({ partnerName: "阿岚", messages: [{ role: "hua", text: "维持连接\u200b\uFFFD" }] });
+  assert.match(spec.userText, /维持连接/);
+  assert.doesNotMatch(spec.userText, /[\u0900-\u097F\uFFFD]/u);
+});
+
+test("确认修改之后：落不上的也得从计划里拿掉，不能留个亮着的按钮骗人", () => {
+  const base = touchSession(emptySession("alan"), {
+    baseRevision: "10",
+    suggestions: [
+      { label: "加一条行为", op: "derivative_add", colorId: "c1", text: "a" },
+      { label: "加第二条", op: "derivative_add", colorId: "c1", text: "b" },
+      { label: "改场景", op: "scenario_update", questionId: "boundaries", index: 0, reaction: "r" },
+    ],
+  });
+  const next = advanceAfterApply(base, {
+    applied: [{ label: "加一条行为", op: "derivative_add", colorId: "c1" }],
+    skipped: [{ label: "加第二条", op: "derivative_add", reason: "找不到这个色，或这个色的记录已经满了" }],
+    revision: 11,
+  });
+  assert.deepEqual(next.suggestions.map((row) => row.label), ["改场景"], "落上的和落不上的都不该再留在计划里");
+  assert.equal(next.dropped.length, 1);
+  assert.equal(next.dropped[0].reason, "找不到这个色，或这个色的记录已经满了");
+  assert.ok(normalizeSession(next).dropped.length, "读盘回来也得留着落不上的原因");
+});
+
+test("修改计划是聊出来的，不是每句话自动弹一张：默认不给方案，点头才给全", () => {
+  const spec = chatSpec({ partnerName: "阿岚" });
+  assert.match(spec.systemPrompt, /不要急着出修改方案/);
+  assert.match(spec.systemPrompt, /她明确点头了/);
+  assert.match(spec.systemPrompt, /一次给全，别一条一条挤牙膏/);
+  assert.match(spec.systemPrompt, /某个色的行为已经记满了.*derivative_update/s, "加不进去要改现有的，别硬加");
 });
 
 test("会话：过期的会话明说失效，不续成新的", () => {

@@ -2232,10 +2232,21 @@
         return isToday ? `今天 ${pad(date.getHours())}:${pad(date.getMinutes())}` : `${date.getMonth() + 1} 月 ${date.getDate()} 日`;
       }
 
-      function reviewBubble(text, mine = false) {
-        const row = rNode("div", `review-bubble${mine ? " mine" : ""}`);
-        row.appendChild(rNode("div", "review-bubble-who", mine ? "你" : "小花"));
-        row.appendChild(rNode("p", "", text));
+      function reviewBubble(text, mine = false, at = null) {
+        const row = rNode("div", `review-row ${mine ? "me" : "ta"}`);
+        const line = rNode("div", "review-line");
+        const time = rNode("span", "review-time", at ? reviewTime(at) : "");
+        if (!at) time.hidden = true;
+        line.appendChild(rNode("div", "review-bubble", text));
+        line.appendChild(time);
+        row.appendChild(line);
+        return row;
+      }
+
+      /** 中间那条状态说明：换上了什么。它是这边的情况，不是谁说的话。 */
+      function reviewNotice(text) {
+        const row = rNode("div", "review-row notice");
+        row.appendChild(rNode("div", "review-notice-bubble", text));
         return row;
       }
 
@@ -2285,28 +2296,56 @@
         return "还没有这一条";
       }
 
-      /** 建议卡：长在对话流里，点「确认修改」才写档案。 */
+      /** 建议的同一性：跟后端 mergeSuggestions 用同一把尺子，不然勾选一聊天就忘了。 */
+      const REVIEW_KEY = (row) => [row.op, row.questionId ?? "", row.colorId ?? "", row.derivativeId ?? "", row.index ?? "", row.name ?? ""].join("|");
+
+      /**
+       * 修改计划卡：默认折着，只占一行。
+       * 这一屏的主体是对话，不是表。一句话就弹一张大卡，她看不见我们聊了什么。
+       * 折叠着也能看懂：标题行里写清楚有几条、每条改什么。
+       */
       function reviewSuggestionCard(state) {
         const list = state.session?.suggestions ?? [];
-        const card = rNode("div", "review-suggestion-card");
-        card.appendChild(rNode("b", "review-suggestion-head", `要改的地方（${list.length}）`));
-        card.appendChild(rNode("p", "review-suggestion-note", "点「确认修改」才会写到 ta 身上，没点之前都只是建议。"));
+        const card = document.createElement("details");
+        card.className = "review-suggestion-card";
+        const head = document.createElement("summary");
+        head.className = "review-suggestion-head";
+        head.appendChild(rNode("span", "", `这次聊出来的修改计划（${list.length} 条）`));
+        const peek = list.map((row) => row.label).slice(0, 3).join("、") + (list.length > 3 ? " 等" : "");
+        head.appendChild(rNode("em", "review-suggestion-peek", peek));
+        card.appendChild(head);
+        const inner = rNode("div", "review-suggestion-body");
+        inner.appendChild(rNode("p", "review-suggestion-note", "展开看每条的前后对照，勾哪几条就改哪几条。点「确认修改」才写到 ta 身上。"));
         for (const row of list) {
+          const key = REVIEW_KEY(row);
           const item = rNode("div", "review-suggestion");
-          item.appendChild(rNode("b", "", row.label));
+          const head = rNode("label", "review-suggestion-title");
+          const box = document.createElement("input");
+          box.type = "checkbox";
+          box.checked = !state.offKeys?.has(key);
+          box.addEventListener("change", () => {
+            if (!state.offKeys) state.offKeys = new Set();
+            if (box.checked) state.offKeys.delete(key);
+            else state.offKeys.add(key);
+            syncApplyHint(state);
+          });
+          head.appendChild(box);
+          head.appendChild(rNode("span", "", row.label));
+          item.appendChild(head);
           const pair = rNode("div", "review-pair");
           pair.appendChild(rNode("p", "before", `现在：${suggestionBefore(row)}`));
           pair.appendChild(rNode("p", "after", `改完以后：${suggestionAfter(row)}`));
           item.appendChild(pair);
-          const dropOne = rNode("button", "remove-link", "这条不要");
+          const dropOne = rNode("button", "remove-link", "这次不谈这条");
           dropOne.type = "button";
           dropOne.addEventListener("click", () => {
             state.session.suggestions = (state.session.suggestions ?? []).filter((entry) => entry !== row);
+            state.offKeys?.delete(key);
             state.skipped = [];
             renderReview();
           });
           item.appendChild(dropOne);
-          card.appendChild(item);
+          inner.appendChild(item);
         }
         if (state.skipped?.length) {
           const missed = rNode("div", "review-missed");
@@ -2314,20 +2353,32 @@
           const missedList = rNode("ul");
           for (const row of state.skipped) missedList.appendChild(rNode("li", "", `${row.label}（${row.reason ?? "落不上"}）`));
           missed.appendChild(missedList);
-          card.appendChild(missed);
+          inner.appendChild(missed);
         }
         const actions = rNode("div", "review-suggestion-actions");
         const apply = rNode("button", "primary-button", "确认修改");
+        apply.id = "review-apply";
         apply.type = "button";
         apply.disabled = state.busy;
         apply.addEventListener("click", () => void reviewApply());
         actions.appendChild(apply);
-        card.appendChild(actions);
+        inner.appendChild(actions);
+        card.appendChild(inner);
         return card;
       }
 
+      /** 勾选几条就在按钮上写几条，不让人猜下一步会改什么。 */
+      function syncApplyHint(state) {
+        const list = state.session?.suggestions ?? [];
+        const picked = list.filter((row) => !state.offKeys?.has(REVIEW_KEY(row))).length;
+        const button = document.getElementById("review-apply");
+        if (!button) return;
+        button.textContent = picked ? `确认修改（${picked} 条）` : "先勾要改的";
+        button.disabled = state.busy || !picked;
+      }
+
       async function openReview(agentId) {
-        reviewState = { agentId, busy: false, error: "", view: "loading", session: null, mechanical: null, change: "", pending: "", skipped: [], skippedAfter: [] };
+        reviewState = { agentId, busy: false, error: "", view: "loading", session: null, mechanical: null, pending: "", skipped: [], offKeys: new Set() };
         openModal("review-modal");
         renderReview();
         try {
@@ -2391,14 +2442,25 @@
           foot.classList.add("stacked");
 
           // 开场让小花自己说：一条条气泡，像刚坐下来跟你讲话。
-          for (const line of reviewOpenings(diagnosis)) body.appendChild(reviewBubble(line));
+          for (const line of reviewOpenings(diagnosis)) body.appendChild(reviewBubble(line, false, null));
 
           const stream = rNode("div", "review-stream");
-          for (const message of session.messages ?? []) stream.appendChild(reviewBubble(message.text, message.role === "user"));
+          for (const message of session.messages ?? []) stream.appendChild(reviewBubble(message.text, message.role === "user", message.at));
+          // 已经换上档案的那几条：留在对话里，她回头看得见自己改到哪了。
+          const appliedRows = session.applied ?? [];
+          appliedRows.forEach((row, index) => {
+            const newest = index === appliedRows.length - 1;
+            stream.appendChild(reviewNotice(`已经换上：${row.label}${newest && row.change ? `（${row.change}）` : ""}`));
+          });
+          // 落不上的当场说清楚：它们已经从计划里拿掉了，不会再让按钮白亮着。
+          for (const row of (session.dropped ?? []).slice(-2)) {
+            stream.appendChild(reviewNotice(`这条没落上，已经从计划里拿掉：${row.label}（${row.reason ?? "落不上"}）`));
+          }
           // 建议直接长在对话里，不另开一屏。
           if ((session.suggestions ?? []).length) stream.appendChild(reviewSuggestionCard(state));
           if (state.busy) stream.appendChild(rNode("div", "review-status", "正在想怎么说…"));
           body.appendChild(stream);
+          syncApplyHint(state);
 
           // 体检明细收进折叠里：聊天的位子留给聊天，报告退到后头当附录。
           const detail = document.createElement("details");
@@ -2433,29 +2495,14 @@
           foot.appendChild(composer);
 
           const links = rNode("div", "review-foot-row");
-          const drop = rNode("button", "remove-link", "结束这次聊聊");
-          drop.addEventListener("click", () => void reviewDrop());
+          const drop = rNode("button", "remove-link", "聊完了，回去");
+          drop.addEventListener("click", () => void reviewDrop(drop));
           links.appendChild(drop);
+          const past = rNode("button", "remove-link", "看看以前的样子");
+          past.addEventListener("click", () => void openHistory(state.agentId));
+          links.appendChild(past);
           foot.appendChild(links);
           body.scrollTop = body.scrollHeight;
-          return;
-        }
-
-        if (state.view === "done") {
-          body.appendChild(reviewBubble("好了，这版已经换上了。刚才那一版我也替你留好了，相处下来要是觉得原来的更好，随时可以退回去。"));
-          if (state.change) body.appendChild(rNode("div", "review-note", `这次改了：${state.change}`));
-          if (state.skippedAfter?.length) {
-            body.appendChild(rNode("div", "review-note", `另外有 ${state.skippedAfter.length} 条没落上：${state.skippedAfter.map((row) => `${row.label}（${row.reason ?? "落不上"}）`).join("；")}`));
-          }
-          const back = rNode("button", "primary-button", "回去看看 ta");
-          back.addEventListener("click", async () => {
-            closeModal("review-modal");
-            if (currentId === state.agentId) await openPartner(state.agentId, "personality");
-          });
-          foot.appendChild(back);
-          const past = rNode("button", "soft-button", "看看以前的样子");
-          past.addEventListener("click", () => void openHistory(state.agentId));
-          foot.appendChild(past);
           return;
         }
       }
@@ -2510,7 +2557,7 @@
       async function reviewApply() {
         const state = reviewState;
         if (!state || state.busy) return;
-        const list = state.session?.suggestions ?? [];
+        const list = (state.session?.suggestions ?? []).filter((row) => !state.offKeys?.has(REVIEW_KEY(row)));
         if (!list.length) return;
         state.busy = true;
         state.error = "";
@@ -2518,11 +2565,11 @@
         renderReview();
         try {
           const data = await apiLong("POST", `persona-review/${encodeURIComponent(state.agentId)}/apply`, { suggestions: list });
-          state.change = data.change ?? "";
-          state.skippedAfter = Array.isArray(data.skipped) ? data.skipped : [];
-          state.session = null;
-          state.view = "done";
-          say("已经换上这版了，原来那版留着了", "ok");
+          // 不换屏、不收尾：接着聊。后端把会话留下了，剩下没改的建议也还在。
+          state.session = data.session ?? null;
+          state.offKeys = new Set();
+          if (state.session) state.view = "talk";
+          say("已经换上这版了，接着聊就行", "ok");
         } catch (error) {
           state.error = error.message;
           state.skipped = Array.isArray(error.skipped) ? error.skipped : [];
@@ -2531,15 +2578,31 @@
         } finally {
           state.busy = false;
           renderReview();
+          document.getElementById("review-input")?.focus();
         }
       }
 
-      async function reviewDrop() {
+      async function reviewDrop(button) {
         const state = reviewState;
         if (!state) return;
-        try { await api("POST", `persona-review/${encodeURIComponent(state.agentId)}/drop`); } catch { /* 关窗优先 */ }
+        // 还有没落下的建议就再点一下确认：这一下会把它们一起清掉，不能一碰就没。
+        if (button && (state.session?.suggestions ?? []).length && button.dataset.armed !== "1") {
+          button.dataset.armed = "1";
+          button.textContent = `还有 ${state.session.suggestions.length} 条没落，确定不聊了？`;
+          setTimeout(() => {
+            if (button.isConnected) { button.dataset.armed = "0"; button.textContent = "聊完了，回去"; }
+          }, 5000);
+          return;
+        }
+        let tally = null;
+        try {
+          tally = await api("POST", `persona-review/${encodeURIComponent(state.agentId)}/drop`);
+        } catch { /* 关窗优先 */ }
         closeModal("review-modal");
-        say("这次聊聊结束了，ta 没有变动");
+        // 不说那句写死的「没有变动」：这回到底改了没改，后端知道。
+        if (tally?.changed) say(`聊完了，这回改了 ta ${tally.changed} 处，已经存着了`, "ok");
+        else if (tally?.pending) say(`聊完了，还有 ${tally.pending} 条没落，这轮没改动 ta`, "err");
+        else say("聊完了，这次没改动 ta");
         if (currentId === state.agentId) await openPartner(state.agentId, "personality");
       }
 
@@ -2550,7 +2613,30 @@
         try {
           const data = await api("GET", `persona-review/${encodeURIComponent(agentId)}`);
           const rows = data.history ?? [];
+          const log = data.log ?? [];
           body.replaceChildren();
+          if (log.length) {
+            const title = rNode("b", "history-section", "聊过的那几次");
+            body.appendChild(title);
+            for (const round of log) {
+              const card = rNode("div", "history-row");
+              card.appendChild(rNode("b", "", reviewTime(round.at)));
+              if (round.change) card.appendChild(rNode("p", "", `那回改了：${round.change}`));
+              if (round.messages?.length) {
+                const detail = document.createElement("details");
+                detail.className = "history-detail";
+                const head = document.createElement("summary");
+                head.textContent = `那回聊了什么（${round.messages.length} 条）`;
+                detail.appendChild(head);
+                for (const message of round.messages) detail.appendChild(reviewBubble(message.text, message.role === "user", message.at));
+                card.appendChild(detail);
+              }
+              body.appendChild(card);
+            }
+          }
+          if (rows.length) {
+            body.appendChild(rNode("b", "history-section", "换过的版本"));
+          }
           if (!rows.length) {
             body.appendChild(rNode("div", "empty-note", "还没有留过以前的版本。第一次换版本时会自动留一份。"));
             return;

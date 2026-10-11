@@ -17,6 +17,28 @@ function freshStore() {
   return { store: createStore(dir), dir };
 }
 
+test("「和小花聊聊」的存档：会话没了，原话还在，按回倒着排", () => {
+  const { store, dir } = freshStore();
+  store.appendReviewLog("alan", {
+    change: "多了 1 条行为",
+    applied: [{ label: "给掌控加一条行为" }],
+    skipped: [{ label: "改自画像", reason: "落不上" }],
+    messages: [
+      { role: "user", text: "ta 占有欲有点重", at: "2026-10-10T07:50:00.000Z" },
+      { role: "hua", text: "这条我想跟你对一对", at: "2026-10-10T07:50:20.000Z" },
+      { role: "乱来", text: "不该存", at: "2026-10-10T07:50:30.000Z" },
+    ],
+  });
+  store.appendReviewLog("alan", { change: "场景多了 1 条", applied: [{ label: "加一条边界场景" }], messages: [] });
+  const reopened = createStore(dir);
+  const rows = reopened.getReviewLog("alan");
+  assert.equal(rows.length, 2, "重开还在");
+  assert.equal(rows[0].change, "场景多了 1 条", "最近的一回排在最前面");
+  assert.equal(rows[1].messages.length, 2, "只留 user 和 hua 两种角色");
+  assert.equal(rows[1].skipped[0].reason, "落不上");
+  assert.equal(reopened.getReviewLog("nobody").length, 0);
+});
+
 test("收藏能保存文字和语音快照，重启后可翻看并独立取消", () => {
   const { store, dir } = freshStore();
   const text = store.saveFavorite({ agentId: "nova", partnerName: "小花", messageId: "m-text", kind: "text", text: "先把这句留下", at: "2026-09-23T05:00:00.000Z" });

@@ -401,10 +401,26 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 .review-foot.stacked > * { flex: initial; white-space: normal; }
 .review-foot-row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
 .review-foot-row > * { flex: none; white-space: nowrap; }
-.review-bubble { max-width: 88%; margin: 0 0 10px; padding: 10px 12px; border-radius: var(--r-md); background: var(--mint-soft); }
-.review-bubble.mine { margin-left: auto; border: 1px solid var(--line); background: var(--surface); }
-.review-bubble-who { margin-bottom: 3px; color: var(--mint-deep); font-size: 11px; }
-.review-bubble p { margin: 0; color: var(--ink); font-size: 12.5px; line-height: 1.7; overflow-wrap: anywhere; }
+/* 聊天那屏照小对话框那套：她的在右、我的在左，时间贴着气泡外侧，鼠标搭上去才显 */
+.review-row { display: flex; width: 100%; margin: 0 0 10px; }
+.review-row.me { justify-content: flex-end; }
+.review-row.ta { justify-content: flex-start; }
+.review-line { display: flex; align-items: flex-end; gap: 8px; max-width: 82%; min-width: 0; }
+.review-row.me .review-line { flex-direction: row-reverse; }
+.review-bubble { padding: 9px 13px; border-radius: var(--r-lg); font-size: 12.5px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.review-row.ta .review-bubble { border: 1px solid var(--line); background: var(--surface); border-bottom-left-radius: var(--r-xs); }
+.review-row.me .review-bubble { border: 1px solid var(--line); background: var(--mint-soft); border-bottom-right-radius: var(--r-xs); }
+.review-time { flex: none; margin-bottom: 2px; color: var(--ink-soft); font-size: 11px; opacity: 0; transition: opacity .14s ease; }
+.review-row:hover .review-time { opacity: 1; }
+.review-time[hidden] { display: none; }
+/* 「已经换上 xx」那条：居中，是这边的情况，不是谁回的话 */
+.review-row.notice { justify-content: center; }
+.review-notice-bubble { max-width: 86%; padding: 7px 12px; border: 1px solid var(--line-soft); border-radius: 999px; background: var(--paper); color: var(--ink-soft); font-size: 11.5px; line-height: 1.6; text-align: center; overflow-wrap: anywhere; }
+.history-section { display: block; margin: 4px 0 8px; color: var(--mint-deep); font-size: 13px; }
+.history-detail { margin-top: 8px; }
+.history-detail > summary { color: var(--ink-soft); cursor: pointer; font-size: 11.5px; }
+.history-detail .review-row { margin-bottom: 6px; }
+.history-detail .review-time { opacity: 1; }
 .review-note { margin: 0 0 12px; padding: 12px 13px; border-radius: var(--r-md); background: var(--paper); color: var(--ink-soft); font-size: 12.5px; line-height: 1.7; overflow-wrap: anywhere; }
 .review-note p + p { margin-top: 6px; }
 .review-group { margin-bottom: 12px; padding: 13px 14px; border: 1px solid var(--line-soft); border-radius: var(--r-md); background: rgba(255, 253, 248, .72); }
@@ -431,12 +447,19 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 .review-error { margin-bottom: 10px; padding: 10px 12px; border-radius: 12px; background: #fdeef0; color: #a8546a; font-size: 12.5px; line-height: 1.6; overflow-wrap: anywhere; }
 .review-status { margin: 6px 0 10px; color: var(--ink-soft); font-size: 12px; }
 /* 建议卡：长在对话流里，点「确认修改」才写档案 */
-.review-suggestion-card { max-width: 92%; margin: 0 0 10px; padding: 12px 13px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); box-shadow: 0 6px 18px rgba(92, 78, 55, .06); }
-.review-suggestion-head { display: block; color: var(--mint-deep); font-size: 13px; }
+/* 建议卡：折着时只占一行，不抢对话的位子 */
+.review-suggestion-card { max-width: 92%; margin: 0 0 10px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); box-shadow: 0 6px 18px rgba(92, 78, 55, .06); }
+.review-suggestion-head { display: block; padding: 11px 13px; color: var(--mint-deep); font-size: 13px; cursor: pointer; list-style: none; }
+.review-suggestion-head::-webkit-details-marker { display: none; }
+.review-suggestion-head::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg) translateY(-2px); transition: transform 160ms var(--ease-out); }
+.review-suggestion-card[open] > .review-suggestion-head::before { transform: rotate(45deg) translateY(-1px); }
+.review-suggestion-peek { display: block; margin: 4px 0 0 13px; color: var(--ink-soft); font-size: 11.5px; font-style: normal; line-height: 1.55; }
+.review-suggestion-body { padding: 0 13px 12px; }
 .review-suggestion-note { margin: 4px 0 10px; color: var(--ink-soft); font-size: 11.5px; line-height: 1.6; }
 .review-suggestion { padding: 10px 11px; border: 1px solid var(--line-soft); border-radius: var(--r-md); background: var(--paper); }
 .review-suggestion + .review-suggestion { margin-top: 8px; }
-.review-suggestion > b { color: var(--mint-deep); font-size: 12.5px; }
+.review-suggestion-title { display: flex; align-items: flex-start; gap: 8px; color: var(--mint-deep); font-size: 12.5px; font-weight: 650; cursor: pointer; }
+.review-suggestion-title input { flex: none; margin: 2px 0 0; accent-color: var(--mint-deep); cursor: pointer; }
 .review-pair { display: grid; gap: 6px; margin: 8px 0; }
 .review-pair p { margin: 0; padding: 8px 10px; border-radius: 10px; font-size: 12.5px; line-height: 1.6; overflow-wrap: anywhere; }
 .review-pair .before { background: var(--paper-deep); color: var(--ink-soft); }

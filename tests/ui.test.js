@@ -2063,7 +2063,33 @@ test("和小花聊聊：档案长出来才能点，改前留一版，旧版能�
   assert.match(app, /app\.post\("\/persona-review\/:agentId\/revert"/);
   assert.match(app, /code: "revision-changed"/, "版本对不上不硬盖");
   assert.match(app, /commitChange\(knowing, after/, "应用前先把旧版存进历史");
-  assert.match(app, /store\.clearReviewSession\(agentId\)/, "应用完要把会话消费掉");
+  assert.match(app, /advanceAfterApply\(/, "应用完会话要接着留，别把剩下的建议一起销毁");
+  assert.doesNotMatch(
+    app.slice(app.indexOf('app.post("/persona-review/:agentId/apply"'), app.indexOf('app.post("/persona-review/:agentId/revert"')),
+    /clearReviewSession/,
+    "应用这条路上不许再销毁会话",
+  );
+  assert.match(app, /store\.appendReviewLog\(/, "聊过的原话要存档，不能跟着会话一起没了");
+  // 改完能接着聊：勾选、逐条落、确认后不停在收尾屏。
+  assert.match(settings, /box\.type = "checkbox"/, "建议得能一条一条勾");
+  assert.match(settings, /确认修改（\$\{picked\} 条）/, "按钮上要写明这轮会改几条");
+  assert.match(settings, /card\.className = "review-suggestion-card";\s*\n\s*const head = document\.createElement\("summary"\)/, "计划卡得是折着的 details，不能一上来就糊一屏");
+  assert.match(settings, /这次聊出来的修改计划（\$\{list\.length\} 条）/, "折着也要看得见有几条、是什么");
+  assert.match(settings, /review-suggestion-peek/);
+  assert.match(settings, /这条没落上，已经从计划里拿掉/, "落不上的当场说，不能留个亮按钮");
+  // 结束时说的是事实，不是那句写死的「ta 没有变动」。
+  assert.match(app, /const tally = \{\s*\n\s*changed: \(session\?\.applied \?\? \[\]\)\.length/, "结束这轮前得把真实账数读出来");
+  assert.match(app, /return c\.json\(\{ ok: true, \.\.\.tally \}\)/);
+  assert.doesNotMatch(settings, /这次聊聊结束了，ta 没有变动/, "那句写死的假话不许再出现");
+  assert.match(settings, /这回改了 ta \$\{tally\.changed\} 处/, "改了几处要说得出来");
+  assert.match(settings, /还有 \$\{state\.session\.suggestions\.length\} 条没落，确定不聊了？/, "还有没落下的建议时，结束要走两步，别一碰就清掉");
+  assert.match(app, /if \(live > archived\)/, "点结束时也要归档：最后确认之后又聊的那几句不能跟着会话一起没了");
+  assert.match(app, /const archived = store\.getReviewLog\(agentId\)\[0\]\?\.messages\?\.length \?\? 0/, "已经存过的那段别再存一遍");
+  assert.match(settings, /syncApplyHint\(state\)/);
+  assert.match(settings, /state\.session = data\.session \?\? null/, "落完盘接着用同一个会话，不换屏");
+  assert.doesNotMatch(settings, /state\.view = "done"/, "不再有那个一改完就把对话清空的收尾屏");
+  assert.match(settings, /reviewNotice\(`已经换上：/, "换上了哪几条要留在对话里");
+  assert.match(settings, /review-row \$\{mine \? "me" : "ta"\}/, "气泡得跟小对话框一样分左右");
   // 这一屏得像个聊天框：小花开场先说、明细退到折叠里、输入框跟发送键贴在一起。
   assert.match(settings, /reviewOpenings\(diagnosis\)/, "开场是气泡，不是一张报告卡");
   assert.match(settings, /classList\.add\("stacked"\)/, "输入框要跟发送键搂到一块");
@@ -2230,7 +2256,7 @@ test("并排小卡要给宿主那排窗口按钮让位，整页打开时不留�
   assert.doesNotMatch(css, /\.shell \{ padding-top: 3\dpx/, "不能让整页也背上这条带");
 });
 
-test("新消息提示音走本机应用事件，不走系统通知", () => {
+test("新消息提示音等消息显示后再响，每条回复只响一次", () => {
   const manifest = JSON.parse(fs.readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
   const sdk = fs.readFileSync(new URL("../ui/assets/hana-app-sdk-ui.js", import.meta.url), "utf8");
   const sound = fs.readFileSync(new URL("../ui/assets/message-sound.js", import.meta.url), "utf8");
@@ -2244,6 +2270,14 @@ test("新消息提示音走本机应用事件，不走系统通知", () => {
   assert.match(panel, /提示音已开启，但页面没能发出声音/, "音频没解锁时不能假报试听成功");
   assert.match(panel, /hana\.storage\.global\.set\(MESSAGE_SOUND_KEY, next\)/);
   assert.match(panel, /playMessageChime\(typeof payload\?\.agentId === "string" \? payload\.agentId : null\)/, "谁来的消息就响 ta 自己那份音色");
+  const arrivalHandler = panel.match(/function receiveMessageArrival\(payload\) \{([\s\S]*?)\n    \}/)?.[1] ?? "";
+  assert.match(arrivalHandler, /queueMessageSoundUntilVisible\(payload\)/, "到达事件先等对应消息渲染");
+  assert.doesNotMatch(arrivalHandler, /playIncomingMessageSound/);
+  assert.match(panel, /requestAnimationFrame\(\(\) => requestAnimationFrame\(play\)\)/, "至少让消息经历一次绘制再播声");
+  assert.match(panel, /if \(seenMessageSoundIds\.has\(messageId\)\) return;/, "同一条分成多段也只响一次");
+  const renderMessage = panel.match(/function renderMessage\(m, opts = \{\}\) \{([\s\S]*?)\n    \}\n\n    function invalidateRendering/)?.[1] ?? "";
+  assert.equal((renderMessage.match(/markMessageSoundVisible\(m\)/g) ?? []).length, 2, "文字和语音消息都在渲染后接提醒");
+  assert.match(panel, /for \(const payload of pendingMessageSoundEvents\.splice\(0\)\) receiveMessageArrival\(payload\)/, "设置尚未读完时收到的事件也要走延后逻辑");
   assert.match(panel, /if \(keys\.includes\(MESSAGE_SOUND_KEY\)\) void loadMessageSoundPreference\(\)/, "设置页改完，聊天页当场要跟着变");
   assert.match(sound, /new AudioContextType\(\)/);
   assert.match(sound, /gain\.gain\.exponentialRampToValueAtTime\(peak, noteStart \+ 0\.012\)/, "提示音要有实际可听的幅度");
