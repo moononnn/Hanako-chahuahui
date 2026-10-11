@@ -4,15 +4,18 @@ import test from "node:test";
 import {
   MAX_SEEDS,
   SEED_MOTIF_COOLDOWN_MS,
+  SEED_MOTIF_EXHAUST_LIMIT,
   addSeeds,
   cooldownMotifIds,
   emptySeedBook,
+  exhaustedMotifIds,
   isSameSeedSpot,
   isSameStance,
   isSeedKindVoiceMismatch,
   markSeedUsed,
   normalizeSeedKind,
   parseSeedReply,
+  pickMotifForSeeds,
   pickSeed,
   readSeedBook,
   seedKindHint,
@@ -162,4 +165,26 @@ test("每种位置都有开口说明，认不出的落回好奇", () => {
   assert.match(seedKindHint("ask"), /征求意见/);
   assert.match(seedKindHint("乱写的"), /还没想明白/);
   assert.match(seedKindHint("curio"), /别写成结论/, "好奇类不许写成想通了");
+});
+
+test("母题用掉的种子攒到上限就算聊透，不再挑去发", () => {
+  const rows = Array.from({ length: SEED_MOTIF_EXHAUST_LIMIT + 1 }, (_, i) => ({ kind: "curio", hook: `第${i}个面`, angle: "" }));
+  let book = grown(rows);
+  for (let i = 0; i < SEED_MOTIF_EXHAUST_LIMIT; i += 1) {
+    book = markSeedUsed(book, book.seeds[i].id, "文本", NOW);
+  }
+  assert.deepEqual([...exhaustedMotifIds(book, { now: NOW })], [MOTIF.id]);
+  assert.equal(usableSeeds(book, { now: NOW }).length, 1, "还剩一条没用，但母题已经聊透");
+  const later = new Date(NOW.getTime() + SEED_MOTIF_COOLDOWN_MS + 60 * 1000);
+  assert.equal(pickSeed(book, { now: later }), null, "聊透的母题过了冷却也不再挑");
+});
+
+test("聊透的母题不再被挑去长新种子", () => {
+  const rows = Array.from({ length: SEED_MOTIF_EXHAUST_LIMIT }, (_, i) => ({ kind: "curio", hook: `第${i}个面`, angle: "" }));
+  let book = grown(rows);
+  for (let i = 0; i < SEED_MOTIF_EXHAUST_LIMIT; i += 1) {
+    book = markSeedUsed(book, book.seeds[i].id, "文本", NOW);
+  }
+  const picked = pickMotifForSeeds([MOTIF, { id: "h_qita", name: "别的方向" }], book, {});
+  assert.equal(picked.id, "h_qita", "聊透的母题让位给别的方向");
 });
