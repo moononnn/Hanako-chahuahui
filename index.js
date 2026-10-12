@@ -34,7 +34,7 @@ import { buildSystemPrompt, buildTeaseText, identityBlock, replyChoiceBlock, sho
 import { buildAmbientContextText, buildDaybookText, daybookAvailable, daybookEntry, daybookHash, daybookQueryTopics, periodNoteDecision, previousAssistantBeforeUser, readDaybook, readDaybookVerbose, shouldUseDaybook } from "./lib/daybook.js";
 import { dueTodosFromSnapshot, nudgeKey, nudgeSeen, pickTodoNudger, todoNudgeText } from "./lib/todo-nudge.js";
 import { hasProposal, confirmProposal, makeProposal, proposalAskText, proposeFromMessage } from "./lib/todo-propose.js";
-import { spokenClock, timeBlock, zonedTimestamp } from "./lib/clock.js";
+import { isMorningPart, spokenClock, timeBlock, zonedTimestamp } from "./lib/clock.js";
 import {
   askUtility,
   classifyModelFailure,
@@ -122,7 +122,7 @@ import {
   parseNativeHobbyReply,
   validateNativeHobbies,
 } from "./lib/growth.js";
-import { cleanVoice, farewellSpec, hasOpenHook, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNoReply, isUsableVoice, nightSpec, proactiveSpec, stirredSpec } from "./lib/compose.js";
+import { cleanVoice, farewellSpec, hasOpenHook, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNighttimeSleepQuestion, isNoReply, isUsableVoice, nightSpec, proactiveSpec, stirredSpec } from "./lib/compose.js";
 import { formatSearchContext, searchTimelyTopic } from "./lib/topic-search.js";
 import { findPreviousSearchContext, isChatSearchCandidate, searchForChat } from "./lib/chat-search.js";
 import {
@@ -144,7 +144,6 @@ import {
 import {
   addSeeds,
   emptySeedBook,
-  isSeedKindVoiceMismatch,
   markSeedUsed,
   parseSeedReply,
   pickMotifForSeeds,
@@ -289,10 +288,12 @@ import {
   proactiveAnchor,
   proactiveDelayFactor,
   proactiveSilenceContext,
+  proactiveContextFor,
   inFarewellWindow,
   shouldSendFarewell,
   stirredUp,
   morningOpening,
+  isFirstProactiveOfLifeDay,
   WORK_ACTIVE_WINDOW_MS,
   wakeEchoFor,
   recentSceneFor,
@@ -302,6 +303,11 @@ import {
   takeIntent,
   windowStartDate,
 } from "./lib/proactive.js";
+import {
+  enrichReasonContext,
+  introducedTextFrom,
+  pickReason,
+} from "./lib/proactive-reasons.js";
 import {
   correctionsFor,
   noteReview,
@@ -389,6 +395,9 @@ function describeError(error) {
   return { name: error.name ?? null, message: error.message ?? String(error), code: error.code ?? null };
 }
 
+// 默认不启用精简；本地试点赋值在发布时剥离，不扫描伙伴清单扩范围。
+let compactReplyPilotId = "";
+
 // __CHAHUAHUI_DEV_ONLY__
 /**
  * 内测入口总开关。
@@ -401,6 +410,8 @@ function describeError(error) {
  * 不该暴露给只是装着玩的人（数据与流程上看，它们对普通使用者也毫无意义）。
  */
 const DEV_TOOLS = false;
+// CHF-20261012-01~04：仅本地普通回复试点；设为空字符串即可回旧版。
+compactReplyPilotId = DEV_TOOLS ? "hanako" : "";
 // __CHAHUAHUI_DEV_ONLY_END__
 
 export function apply(ctx) {
@@ -1874,7 +1885,7 @@ export function apply(ctx) {
   }
 
   /** 把一条主动消息送进她那个窗（她不在也照发，显示未读）。 */
-  async function deliverProactive(agentId, { partnerName, topic, hobby, discovery, seed, exception, followup, wakeEcho, sceneEcho, kind = "proactive", activity = null, sleepStart = "", firstOfDay = false, todoNudge = "" }) {
+  async function deliverProactive(agentId, { partnerName, topic, hobby, discovery, seed, reason = null, reasonCandidates = [], exception, followup, wakeEcho, sceneEcho, kind = "proactive", activity = null, sleepStart = "", greetingOnly = false, todoNudge = "" }) {
     await loadUserName();
     const memoryText = buildMemoryBlock(store.readMemory(agentId));
     // 主动开口也得是「ta 本人」在说话：跟面对面回复用同一份人格来源。
@@ -1883,9 +1894,20 @@ export function apply(ctx) {
     // 分享版里没写过人设的伙伴，至少把名字锚死。
     const persona = await getPersona(agentId);
     const personaText = renderPersona(persona, { partnerName, userName: USER_NAME, nameFallback: true });
+    // 特别场景由头优先（2026-10-12）：这一轮已经带着待办、醒来回声、未回复跟进、晚安或
+    // 夜间例外时，多传进来的 reason 一律不启用；低信号那一关也只跟着实际用上的那条由头走。
+    const reasonAllowed = kind === "proactive"
+      && !exception
+      && !String(todoNudge ?? "").trim()
+      && !followup
+      && !wakeEcho
+      && !greetingOnly;
     // 问候、回声和提醒没有使用兴趣素材：不注入、不核查，也不消耗候选库存。
+    // 关系式由头（非兴趣那几种）同样不用兴趣素材：给 seed/discovery 当由头等于拿话题冒充「想找她」，
+    // 所以连核查和消耗都一并关掉——兴趣那一份的种子和发现留在账上等下次。
     const interestContent = !exception && kind === "proactive" && !String(todoNudge ?? "").trim()
-      && !followup?.read && !wakeEcho && !firstOfDay;
+      && !followup?.read && !wakeEcho && !greetingOnly
+      && !(reasonAllowed && reason && reason.kind !== "interest");
     const shareableDiscovery = interestContent ? discoveryForProactiveMessage(discovery, { exception }) : null;
     const shareableSeed = interestContent ? seed ?? null : null;
     const shareableHobby = shareableSeed
@@ -1955,11 +1977,23 @@ export function apply(ctx) {
       }
     }
     // 问句额度（2026-10-06）：连着几条都留了问句，这一条就别再追问，免得像采访。
-    const recentAsks = store.getThread(agentId).messages
+    const threadRows = store.getThread(agentId).messages;
+    const recentAsks = threadRows
       .filter((row) => row.proactive && row.text)
       .slice(-3)
       .map((row) => row.text);
     const askSpent = askBudgetSpent(recentAsks, { isAsk: hasOpenHook });
+    // 「已经介绍过什么」只认这位伙伴实际送出去的正文：后台的种子和探索不算，那只是备料，她还没听过。
+    const introducedText = introducedTextFrom(threadRows);
+    // 关系式由头的凭据到这一步才拼得全：同一位伙伴的近况正文，以及已经说过、别重复的话。
+    const reasonResolved = enrichReasonContext(reasonAllowed ? reason : null, { sceneEcho, workfeedText, sentTexts: recentAsks });
+    if (reasonResolved.dropped) {
+      // 候选时说有凭据，到出站那一步却拿不出来（电脑那边的动静刚好没了、或只剩去重段）。
+      // 这不是时机不合适，暂存的意图得留着：不标 preserveIntent，通用失败分支会把「想找你」丢掉。
+      diagnostics({ event: "proactive.reason.dropped", agentId, reason: reason?.kind ?? null });
+      return { ok: false, reason: "reason-context-empty", preserveIntent: true };
+    }
+    const sendReason = reasonResolved.reason;
 
     const spec = exception
       ? nightSpec({
@@ -2000,7 +2034,7 @@ export function apply(ctx) {
               sleepStart,
               stickerText,
             })
-          : proactiveSpec({ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, firstOfDay, askBudgetSpent: askSpent });
+          : proactiveSpec({ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, askBudgetSpent: askSpent, reason: sendReason, introducedText });
 
     let raw = "";
     try {
@@ -2029,11 +2063,15 @@ export function apply(ctx) {
       ? [marker.before, marker.after].filter(Boolean).join("\n")
       : badgeLessRaw;
     const text = cleanVoice(markerlessRaw, "voice");
+    if (!exception && kind === "proactive" && !String(todoNudge ?? "").trim() && isNighttimeSleepQuestion(text, now)) {
+      diagnostics({ event: "proactive.sleep-check-skipped", agentId });
+      return { ok: false, reason: "nighttime-sleep-check" };
+    }
     if (!isUsableVoice(text) && !marker.keyword) {
       diagnostics({ event: "proactive.empty", agentId, rawHead: String(raw ?? "").slice(0, 160) });
       return { ok: false, reason: "empty" };
     }
-    if (!marker.keyword && isLowSignalProactive(text)) {
+    if (!marker.keyword && isLowSignalProactive(text, { reason: sendReason })) {
       diagnostics({ event: "proactive.low-signal", agentId, head: text.slice(0, 40) });
       return { ok: false, reason: "low-signal" };
     }
@@ -2056,18 +2094,7 @@ export function apply(ctx) {
       });
       return { ok: false, reason: "repeat-phrasing" };
     }
-    // 「求解」和「好奇」这两类种子本来带着没想通的那一头，写成完成态的结论就是跑调，
-    // 压着不发，种子留着下次（2026-10-06）。
-    if (shareableSeed && isSeedKindVoiceMismatch(text, shareableSeed.kind)) {
-      diagnostics({
-        event: "proactive.seed-voice-mismatch",
-        agentId,
-        kind: shareableSeed.kind,
-        head: text.slice(0, 40),
-      });
-      return { ok: false, reason: "seed-voice-mismatch" };
-    }
-    if (text && needsClarityReview({ seed: shareableSeed, discovery: shareableDiscovery, exception, kind, todoNudge, followup })) {
+    if (text && needsClarityReview({ seed: shareableSeed, discovery: shareableDiscovery, exception, kind, todoNudge, followup, greetingOnly, wakeEcho })) {
       const clarity = await reviewProactiveClarity({
         text, seed: shareableSeed, discovery: shareableDiscovery,
         sharedContext: JSON.stringify({
@@ -2103,6 +2130,22 @@ export function apply(ctx) {
       diagnostics({ event: "voice.stale-fallback", agentId, kind: "proactive" });
       preparedVoice = null;
     }
+    // 这条是拿哪条由头开的口：落在已有的 proactiveContext 里，不另立一套 schema。
+    // 有跟进语境时照旧用 proactiveContextFor 的那份，只多挂一个 reason；
+    // 没有跟进语境但这一轮走了关系式由头，就只为记下这个 kind（回复那侧只认 kind / previousText）。
+    const followupContext = proactiveContextFor({ kind, todoNudge, followup, exception });
+    // 候选统计跟由头种类一起落在这条消息上：事后想知道「当时还有哪几条路」时不用重算。
+    const reasonMeta = (sendReasonKind) => ({
+      kind: sendReasonKind,
+      candidates: (Array.isArray(reasonCandidates) ? reasonCandidates : [])
+        .map((row) => ({ kind: row.kind, weight: row.weight })),
+    });
+    const proactiveContext = followupContext
+      ? (sendReason ? { ...followupContext, reason: reasonMeta(sendReason.kind) } : followupContext)
+      // 兴趣那一条本来就有 seedId / discoveryId 记账，不必再套一层由头壳
+      : (sendReason && sendReason.kind !== "interest" && kind === "proactive"
+        ? { kind: "reason", reason: reasonMeta(sendReason.kind) }
+        : null);
     const stored = appendPartnerMessage(agentId, {
       role: "assistant",
       text: visibleTextOf(bubbles),
@@ -2110,6 +2153,7 @@ export function apply(ctx) {
       proactive: true,
       form: "word",
       proactiveKind: kind,
+      proactiveContext,
       exception: Boolean(exception),
       topicId: topic?.id ?? null,
       discoveryId: shareableDiscovery?.id ?? null,
@@ -2824,9 +2868,9 @@ export function apply(ctx) {
       const workActivity = workfeedOn()
         ? recentWorkActivity(store.readWorkfeed(), agentId, { now: now.getTime(), withinMs: WORK_ACTIVE_WINDOW_MS })
         : { active: false, at: null };
-      // 今天还没发过主动消息：第一句可以只是打个招呼
-      const sentToday = state.sentToday?.day === dailyKey(now) ? Number(state.sentToday.count ?? 0) : 0;
-      const firstOfDay = sentToday === 0;
+      // 当前生活日还没有主动联系过：首条招呼只在清早至上午走晨间概率。
+      const firstOfLifeDay = isFirstProactiveOfLifeDay(state.lastSentAt, now);
+      const morningFirst = firstOfLifeDay && isMorningPart(now);
       const sleepToday = sleepWindows(settings.sleep, now);
       const sleepStartClock = sleepToday.find((w) => w.kind === "main")?.start ?? "";
       // 快到 ta 自己的睡点（或安静时间要关门前）：这一晚的睡前收尾
@@ -2912,18 +2956,62 @@ export function apply(ctx) {
         continue;
       }
 
-      // 手上没有能聊的东西时，不从旧话题或静态兴趣里硬凑内容消息。
-      // 两个例外：今晚的睡前收尾必须发；今天第一句可以只是打个招呼（要不要这份把握看档位与性子）。
-      const morningSend = firstOfDay && !farewellSend && morningOpening({ tier: settings.tier, workActive: workActivity.active });
+      // 关系式由头（2026-10-12）：长期兴趣之外，再给「没事也想找她」留几条路。
+      // 只在这一轮已经过了门、且没有更高优先级的由头时才挑：
+      //   · 到点待办、醒来回声、已读未回跟进、睡前收尾、夜间例外——一个都不动
+      //   · 上一条主动消息还没被接住时不挑：护栏归 followup 那层管，这层不越俎
+      // 频率一点没动：落点、间隔、日上限、静默时段全在别处，这里只改「这一条拿什么开口」。
+      const reasonEligible = !todoHere
+        && !farewellSend
+        && !wakeEcho
+        && !followup
+        && !gate.exception;
+      const reasonPick = reasonEligible
+        ? pickReason({
+            relationship: effectiveRelationship(knowing),
+            personality: knowing.personality,
+            // 兴趣那一份仍然得过锚点门：这层不改内容型开口的老规矩
+            interestAvailable: Boolean(anchor.ok && (seed || discovery)),
+            // 共同经历和吐槽的真凭据：同一位伙伴有效的最近一轮对话，或者电脑那边确有动静
+            hasContext: Boolean(sceneEcho) || workActivity.active === true,
+          })
+        : { reason: null, candidates: [], basis: null, temperament: null };
+      const reason = reasonPick.reason;
+      if (reason && reason.kind !== "interest") {
+        diagnostics({
+          event: "proactive.reason",
+          agentId,
+          kind: reason.kind,
+          candidates: reasonPick.candidates,
+          familiarity: reasonPick.basis?.familiarity ?? null,
+          intimacy: reasonPick.basis?.intimacy ?? null,
+          temperament: reasonPick.temperament,
+        });
+      }
+
+      // 手上没有待办、醒来回声、等回音或兴趣素材时，晨间首条才按档位抽签决定要不要打招呼。
+      const greetingOnly = morningFirst
+        && !todoHere
+        && !wakeEcho
+        && !followup
+        && !farewellSend
+        && !seed
+        && !discovery
+        && !gate.exception
+        && morningOpening({ tier: settings.tier, workActive: workActivity.active });
+      // 纯招呼已经占住这一轮时就不叠关系式由头：两条由头一起给反而互相削弱。
+      const reasonForSend = greetingOnly ? null : reason;
       const form = todoHere
         ? "word"
         : wakeEcho || followup?.read || farewellSend
         ? "word"
         : seed || discovery
           ? "word"
-          : morningSend
+          : greetingOnly
             ? "word"
-            : decideForm({ topic: null, selfSource: false, tier: settings.tier }).form;
+            : reasonForSend
+              ? "word"
+              : decideForm({ topic: null, selfSource: false, tier: settings.tier }).form;
       const sendKind = farewellSend && !todoHere ? "farewell" : "proactive";
 
       if (form === "poke") {
@@ -2982,6 +3070,8 @@ export function apply(ctx) {
           hobby,
           discovery,
           seed,
+          reason: reasonForSend,
+          reasonCandidates: reasonPick.candidates,
           exception: Boolean(finalGate.exception),
           followup,
           wakeEcho,
@@ -2989,7 +3079,7 @@ export function apply(ctx) {
           kind: sendKind,
           activity: workActivity,
           sleepStart: sleepStartClock,
-          firstOfDay,
+          greetingOnly,
           todoNudge: carriedTodo ? todoNudge.text : "",
         });
         if (!delivered.ok) return delivered;
@@ -3004,9 +3094,11 @@ export function apply(ctx) {
       }));
       if (!sent.ok) {
         recordWatch(agentId, { action: sent.gateBlocked ? "blocked" : "failed", reason: sent.reason, topic: discovery?.focus ?? null });
-        // 没生成出来不算发过；发现仍留在短期账本里，临门被 gate 拦住时旧意图原样归位。
+        // 没生成出来不算发过；发现仍留在短期账本里。门禁拦下的旧意图原样归位；
+        // 由头缺凭据也是同理（sent.preserveIntent），那一轮不是她不合适，是没东西可说。
         const retryAt = new Date();
-        const staged = sent.gateBlocked && pending.intent ? [pending.intent, ...pending.rest] : pending.rest;
+        const keepIntent = Boolean(sent.gateBlocked || sent.preserveIntent) && Boolean(pending.intent);
+        const staged = keepIntent ? [pending.intent, ...pending.rest] : pending.rest;
         store.setProactiveState(agentId, {
           nextDueAt: nextDueFor(agentId, settings, retryAt, globalSettings),
           staged,
@@ -4021,6 +4113,7 @@ export function apply(ctx) {
       diagnostics({ event: "stance.echo.failed", agentId, error: describeError(error) });
     }
     const systemPrompt = buildSystemPrompt({
+      ruleProfile: agentId === compactReplyPilotId ? "compact-v1" : "legacy",
       partnerId: agentId,
       partnerName: partner?.name ?? agentId,
       // 聊天这一头开名字兜底：分享版里“没写过人设”的伙伴很常见，
@@ -4052,6 +4145,8 @@ export function apply(ctx) {
       teaseText: teaseTextFor(agentId, knowing),
       userName: USER_NAME,
     });
+    // 只记体积和档位，不记私聊原文；字符数不是实际 token 用量。
+    diagnostics({ event: "reply.prompt.profile", agentId, profile: agentId === compactReplyPilotId ? "compact-v1" : "legacy", systemChars: systemPrompt.length });
     // 表情包进上下文不能只剩"[表情]"两个字：从本地翻出标签，把"她发的是哪张"说成人话。
     // 只查本地（图库 + 快照），不靠看图，也不依赖表情包数据源当场在线。
     const stickerLabels = stickerLabelMap({
@@ -5541,6 +5636,80 @@ export function apply(ctx) {
     return { ok: true, file, running: true };
   }
 
+  // 四组真实旧新配对独立于体感台；本地专用，发布时连路由一并剥离。
+  const replyRuleProbeRuns = new Map();
+  async function startReplyRuleProbe(input = {}) {
+    const runId = String(input.runId ?? "").trim();
+    if (!/^[a-zA-Z0-9_-]{8,80}$/.test(runId)) throw new Error("要带唯一 runId");
+    const existing = replyRuleProbeRuns.get(runId);
+    if (existing) return existing;
+    if (replyRuleProbeRuns.size) throw new Error("本次装载已启动过配对测试，不自动开第二批");
+    const agentId = String(input.agentId ?? "").trim();
+    if (agentId !== compactReplyPilotId || !agentId) throw new Error("只能测试当前本地试点伙伴");
+    const file = path.join(ctx.dataDir, "v2", `reply-rule-pairs-${runId}.json`);
+    if (fs.existsSync(file)) return { ok: true, runId, file, status: JSON.parse(fs.readFileSync(file, "utf8")).status };
+    const state = { ok: true, runId, file, status: "preparing" };
+    replyRuleProbeRuns.set(runId, state); // 首个 await 前占位，防并发重复提交超出授权预算。
+    try {
+    await loadUserName();
+    const [partners, persona, catalog] = await Promise.all([listPartners(), getPersona(agentId), ctx.models.list()]);
+    const choice = resolveModelChoice(catalog, {
+      partnerRef: store.getPartnerSettings(agentId).model,
+      globalRef: store.getGlobalSettings().model,
+      agentRef: await agentDefaultModel(agentId),
+    });
+    if (choice?.provider !== "openai-codex" || choice?.model !== "gpt-6-luna") throw new Error("当前模型与本轮授权的 GPT 模型不一致，未发请求");
+    const partner = partners.find((row) => row.id === agentId);
+    if (!partner) throw new Error("试点伙伴不在当前清单里");
+    const knowing = store.getKnowing(agentId);
+    const relation = effectiveRelationship(knowing);
+    const messages = store.getThread(agentId).messages;
+    const globalSettings = store.getGlobalSettings();
+    const now = new Date();
+    const baseInput = {
+      partnerId: agentId, partnerName: partner.name, userName: USER_NAME,
+      personaText: renderPersona(persona, { partnerName: partner.name, userName: USER_NAME, nameFallback: true }),
+      memoryText: buildMemoryBlock(store.readMemory(agentId)),
+      knowingText: buildKnowingText({ disclosure: disclosureRatio(relation), personality: knowing.personality, hobbies: knowing.hobbies, recognition: knowing.recognition, palette: knowing.palette, userName: USER_NAME }),
+      adaptationText: adaptationTextFor(agentId, knowing, now),
+      timeText: timeBlock({ now, messages, userName: USER_NAME, sleep: store.getPartnerSettings(agentId).sleep }),
+      replyText: replyChoiceBlock({ userName: USER_NAME }),
+      teaseText: buildTeaseText({ stage: getStage(relation) }),
+      note: relationshipNote(relation, knowing.relationSeed), badge: store.getPartnerSettings(agentId).badge,
+      userRhythmText: globalSettings.rhythmEnabled ? userRhythmText(messages, { now, since: globalSettings.rhythmResetAt, includeStyle: globalSettings.rhythmStyleEnabled }) : "",
+      workfeedText: workfeedOn() ? buildWorkfeedText(store.readWorkfeed(), agentId, { lifeDay: dayKey(now), userName: USER_NAME }) : "",
+    };
+    const fixture = JSON.parse(fs.readFileSync(new URL("./tests/reply-rule-cases.json", import.meta.url), "utf8"));
+    const ids = ["ownership", "search-result", "uncertain-source", "friendly-tease"];
+    const cases = ids.map((id) => fixture.cases.find((row) => row.id === id));
+    if (cases.some((row) => !row)) throw new Error("四个已授权场景不完整");
+    const { runReplyRulePairs } = await import("./lib/reply-rule-probe.js");
+    void runReplyRulePairs(ctx, {
+      runId, modelRef: { provider: choice.provider, model: choice.model }, baseInput, cases,
+      onUpdate(result) {
+        state.status = result.status;
+        state.attempts = result.attempts;
+        fs.writeFileSync(file, JSON.stringify({ ...result, appVersion: version, agentId, contextNote: "固定当前人格/记忆/关系/时间快照；场景原话与搜索材料为匿名节选或构造。无真实搜索、表情选择、语音及聊天落盘。" }, null, 2), "utf8");
+      },
+    }).catch((error) => {
+      state.status = "failed";
+      state.ok = false;
+      state.error = describeError(error);
+      try {
+        const saved = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
+        fs.writeFileSync(file, JSON.stringify({ ...saved, ok: false, status: "failed", attempts: state.attempts ?? saved.attempts ?? 0, error: state.error }, null, 2), "utf8");
+      } catch { /* 写盘故障仍由 GET 的状态及诊断如实暴露，不重试生成 */ }
+      diagnostics({ event: "probe.reply-rules.failed", runId, error: state.error });
+    });
+    return state;
+    } catch (error) {
+      state.ok = false;
+      state.status = "failed";
+      state.error = describeError(error);
+      throw error;
+    }
+  }
+
   async function tasteProbeOnce(input = {}) {
     const agentId = String(input?.agentId ?? "").trim();
     if (!agentId) throw new Error("要带 agentId");
@@ -5656,6 +5825,7 @@ export function apply(ctx) {
         userName: USER_NAME,
       });
       const note = relationshipNote(merged, seed);
+      // 体感台不接 ruleProfile，这里恒 legacy，不能给 compact-v1 背书。
       const systemPrompt = buildSystemPrompt({
         partnerId: agentId,
         partnerName: partner.name ?? agentId,
@@ -7573,6 +7743,17 @@ export function apply(ctx) {
         } catch (error) {
           return c.json({ ok: false, note: "还没有探针结果", error: describeError(error) }, 404);
         }
+      });
+
+      // 最多八次、严格无重试的配对入口；重复 runId 只返回原测试，不另发模型请求。
+      if (DEV_TOOLS) app.post("/probe/reply-rules", async (c) => {
+        try { return c.json(await startReplyRuleProbe(await c.req.json())); }
+        catch (error) { return c.json({ ok: false, error: describeError(error) }, 400); }
+      });
+      if (DEV_TOOLS) app.get("/probe/reply-rules/:runId", (c) => {
+        const state = replyRuleProbeRuns.get(String(c.req.param("runId")));
+        if (!state) return c.json({ ok: false, note: "没有这次配对测试" }, 404);
+        return c.json(state);
       });
 
       // 内测用的体感测试台：活儿在 tasteProbeOnce 里（见上）。发布前连同 /probe 一起剥掉。

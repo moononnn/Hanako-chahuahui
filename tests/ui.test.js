@@ -930,12 +930,31 @@ test("起跑线：自动量那边的痕迹，也能自己定从哪儿算，只�
   assert.match(app, /seedStale\(knowing\.relationSeed, seedLastTry\)/, "该重量的就重量一份（量不出东西也有节流）");
   assert.doesNotMatch(app, /session:list/, "量会话那条路 v2 应用走不通，别写");
   assert.match(app, /note: relationshipNote\(effectiveRelationship\(knowing\), knowing\.relationSeed\)/, "回复那一句也要带上起跑线");
-  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, firstOfDay, askBudgetSpent: askSpent \}\)/, "主动消息只带与当前消息类型相符的兴趣发现，同时带上本人人格，并带上电脑那边的近况与「今天第一句」的标志");
+  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, askBudgetSpent: askSpent, reason: sendReason, introducedText \}\)/, "主动消息只带与当前消息类型相符的兴趣发现，同时带上本人人格、电脑那边的近况、「纯招呼」标志、关系式由头与已经介绍过什么");
+  assert.match(app, /isFirstProactiveOfLifeDay\(state\.lastSentAt, now\)/, "首条联系按四点生活日计算");
+  assert.match(app, /const morningFirst = firstOfLifeDay && isMorningPart\(now\)/, "晨间开口只由生活日首条且实际时段决定");
+  assert.ok(app.includes("&& !followup?.read && !wakeEcho && !greetingOnly"), "只有纯招呼才跳过兴趣素材");
+  assert.match(app, /const greetingOnly = morningFirst\s+&& !todoHere\s+&& !wakeEcho\s+&& !followup\s+&& !farewellSend\s+&& !seed\s+&& !discovery\s+&& !gate\.exception/u, "有待办、回声、等回音或兴趣素材时不走纯招呼抽签");
+  assert.ok(app.includes('if (!exception && kind === "proactive" && !String(todoNudge ?? "").trim() && isNighttimeSleepQuestion(text, now))'), "只拦普通闲聊主动消息，不丢到点提醒或晚安/夜间例外");
   // 锚点门（2026-10-06）：内容型开口先看她那边有没有真凭据，免得又出一条她插不进嘴的自说自话
   assert.match(app, /const anchor = proactiveAnchor\(\{/, "内容型开口要过锚点门");
+  // 关系式由头（2026-10-12）：多一条不用兴趣也能开口的路，但频率、护栏、老规矩一样不动
+  assert.match(app, /const reasonEligible = !todoHere\s+&& !farewellSend\s+&& !wakeEcho\s+&& !followup\s+&& !gate\.exception/u, "待办、回声、未回复跟进、晚安、夜间例外优先，关系式由头一个都不抢");
+  assert.match(app, /const reasonPick = reasonEligible\s+\? pickReason\(\{[\s\S]{0,320}?interestAvailable: Boolean\(anchor\.ok && \(seed \|\| discovery\)\)[\s\S]{0,160}?hasContext: Boolean\(sceneEcho\) \|\| workActivity\.active === true/u, "兴趣那一份仍过锚点门；共同经历和吐槽只认真凭据");
+  assert.match(app, /const reasonForSend = greetingOnly \? null : reason/, "纯招呼占住这一轮时不叠关系式由头");
+  assert.match(app, /: reasonForSend\s+\? "word"\s+: decideForm\(/u, "挑到关系式由头就走文字出口，不再退回去要话题");
+  assert.match(app, /&& !\(reasonAllowed && reason && reason\.kind !== "interest"\);/, "非兴趣那几种由头不带兴趣素材，也不消耗种子和发现");
+  assert.match(app, /const reasonAllowed = kind === "proactive"\s+&& !exception\s+&& !String\(todoNudge \?\? ""\)\.trim\(\)\s+&& !followup\s+&& !wakeEcho\s+&& !greetingOnly/u, "待办、跟进、回声、夜间例外这一轮不启用由头，低信号放行也不会跟着误开");
+  assert.match(app, /const introducedText = introducedTextFrom\(threadRows\)/, "已经介绍过什么只认实际送出的正文");
+  assert.match(app, /const reasonResolved = enrichReasonContext\(reasonAllowed \? reason : null, \{ sceneEcho, workfeedText, sentTexts: recentAsks \}\)/, "由头凭据在出站那一步才拼全，且只在真正用得上的那一轮拼");
+  assert.match(app, /isLowSignalProactive\(text, \{ reason: sendReason \}\)/, "低信号那一关由 compose 按由头种类放行");
+  assert.match(app, /const proactiveContext = followupContext/u, "由头种类记在已有的 proactiveContext 里，不另立 schema");
+  assert.match(app, /reason: "reason-context-empty", preserveIntent: true/, "由头缺凭据不算时机不合适，暂存意图得留着");
+  assert.match(app, /const keepIntent = Boolean\(sent\.gateBlocked \|\| sent\.preserveIntent\) && Boolean\(pending\.intent\)/u, "通用失败分支不吞掉「想找你」");
+  assert.doesNotMatch(app, /nextDueFor\([^)]*reason/u, "排点那一层不因由头改频率");
   assert.match(app, /const seed = gate\.exception \|\| !anchor\.ok \? null : candidateSeed/, "没过锚点门的种子不发，留着下次");
   assert.match(app, /dropUnansweredProactive\(conversationMessages\(store\.getThread\(agentId\)\.messages\)\)/, "画像素材里剔掉她没接住的主动独白");
-  assert.match(app, /isSeedKindVoiceMismatch\(text, shareableSeed\.kind\)/, "求解与好奇写成结论就压着不发");
+  assert.doesNotMatch(app, /isSeedKindVoiceMismatch/, "词法那一关已经交给语义核查，不再拦首次介绍");
   // 到点待办是「这次为什么开口」，不是可以捎带的背景：混进情境块就会被写成尾巴
   assert.doesNotMatch(app, /if \(todoNudge\) contextText = /, "待办由头不再拼进共享情境块");
   assert.match(app, /const sendKind = farewellSend && !todoHere/, "到点待办优先于睡前收尾，别被 farewell 占掉");

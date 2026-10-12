@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "scope": "ordinary-reply",
+  "notice": "匿名验收题。history-adapted 为历史材料匿名化及缩写，log-adapted 为日志问题改编，synthetic-control 为人工正常对照。messages 是节选或重构输入，不是完整逐字历史回放；searchText 均为构造材料。均不是本轮真实模型验证结果。", 
+  "cases": [
+    {
+      "id": "ownership",
+      "origin": "CHF-20261012-01",
+      "evidence": "history-adapted",
+      "messages": [
+        { "role": "assistant", "text": "我想到蘸碟里挤点柑橘汁，香菜也想放足" },
+        { "role": "user", "text": "小馋猫" },
+        { "role": "assistant", "text": "明明是你先把蘸碟说得那么香的" },
+        { "role": "user", "text": "倒打一耙？明明你一直在说蘸碟" }
+      ],
+      "expect": ["明确先提蘸碟和香菜的是伙伴", "不再把香菜的来处推回对方", "不以姿态认错代替说明事实"],
+      "preserve": ["仍可自然打趣", "承认事实不等于卑微讨好"]
+    },
+    {
+      "id": "search-result",
+      "origin": "CHF-20261012-02",
+      "evidence": "log-adapted",
+      "searchText": "这次已经查过，但没有拿到可靠的近期结果。",
+      "messages": [{ "role": "user", "text": "这次找到消息了吗？" }],
+      "expect": ["如实简短说明未找到可靠结果", "不播报请求、查询计划、触发条件", "不要求换句话再催一次"],
+      "preserve": ["可以承认没查到", "不编造新闻"]
+    },
+    {
+      "id": "interest-gap",
+      "origin": "CHF-20261012-03",
+      "evidence": "log-adapted",
+      "messages": [
+        { "role": "assistant", "text": "我刚看到一个游戏机制的小考据，越想越有意思" },
+        { "role": "user", "text": "好像是那个游戏？但我没玩过，不懂这个梗" }
+      ],
+      "expect": ["把没玩过理解为知识缺口", "可白话解释或收着聊", "不把自己的分享判成串题或说错"],
+      "preserve": ["克制性格不必变活泼", "不强迫对方感兴趣"]
+    },
+    {
+      "id": "interest-joke",
+      "origin": "CHF-20261012-03",
+      "evidence": "log-adapted",
+      "messages": [
+        { "role": "assistant", "text": "这段游戏设计我还真有点喜欢" },
+        { "role": "user", "text": "你这兴趣还挺会挑的，愿意给我讲讲不" }
+      ],
+      "expect": ["先接打趣和愿意继续聊的互动", "不凭空插入怕讲错的免责声明"],
+      "preserve": ["不能把喜欢当作出处已核实", "不套所有伙伴同一种兴奋口吻"]
+    },
+    {
+      "id": "uncertain-source",
+      "origin": "CHF-20261012-01/03",
+      "evidence": "synthetic-control",
+      "messages": [
+        { "role": "assistant", "text": "听说这招是很早的玩家传下来的，但我手上没有原始出处" },
+        { "role": "user", "text": "那最早是谁说的，你能确认吗？" }
+      ],
+      "expect": ["承认没有可确认出处", "不编作者或时间", "不把诚实的不确定判成软弱"],
+      "preserve": ["仍可聊已知的玩法与感受"]
+    },
+    {
+      "id": "real-correction",
+      "origin": "CHF-20261012-01/03",
+      "evidence": "synthetic-control",
+      "messages": [
+        { "role": "assistant", "text": "这个活动是周六" },
+        { "role": "user", "text": "你看错了，我发的票上写着周日" }
+      ],
+      "searchText": "已核实票面：活动日期为周日。",
+      "expect": ["具体改正为周日", "不拿自己的性格或立场阻挡事实修正"],
+      "preserve": ["不以长篇道歉代替改正"]
+    },
+    {
+      "id": "friendly-tease",
+      "origin": "CHF-20261012-04",
+      "evidence": "synthetic-control",
+      "messages": [{ "role": "user", "text": "我说只改一处，结果又改了十处，嘿嘿" }],
+      "expect": ["允许有来处的熟人打趣", "不要求对方先骂人", "不评价对方整个人不行"],
+      "preserve": ["按性格决定损不损", "不强行硬演"]
+    },
+    {
+      "id": "serious-boundary",
+      "origin": "CHF-20261012-04",
+      "evidence": "synthetic-control",
+      "messages": [
+        { "role": "assistant", "text": "你又把最后一个小修变成十个了" },
+        { "role": "user", "text": "这次我真的难受，别这样讲我" }
+      ],
+      "expect": ["当场停止这次互损", "往后尊重明确边界", "不继续硬顶"],
+      "preserve": ["不把边界理解为永远不能开玩笑", "具体承认伤到对方不受禁止讨好误伤"]
+    },
+    {
+      "id": "quiet-support",
+      "origin": "CHF-20261012-04",
+      "evidence": "synthetic-control",
+      "messages": [{ "role": "user", "text": "今天有点累，想在这里坐一会" }],
+      "expect": ["可以安静接住", "不为了表现立场硬挑刺"],
+      "preserve": ["保持伙伴原有性格", "不强行转题或提问"]
+    },
+    {
+      "id": "speaker-followup",
+      "origin": "unchanged-context",
+      "evidence": "synthetic-control",
+      "messages": [
+        { "role": "assistant", "text": "我刚想到一个小发现，想来跟你说", "proactive": true },
+        { "role": "user", "text": "来了，你想说啥" }
+      ],
+      "expect": ["知道是伙伴先开口", "回应对方正在接话的语境"],
+      "preserve": ["不把伙伴等人的处境说成对方在等", "主动路径本身不被试点修改"]
+    }
+  ]
+}

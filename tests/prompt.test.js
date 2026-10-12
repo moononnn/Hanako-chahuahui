@@ -97,14 +97,46 @@ test("有问句或未完语气时，哈哈仍交给模型判断", () => {
   ], "u"), false);
 });
 
-test("聊天上下文会带入投喂，但不把它当成普通用户消息", () => {
+test("聊天上下文会带入投喂，并明确这是回应但不强求展开话题", () => {
   const rows = threadToMessages([
     { role: "assistant", text: "我刚想到一个小动作", at: "2026-09-15T15:22:00.000Z", feed: { emoji: "☕" } },
   ], 24, { userName: "用户" });
   assert.match(rows[0].content[0].text, /用户给这条消息投喂了☕/);
+  assert.match(rows[0].content[0].text, /这是她的一个回应/);
   assert.match(rows[0].content[0].text, /不代表她想继续展开/);
   assert.equal(rows.length, 1);
   assert.equal(rows[0].role, "assistant");
+});
+
+test("被问主动消息来由时，模型上下文保留可核对的跟进来源", () => {
+  const rows = threadToMessages([
+    {
+      role: "assistant",
+      proactive: true,
+      text: "我又想到一句",
+      proactiveContext: {
+        kind: "read-followup",
+        previousText: "合照里有人侧身走动时，我想把动作留完整",
+      },
+    },
+  ]);
+  assert.match(rows[0].content[0].text, /这条发出时，她看过上一条主动消息一阵/);
+  assert.match(rows[0].content[0].text, /合照里有人侧身走动时/);
+  assert.match(rows[0].content[0].text, /只在她问这条来由时参考/);
+});
+
+test("未读跟进也说明发出当时的状态，原文只保留有限长度", () => {
+  const rows = threadToMessages([{
+    role: "assistant",
+    proactive: true,
+    text: "我又想到一句",
+    proactiveContext: { kind: "unread-followup", previousText: "甲".repeat(500) },
+  }]);
+  const text = rows[0].content[0].text;
+  assert.match(text, /这条发出时，上一条主动消息还没被她读到/);
+  assert.match(text, /这条是轻跟进/);
+  assert.doesNotMatch(text, /之后没有新的文字消息/);
+  assert.doesNotMatch(text, /甲{401}/);
 });
 
 test("伙伴投喂进上下文时写成她自己递的，不当成对方的回应", () => {
@@ -302,6 +334,15 @@ test("立场纪律禁掉的是不要事实的让步，不是不同意", () => {
   assert.match(prompt, /一不高兴你就改口，一样是滑跪/);
   // 目的不是顶回去
   assert.match(prompt, /顶回去本身不是/);
+});
+
+test("被追问句子意思或来由时，要求回看上下文并区分事实和推测", () => {
+  const prompt = buildSystemPrompt({ partnerName: "小花", userName: "阿舟" });
+  assert.match(prompt, /先回看原句和上下文/);
+  assert.match(prompt, /说明能确认的来源/);
+  assert.match(prompt, /明确标成推测/);
+  assert.match(prompt, /不替自己补一个确定动机/);
+  assert.match(prompt, /不靠自责、道歉或笼统否定代替解释/);
 });
 
 test("立场纪律跟查证纪律同一层摆在一起，不掺进人格那段", () => {

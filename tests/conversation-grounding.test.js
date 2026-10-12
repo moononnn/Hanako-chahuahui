@@ -50,7 +50,7 @@ test('已确认的工作对话保留时间和会话来路，开工确认不变�
   assert.match(text, /阿舟.*开始哈/);
   assert.match(text, /工作对话/);
   assert.match(text, /不能.*因果/);
-  const spec = proactiveSpec({ partnerName: '伙伴', userName: '阿舟', firstOfDay: true, workfeedText: text, wakeEcho: { sourceText: '刚才困着' } });
+  const spec = proactiveSpec({ partnerName: '伙伴', userName: '阿舟', greetingOnly: true, workfeedText: text, wakeEcho: { sourceText: '刚才困着' } });
   assert.doesNotMatch(spec.userText, /这些是你自己刚经历的事|被她拉着做什么，都是你自己身上的事/);
   assert.match(spec.systemPrompt, /叫醒/);
 });

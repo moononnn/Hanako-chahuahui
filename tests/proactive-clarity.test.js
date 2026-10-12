@@ -24,6 +24,20 @@ test('准备话题与成文都允许轻分享，并要求不靠猜前提理解',
   assert.doesNotMatch(p.systemPrompt, /只能回一声.*别发/);
 });
 
+test('首次介绍允许无问号，不被后台求解种子强迫做题；核查保留原求解边界', async () => {
+  const result = await reviewProactiveClarity({
+    text: '看到一只手工布兔，耳朵一长一短，歪歪的怪乖',
+    seed: { kind: 'curio', hook: '手工布兔', angle: '针脚的作者意图' },
+    ask: async (system, user) => {
+      assert.match(system, /不能仅凭没有问号、没有未定词就拒绝/);
+      assert.match(system, /已经给出定论又硬挂问句/);
+      assert.equal(JSON.parse(user).sourceSeed.kind, 'curio');
+      return '{"decision":"send"}';
+    },
+  });
+  assert.equal(result.ok, true, '这里只验证核查输入和协议，mock不证明真实模型会放行');
+});
+
 test('失败原文进入语义核查，源话题不合适时返回种子拒绝，不发改写消息', async () => {
   let calls = 0;
   const result = await reviewProactiveClarity({ text: BAD, seed, sharedContext: '对方说自己随便摆东西', ask: async (system, user, budget) => {
@@ -62,7 +76,7 @@ test('核查异常、空正文、乱回包不发送，也不把未知当作坏�
 test('只有普通主动兴趣内容核查，提醒、例外、已读关系反应等不被挡', () => {
   assert.equal(needsClarityReview({ seed }), true);
   assert.equal(needsClarityReview({ discovery: {} }), true);
-  for (const extra of [{ todoNudge: '喝水' }, { exception: true }, { kind: 'farewell' }, { kind: 'stirred' }, { followup: { read: true } }, { firstOfDay: true }, { wakeEcho: { sourceId: 'wake' } }]) {
+  for (const extra of [{ todoNudge: '喝水' }, { exception: true }, { kind: 'farewell' }, { kind: 'stirred' }, { followup: { read: true } }, { greetingOnly: true }, { wakeEcho: { sourceId: 'wake' } }]) {
     assert.equal(needsClarityReview({ seed, ...extra }), false);
   }
   assert.equal(needsClarityReview({}), false);
@@ -140,7 +154,7 @@ test('真实发送路线在分气泡和朗读之前核查，失败立即停止',
   assert.match(flow, /await reviewProactiveClarity/);
   assert.match(flow, /if \(!clarity.ok\)/);
   assert.match(flow, /persistClarityRejection\(store, agentId, clarity/);
-  assert.match(flow, /!wakeEcho && !firstOfDay/);
+  assert.match(flow, /!wakeEcho && !greetingOnly/);
   assert.match(flow, /shareableSeed = interestContent/);
   assert.match(flow, /shareableDiscovery = interestContent/);
 });
