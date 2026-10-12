@@ -6,6 +6,11 @@ PENDING_CHANGES.md
 PUBLISHING.md
 PROJECT_LOG.md
 
+# 本机严格付费验证（提示词总纲与配对探针）：只有本机留
+PROMPT_OPTIMIZATION.md
+lib/reply-rule-probe.js
+tests/reply-rule-probe.test.js
+
 # 运行产物
 data/
 data.json

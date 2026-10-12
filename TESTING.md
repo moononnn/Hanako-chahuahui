@@ -1,5 +1,54 @@
 # TESTING · 茶话会
 
+## v0.7.532–533 · 主动由头与新对象轻介绍（2026-10-12傍晚）
+
+- 范围：主动理由选择、关系双轨/性格权重、独立联系表达、实际已介绍记录、兴趣既有clarity入口、发送接线与直接相关回归。普通回复、频率/限额/静默、关系记账算法和模型预算未改。
+- 修改前新增六条表达契约：2通过/4失败，构造输入定位独立理由、库存污染、首次介绍要求和轻联系拦截缺口，不是历史真实模型复现。
+- 主会话合并命令：`node --test --test-reporter=tap tests/proactive-reasons.test.js tests/proactive-expression.test.js tests/proactive.test.js tests/compose.test.js tests/proactive-clarity.test.js tests/topic-seeds.test.js tests/conversation-grounding.test.js tests/workfeed.test.js tests/relationship.test.js tests/awaiting.test.js tests/ui.test.js tests/reply-supersede-routes.test.js`，最后一轮 **365/365**，0失败/取消/跳过。
+- **保留首轮失败**：首轮同范围364通过/1失败，终端只保留最后12行，失败名称/堆栈被裁掉。之后用 `Select-String -Pattern 'not ok|error:|expected:|actual:|# tests|# pass|# fail' -Context 0,7` 保留失败段再运行，同范围365/365。未定位第一次失败的用例及原因，标测试波动待查；不声称修复、也不拿后一次通过反推首轮没有问题。以后测试不只裁末尾输出。
+- 核心范围额外命令：`node --test --test-reporter=tap tests/proactive-reasons.test.js tests/proactive-expression.test.js tests/compose.test.js tests/proactive-clarity.test.js tests/ui.test.js`，**219/219**，0失败/取消/跳过。没有扩大到所有test文件。
+- 语法：index.js、lib/compose.js、lib/proactive-reasons.js、lib/proactive-clarity.js及四个修改测试文件共8个JS通过node --check。与目录基线核对：lib/proactive.js / relationship.js哈希一致，nextDueFor / autonomousGateNow源码逐字相同。
+- 新reason 24条：20个纯逻辑/来源/预算题，4个真apply路由编排题。宿主模型和clarity回包为桩，临时真实store重开验证：contact不注入/消耗种子；未回应仍走unread-followup；interest成功才记usedAt；shared真实原文进请求且不消耗种子。整轮完成后恢复Math.random，不把提前看见append当巡检结束。
+- 新表达9条：独立搭话/想念不被兴趣约束污染；shared/tease要来源；无效reason不启用；首次/实际已介绍；纯联系放行仅限指定出口；特殊理由优先；空followup；保留待答问题优先级；关系由头也要解释新对象。
+- 来源竞态：候选有workfeed、出站变空时会返回preserveIntent，失败分支保留暂存。只有enrichReasonContext单测与源码接线断言；真路由竞态注入未成功（harness与apply各自store），明确未有行为级证明。
+- 权重为初始实现；不把单测当最优比例。实际已介绍记录有12条/1800字符证据窗口，缺记录保守介绍，不宣称从未聊过。
+- 无全量、真实模型/API或网络测试；没有对照真实MiniMax聊天，没有用mock证明自然度或整个应用全绿。运行态另见PROJECT_LOG。
+
+## v0.7.531 · 内测开关护栏与部分真实配对证据（2026-10-12下午）
+
+- 实际模型测试发生在v0.7.530：同一openai-codex/gpt-6-luna、同一当前资料快照、同一场景消息，只切legacy/compact-v1。授权最多8次；**实际3次，2成功/1失败**，只完成ownership配对，search-result新档第三次渠道错误即停，后5次未发。不重试、不换模型、不提高预算。
+- ownership两版消息hash相同，系统字符16213→15433，输入token12599→11979（少620，约4.9%），输出40→38、cacheRead均0。成功两次合计输入24578/输出78；失败usage=null，费用不能按0补齐或可靠换算。原始结果与逐请求账本一致。
+- 两版都把主动性收回伙伴，没有继续推给对方；严格“明确蘸碟/香菜是谁先提”只部分符合，旧版本次也没有重现历史错误。新句醋蒜有测试前记忆和更早用户原话依据。独立只读复核建议保留单伙伴试点、不推广；不称语义等价。
+- /probe/reply-rules是新本地独立测试入口，不与仍恒legacy的taste混用。固定4题、最多8次严格stream；无utility/重试、empty/error/未done/坏协议/模型报告超预算即停；首await前占位、重复runId与已有磁盘结果不重发，同一装载只1批。真实结果只写独立测试文件，两条成功正文在真实线程内命中数均0。
+- 真实返回usage.output为数值，补齐超预算检测对此SDK形状的兼容，仅模拟验证，未追加真实调用。另修复compactReplyPilotId同时受DEV_TOOLS控制：公开源码即使只关总开关、未剥哨兵，也走legacy；私有DEV=true仍只有小花普通回复试点。此护栏修复与manifest/PENDING_CHANGES绑定升至0.7.531。
+- 相关四文件命令：`node --test --test-reporter=tap tests/reply-rule-probe.test.js tests/reply-rules-compact.test.js tests/model.test.js tests/prompt.test.js`，**102/102通过**，0失败/取消/跳过。真实请求前版本为100/100；事后新增SDK形状及DEV=false模拟护栏到102。未跑全量，未调用真实MiniMax；普通回复文本规则未再次调整。
+- 私有测试支持及报告按PUBLISHING本地排除项处理，不能将其带进公开仓库或zip。没有上传/发布；未用补测填满剩余请求。
+- 当前运行态以PROJECT_LOG为准；本地单测与部分真实请求不代表所有伙伴、全部提示词或四场景均已验收。
+
+
+## v0.7.530 · 有来处的普通回复规则精简试点（2026-10-12）
+
+- 范围：四块固定纪律（查证、立场、喜好、互损）的 opt-in 精简档；只在本地小花普通回复接入。CHAT 风格、解释纪律、回应出口、关系档位、所有人格/记忆/动态块和主动路径不变。
+- 修改前：v0.7.529 相关七文件目录备份，逐文件 SHA-256 与源一致。原 prompt / conversation-grounding / clock 三文件基线通过；新增试点断言在旧版确认会失败（规则减少及档位尚未接入），不是宣称旧版聊天语义重现。
+- 定向命令：`node --test --test-reporter=tap tests/reply-rules-compact.test.js tests/prompt.test.js tests/conversation-grounding.test.js tests/clock.test.js tests/model.test.js tests/reply-supersede-routes.test.js`，**129/129** 通过，0 失败/取消/跳过。没有跑全量。
+- 覆盖：证据确实缺失与讨好式认错分开；喜好/查证/互损的关键边界在场；原动态资料不截断；默认与未知档位仍旧版；本地试点/非试点各走真实 apply + 假宿主路由，不串伙伴、不增加生成请求；发布哨兵剥离后试点目标为空；十个匿名验收题结构有效。mock 回包不是语义验收。
+- MiniMax：本次仅运行已有 model.test.js 的兼容模拟回归；未调用真实 MiniMax 或任何真实 provider，不能宣称新版提示词已通过 MiniMax 真实聊天测试。未改输出预算、协议参数、后台辅助模型或重试策略。
+- 旧版保真：内存加载修改前备份模块，bare / 带回应与关系档位 / 带动态资料三组输入，当前 legacy 拼装结果与旧模块逐字一致。
+- 字符口径：`partnerName=小花`、`userName=阿舟`、`replyText=replyChoiceBlock({userName:阿舟})`、`teaseText=buildTeaseText({stage:1})`，其余动态资料为空，分别不传档位 / 传 `ruleProfile=compact-v1`。固定提示词（含回复选择、关系说明）从 **4993 → 4213 字符**，少 780、约 **15.6%**；只含规则骨架时 4238 → 3458。这是固定提示词字符，不是全输入 token 比例，也不是账单费用下降。
+- 真正评判题：`tests/reply-rule-cases.json` 十题，区分历史匿名节选、日志改编、人工正常对照。原始私有证据留本机、不进入公开包。题目尚未用于真实模型调用，十题不能写为“十题语义全绿”。
+- 现有 `/probe/taste` 与 `chahuahui_taste_probe` 仍只拼 legacy；它们的结果不得给 compact-v1 背书。小花是线上真实常用伙伴，未实机验收前不得推广；固定模型与同一输入的配对验证和日常试聊是两种证据等级。
+- 运行状态：源码已保存，真实模型对照尚未授权/执行。是否重新加载及是否确认运行档位，见 PROJECT_LOG 当前条目；没有凭源文件推断已经生效。
+
+
+## v0.7.529 · 首条主动联系生活日与深夜睡眠追问护栏（2026-10-12）
+
+- 范围：只改主动联系首条判定、晨间纯招呼分流、深夜睡眠追问检查及其相关测试。
+- 定向命令：`node --test tests/clock.test.js tests/compose.test.js tests/proactive.test.js tests/proactive-clarity.test.js tests/conversation-grounding.test.js tests/ui.test.js`，**274/274** 通过。
+- 全量：递归枚举 `tests/` 下全部 **79 个 `*.test.js`** 一次运行，**1346/1346** 通过，0 失败/取消/跳过。PowerShell 跑法：先用 `Get-ChildItem -LiteralPath .\tests -Recurse -File -Filter '*.test.js'` 得到完整文件列表，再与 `--test --test-reporter=tap` 一起传给 `node`。
+- 相关 JS 与测试文件 `node --check` 全通过。App 静态校验：`validate-app.mjs --dir <茶话会目录> --json` 为 `ok:true`、0 errors、1 条既有 `DYNAMIC_DEPENDENCIES_NOT_PROVEN` warning。
+- 覆盖：自然日配额不变，首条联系用 04:00 生活日；只有确实没有待办、回声、等回音或兴趣素材时才抽晨间纯招呼概率；首条有兴趣素材时仍正常注入并核查；深夜 23:00–04:59 普通主动消息拦截睡眠质量追问，到点待办不被整条丢弃；换行、语气词、引号、表情及第一人称自述都有边界用例。
+- 未调用真实模型、未做实机验收或重载。全量单测与静态校验不能证明真实生成和运行态，仍需后续实际观察。
+
 ## v0.7.526 · 提示音等首条短消息显示后播放（2026-10-11）
 
 - 范围：只改聊天页提示音接线与对应 UI 契约测试，没有扩大到全量。
