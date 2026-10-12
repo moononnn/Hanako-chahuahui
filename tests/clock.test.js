@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { dateKey, dayPartOf, drowsyLine, spokenClock, spokenGap, timeBlock } from "../lib/clock.js";
+import { dateKey, dayPartOf, drowsyLine, isMorningPart, spokenClock, spokenGap, timeBlock } from "../lib/clock.js";
 import { napToday, sleepWindows } from "../lib/sleep.js";
 
 /** 一份固定的作息：01:20 睡，基准 6 小时，下午可能眯个午觉。 */
@@ -37,6 +37,15 @@ test("一天里的哪一段，按人说话的习惯划", () => {
     ["23:00", "深夜"],
   ];
   for (const [text, part] of cases) assert.equal(dayPartOf(at(text)), part, text);
+});
+
+test("晨间问候窗口不包含凌晨或深夜", () => {
+  assert.equal(isMorningPart(at("01:11")), false);
+  assert.equal(isMorningPart(at("04:59")), false);
+  assert.equal(isMorningPart(at("05:00")), true);
+  assert.equal(isMorningPart(at("11:59")), true);
+  assert.equal(isMorningPart(at("12:00")), false);
+  assert.equal(isMorningPart(at("23:30")), false);
 });
 
 test("钟点是人话：十二小时制加时段词", () => {

@@ -13,12 +13,14 @@ import {
   hasUnseenUserMessage,
   inWindow,
   dailyKey,
+  isFirstProactiveOfLifeDay,
   applyProactiveInterval,
   normalizeGateMax,
   noteSent,
   planFor,
   proactiveDelayFactor,
   proactiveSilenceContext,
+  proactiveContextFor,
   quietNow,
   rollIntervalMs,
   scheduleNext,
@@ -44,6 +46,19 @@ import {
 } from "../lib/proactive.js";
 
 const at = (h, m = 0) => new Date(2026, 8, 12, h, m);
+
+test("首次主动联系按四点生活日计算，日配额仍按自然日", () => {
+  const lastNight = new Date(2026, 9, 11, 22, 51);
+  const afterMidnight = new Date(2026, 9, 12, 1, 11);
+  const beforeLifeDayChange = new Date(2026, 9, 12, 3, 59);
+  const nextLifeDay = new Date(2026, 9, 12, 4, 0);
+  assert.notEqual(dailyKey(lastNight), dailyKey(afterMidnight), "自然日配额照旧在零点翻页");
+  assert.equal(isFirstProactiveOfLifeDay(lastNight.toISOString(), afterMidnight), false, "跨过零点仍是同一生活日");
+  assert.equal(isFirstProactiveOfLifeDay(lastNight.toISOString(), beforeLifeDayChange), false, "03:59 仍属于上一生活日");
+  assert.equal(isFirstProactiveOfLifeDay(lastNight.toISOString(), nextLifeDay), true, "四点后才进入新的生活日");
+  assert.equal(isFirstProactiveOfLifeDay(null, afterMidnight), true, "没有上次送达记录时属于首条");
+  assert.equal(isFirstProactiveOfLifeDay("bad-date", afterMidnight), true, "损坏的上次时间不会伪造同日记录");
+});
 
 test("锚点门：她完全没动静时，内容型开口先压住", () => {
   const now = at(16).getTime();
@@ -411,6 +426,75 @@ test("已读未回会被识别出来，供主动层切换成关系反应", () =>
   const context = proactiveSilenceContext(messages, { readThroughId: "a2" });
   assert.equal(context.count, 2);
   assert.equal(context.read, true);
+});
+
+test("只有普通主动跟进保存来由，排除晚安、待办和夜间例外", () => {
+  const followup = { read: false, previousText: "甲".repeat(500) };
+  const context = proactiveContextFor({ kind: "proactive", followup });
+  assert.equal(context.kind, "unread-followup");
+  assert.equal(context.previousText.length, 400);
+  assert.equal(proactiveContextFor({ kind: "proactive", followup: { read: true } }).kind, "read-followup");
+  assert.equal(proactiveContextFor({ kind: "farewell", followup }), null);
+  assert.equal(proactiveContextFor({ kind: "proactive", todoNudge: "十点吃药", followup }), null);
+  assert.equal(proactiveContextFor({ kind: "proactive", followup, exception: true }), null);
+  assert.equal(proactiveContextFor({ kind: "proactive" }), null);
+});
+
+test("最新主动消息上的新投喂算接住了，切断未回应链", () => {
+  const messages = [
+    { id: "a1", role: "assistant", text: "我来找你玩", proactive: true, at: "2026-10-11T10:00:00.000Z" },
+    {
+      id: "a2", role: "assistant", text: "我又想到一个", proactive: true,
+      at: "2026-10-11T11:00:00.000Z",
+      feed: { items: [{ emoji: "☕", count: 1, at: "2026-10-11T11:30:00.000Z" }] },
+    },
+  ];
+  assert.equal(proactiveSilenceContext(messages, {
+    readThroughId: "a2",
+    readThroughAt: "2026-10-11T11:30:00.000Z",
+  }), null);
+});
+
+test("投喂时间戳和最新主动消息相等时仍算接住了", () => {
+  const messages = [{
+    id: "a1", role: "assistant", text: "我来找你玩", proactive: true,
+    at: "2026-10-11T10:00:00.000Z",
+    feed: { items: [{ emoji: "☕", count: 1, at: "2026-10-11T10:00:00.000Z" }] },
+  }];
+  assert.equal(proactiveSilenceContext(messages), null);
+});
+
+test("旧版单表情投喂也能切断最新主动消息的未回应链", () => {
+  const messages = [{
+    id: "a1", role: "assistant", text: "我来找你玩", proactive: true,
+    at: "2026-10-11T10:00:00.000Z",
+    feed: { emoji: "☕", at: "2026-10-11T10:30:00.000Z" },
+  }];
+  assert.equal(proactiveSilenceContext(messages), null);
+});
+
+test("投喂旧的主动消息不替后来发出的主动消息解除未回应状态", () => {
+  const messages = [
+    {
+      id: "a1", role: "assistant", text: "我来找你玩", proactive: true,
+      at: "2026-10-11T10:00:00.000Z",
+      feed: { items: [{ emoji: "☕", count: 1, at: "2026-10-11T11:30:00.000Z" }] },
+    },
+    { id: "a2", role: "assistant", text: "我又想到一个", proactive: true, at: "2026-10-11T11:00:00.000Z" },
+  ];
+  const context = proactiveSilenceContext(messages, { readThroughId: "a1" });
+  assert.equal(context.count, 2);
+  assert.equal(context.read, false);
+});
+
+test("没有时间戳的旧投喂保守忽略，不误切未回应链", () => {
+  const messages = [{
+    id: "a1", role: "assistant", text: "我来找你玩", proactive: true,
+    at: "2026-10-11T10:00:00.000Z",
+    feed: { items: [{ emoji: "☕", count: 1 }] },
+  }];
+  const context = proactiveSilenceContext(messages);
+  assert.equal(context.count, 1);
 });
 
 test("已读带上「看了多久」：未读没有这个时长，时间读不出来也不编", () => {

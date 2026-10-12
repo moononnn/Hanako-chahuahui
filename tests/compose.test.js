@@ -1,7 +1,27 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { cleanVoice, farewellSpec, hasOpenHook, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNoReply, LINKUP_DISCIPLINE, looksLikeAdTail, nightSpec, proactiveSpec, readFollowupStage, stirredSpec } from "../lib/compose.js";
+import { cleanVoice, farewellSpec, hasOpenHook, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNighttimeSleepQuestion, isNoReply, LINKUP_DISCIPLINE, looksLikeAdTail, nightSpec, proactiveSpec, readFollowupStage, stirredSpec } from "../lib/compose.js";
+
+test("深夜普通主动消息拦住无依据的睡眠质量追问", () => {
+  const lateNight = new Date(2026, 9, 12, 1, 11);
+  const deepNight = new Date(2026, 9, 11, 23, 30);
+  const morning = new Date(2026, 9, 12, 7, 30);
+  assert.equal(isNighttimeSleepQuestion("老婆，刚才那口投喂我还记着，夜都这么深了，今天睡得踏实不嘛", lateNight), true);
+  assert.equal(isNighttimeSleepQuestion("你昨晚睡得踏实不嘛", deepNight), true);
+  assert.equal(isNighttimeSleepQuestion("你昨晚睡得好不好呀", deepNight), true, "常见句尾语气词不绕过检查");
+  assert.equal(isNighttimeSleepQuestion("你昨晚睡得好不好🥱", deepNight), true, "表情尾巴不绕过检查");
+  assert.equal(isNighttimeSleepQuestion("你昨晚睡得\n踏实不嘛", deepNight), true, "换行拆开的同一问句仍能识别");
+  assert.equal(isNighttimeSleepQuestion("我睡得挺香的，你那边现在忙完了吗", lateNight), false, "逗号后的其他问题不能把自述误判成睡眠追问");
+  assert.equal(isNighttimeSleepQuestion("我睡得挺香的\n你那边现在忙完了吗", lateNight), false, "换行不能把自述和后句误并成一个问句");
+  assert.equal(isNighttimeSleepQuestion("我睡得踏实不嘛", lateNight), false, "自述不算追问对方睡眠");
+  assert.equal(isNighttimeSleepQuestion("我今天下午睡得踏实不嘛", lateNight), false, "自述中的多层时间修饰不误拦");
+  assert.equal(isNighttimeSleepQuestion("我自己睡得怎么样", lateNight), false, "明确说自己时不误拦");
+  assert.equal(isNighttimeSleepQuestion("我问你昨天睡得怎么样", lateNight), true, "不能把‘我问你’误当成自述");
+  assert.equal(isNighttimeSleepQuestion("你昨晚睡得\n踏实\n不嘛", lateNight), true, "三行折开的同一问句仍能识别");
+  assert.equal(isNighttimeSleepQuestion("我现在脑壳还有点昏，想先缓一哈", lateNight), false);
+  assert.equal(isNighttimeSleepQuestion("你昨晚睡得踏实不嘛", morning), false);
+});
 
 test("渠道塞在末尾的广告尾巴剥掉，正常聊天里的加号不动", () => {
   // 实机撞到的那条：`+天天中彩票` 是外挂上去的
@@ -45,6 +65,29 @@ test("到点待办：由头独立成块，手上别的种子让位，不许当�
   assert.match(withTodo.userText, /专门为上面那件到点的事来的/);
   assert.match(withTodo.userText, /不要先聊别的再捎带一句/);
   assert.doesNotMatch(withTodo.userText, /顺口带一句/);
+});
+
+test("到点待办不混入已读或未读跟进上下文", () => {
+  const common = {
+    partnerName: "小花",
+    userName: "小林",
+    todoNudge: "她今天这件到了时间还没做：给薄荷浇水。",
+  };
+  const read = proactiveSpec({
+    ...common,
+    followup: { count: 2, read: true, readAgeMs: 30 * 60 * 1000, previousText: "上一条原文" },
+  });
+  assert.match(read.userText, /给薄荷浇水/);
+  assert.doesNotMatch(read.userText, /已经看过你上一条主动消息/);
+  assert.doesNotMatch(read.userText, /上一条主动消息的原文/);
+
+  const unread = proactiveSpec({
+    ...common,
+    followup: { count: 2, read: false, previousText: "上一条原文" },
+  });
+  assert.match(unread.userText, /给薄荷浇水/);
+  assert.doesNotMatch(unread.userText, /上一条主动消息发出去后/);
+  assert.doesNotMatch(unread.userText, /上一条主动消息的内容/);
 });
 
 test("主动消息提示词会带入相处理解", () => {
@@ -269,7 +312,10 @@ test("已读未回时给一库手法，打趣优先，不端新话题", () => {
     hobby: { name: "极简手帐" },
     followup: { count: 3, read: true, readAgeMs: 60 * 60 * 1000, previousText: "你咋不理我嘛" },
   });
-  assert.match(spec.userText, /看到你上一条主动消息了/);
+  assert.match(spec.userText, /已经看过你上一条主动消息/);
+  assert.match(spec.userText, /你咋不理我嘛/);
+  assert.match(spec.userText, /找不到自然、具体的连接，就安静/);
+  assert.doesNotMatch(spec.userText, /第3条|第3次|连续第3/u, "计数只用于判断轻重，不写成聊天内容");
   assert.match(spec.userText, /打趣比委屈好/);
   assert.match(spec.userText, /戳一下/);
   assert.match(spec.userText, /不许照抄/, "手法示例得写明不是台词");
@@ -279,15 +325,23 @@ test("已读未回时给一库手法，打趣优先，不端新话题", () => {
   assert.match(spec.userText, /不追问她为什么不回/);
   assert.match(spec.userText, /不要继续展开共同话题或兴趣/);
   assert.doesNotMatch(spec.userText, /具体落点：蓝灰胶带配米白页/);
+
+  const longSource = proactiveSpec({
+    partnerName: "小花",
+    userName: "阿舟",
+    followup: { count: 1, read: true, readAgeMs: 60 * 60 * 1000, previousText: "甲".repeat(500) },
+  });
+  assert.doesNotMatch(longSource.userText, /甲{401}/, "原文锚点设上限，避免反复拉长上下文");
 });
 
 test("才看过没多久不催：这一轮别提「你没回」", () => {
   const spec = proactiveSpec({
     partnerName: "小花",
     userName: "阿舟",
-    followup: { count: 1, read: true, readAgeMs: 5 * 60 * 1000, previousText: "在忙不" },
+    followup: { count: 1, read: true, readAgeMs: 5 * 60 * 1000, previousText: "刚刚那条原文不该拿来逗" },
   });
   assert.match(spec.userText, /才看过没多久/);
+  assert.doesNotMatch(spec.userText, /刚刚那条原文不该拿来逗/);
   assert.match(spec.userText, /不要追问/);
   assert.match(spec.userText, /先不发/);
   assert.doesNotMatch(spec.userText, /可以轻轻逗一句/, "刚看到就别急着凑上去");
@@ -333,10 +387,11 @@ test("已读未回三个窗口共用一份口径：姿态、菜单、收口不�
 test("看过很久了就放下这事，不再提她没回", () => {  const spec = proactiveSpec({
     partnerName: "小花",
     userName: "阿舟",
-    followup: { count: 2, read: true, readAgeMs: 8 * 60 * 60 * 1000, previousText: "在忙不" },
+    followup: { count: 2, read: true, readAgeMs: 8 * 60 * 60 * 1000, previousText: "过期的原文不该再带" },
   });
   assert.match(spec.userText, /可以放下了/);
-  assert.match(spec.userText, /别再加码/);
+  assert.doesNotMatch(spec.userText, /过期的原文不该再带/);
+  assert.doesNotMatch(spec.userText, /前面已经发过不止一条/);
   assert.doesNotMatch(spec.userText, /可以轻轻逗一句/);
   assert.doesNotMatch(spec.userText, /打趣找人|拿自己开涮|嘴硬收场/, "说了放下就别再把催场手法递过去");
 
@@ -469,15 +524,28 @@ test("手打的图名是话，不是混进来的外文残片", () => {
 
 // ── 晨间第一句 / 两边同一个伙伴 / 睡前收尾（2026-10-05）────────────
 
-test("今天第一句可以没由头，招呼不必先端出话题", () => {
+test("晨间首句可以自然招呼，但不预设作息状态", () => {
   const plain = proactiveSpec({ partnerName: "小花", userName: "小林", personaText: "我是小花。" });
   assert.match(plain.userText, /不要临时抽旧兴趣或共同话题凑一条内容消息/, "平时仍不硬凑内容");
-  assert.doesNotMatch(plain.userText, /这是你今天第一次开口/);
-  const first = proactiveSpec({ partnerName: "小花", userName: "小林", personaText: "我是小花。", firstOfDay: true });
-  assert.match(first.userText, /这是你今天第一次开口/);
+  assert.doesNotMatch(plain.userText, /这是你这个生活日第一次主动开口/);
+  const first = proactiveSpec({ partnerName: "小花", userName: "小林", personaText: "我是小花。", greetingOnly: true, currentTimeText: "2026年10月12日，早上 7 点 30 分" });
+  assert.match(first.userText, /这是你这个生活日第一次主动开口/);
   assert.match(first.userText, /打个招呼/);
-  assert.doesNotMatch(first.userText, /不要临时抽旧兴趣或共同话题凑一条内容消息/, "第一句不该又被那道筛子拦住");
+  assert.match(first.userText, /作息状态没有明确依据时留白/);
+  assert.doesNotMatch(first.userText, /问问她睡得怎么样/);
+  assert.doesNotMatch(first.userText, /不要临时抽旧兴趣或共同话题凑一条内容消息/, "首句不该又被那道筛子拦住");
   assert.match(first.systemPrompt, /按每条的时间、来源会话和说话人理解/, "第一句也要保留工作背景来路");
+
+  const afternoon = proactiveSpec({
+    partnerName: "小花",
+    userName: "小林",
+    personaText: "我是小花。",
+    currentTimeText: "2026年10月12日，下午 3 点",
+    seed: { motifName: "旧物修补", hook: "针脚留下的痕迹" },
+    greetingOnly: false,
+  });
+  assert.match(afternoon.userText, /方向：旧物修补/);
+  assert.match(afternoon.userText, /针脚留下的痕迹/);
 });
 
 test("电脑那边的近况自然参与闲聊，但不硬认作刚刚亲历", () => {
@@ -486,7 +554,7 @@ test("电脑那边的近况自然参与闲聊，但不硬认作刚刚亲历", ()
     userName: "小林",
     personaText: "我是小花。",
     workfeedText: "【电脑那边最近发生的事】\n小林：先把窗口修好",
-    firstOfDay: true,
+    greetingOnly: true,
   });
   assert.match(spec.userText, /电脑那边（Hana）最近的工作对话/);
   assert.match(spec.systemPrompt, /不默认它发生在当前茶话会/);
