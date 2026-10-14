@@ -3,6 +3,18 @@ import assert from "node:assert/strict";
 
 import { CHAT_HOUSE_STYLE, buildSystemPrompt, buildTeaseText, identityBlock, isClosingSignal, replyChoiceBlock, shouldQuietClose, threadToMessages } from "../lib/prompt.js";
 
+test('伙伴历史quote残片只在模型副本清理，用户字面标签和原账本保留', () => {
+  const rows = [{ role: 'user', text: '我说 [quote] 这个标签' },
+    { role: 'assistant', text: '来了~\n[/quote]\n靠过来' },
+    { role: 'assistant', text: '[quote]原话[/quote]\n回话' }];
+  const before = JSON.stringify(rows);
+  const messages = threadToMessages(rows, rows.length);
+  assert.equal(messages[0].content, rows[0].text);
+  assert.equal(messages[1].content[0].text, '来了~\n靠过来');
+  assert.equal(messages[2].content[0].text, '原话\n回话');
+  assert.equal(JSON.stringify(rows), before);
+});
+
 test("每轮回应都有正常回复、只发表情包和安静收尾三个出口", () => {
   const text = replyChoiceBlock({ userName: "阿舟" });
   assert.match(text, /正常回复/);
@@ -12,7 +24,13 @@ test("每轮回应都有正常回复、只发表情包和安静收尾三个出�
   assert.match(text, /\[不回\]/);
   assert.match(text, /直接问你的/);
   assert.match(text, /哈哈哈哈哈/);
-  assert.match(text, /聊天的句号/);
+  assert.match(text, /收尾/);
+  // 值不值得开口这一层：接的和不接的都要点名，拿不准往哪边倒也得写清楚
+  assert.match(text, /值不值得开口/);
+  assert.match(text, /值得接/);
+  assert.match(text, /不用接/);
+  assert.match(text, /拿不准就接/);
+  assert.ok(text.indexOf("值不值得开口") < text.indexOf("拿不准就接"), "先讲怎么判，再讲判不出来怎么办");
 });
 
 test("放肆纪律是常驻块：不必先掂量伤不伤人，也不靠她先开火", () => {

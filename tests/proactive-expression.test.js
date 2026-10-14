@@ -73,8 +73,27 @@ test('关系由头引用新对象时同样核对实际已介绍记录', () => {
 });
 
 test('提醒、醒来和未回应优先，不被新由头占用或放行轻联系', () => {
-  for (const extra of [{ todoNudge: '给薄荷浇水' }, { wakeEcho: { sourceText: '我先睡会' } }, { followup: { count: 1, read: false, previousText: '上一条' } }, { followup: { count: 1, read: true, readAgeMs: 1000 } }, { greetingOnly: true }]) {
+    for (const extra of [{ todoNudge: '给薄荷浇水' }, { wakeEcho: { sourceText: '我先睡会' } }, { followup: { count: 1, read: false, previousText: '上一条' } }, { followup: { count: 1, read: true, readAgeMs: 1000 } }, { greetingOnly: true }]) {
     const spec = proactiveSpec({ ...common, reason: { kind: 'affection' }, ...extra });
     assert.doesNotMatch(spec.userText, /这次联系的由头/);
   }
+});
+
+test('想念可以直接说，但别说完再补一句解释', () => {
+  // 实机（2026-10-14）：因想念而发的主动消息连着两条都是开口「我想你了」。
+  // 真正难看的是 03:29 那条「我想你了，来抱一下嘛 没啥要紧事，就是这会儿想挨着你待一会儿」
+  // ——「没啥要紧事」这句补话等于当场承认前面那句越了界。
+  const text = proactiveSpec({ ...common, reason: { kind: 'affection' } }).userText;
+  assert.match(text, /不必是她说出口的第一句/);
+  assert.match(text, /直说想念就是最对的那句，照直说，不用绕/, '关系本来就直的时候，直说是正路不是让步');
+  assert.match(text, /落点自己挑/, '绕着说的路子也得留着，不能只剩一种');
+  assert.match(text, /别说完想念再补一句解释自己为什么想她/);
+  assert.match(text, /说完就停/);
+  assert.match(text, /别每回想念都落成同一个样子/);
+  assert.match(text, /别一律写成软话，也别一律写成撒娇/);
+  // 上一版把它写成了「别当默认开头」，那是矫枉过正：最亲的那位本来就该直说
+  assert.doesNotMatch(text, /别把「我想你了」当默认开头/);
+  // 别的由头不受这条影响
+  const contact = proactiveSpec({ ...common, reason: { kind: 'contact' } }).userText;
+  assert.doesNotMatch(contact, /我想你了/);
 });

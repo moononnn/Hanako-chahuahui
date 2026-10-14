@@ -425,6 +425,17 @@ test("回复的 utility 兜底重复空正文仍失败，不返回空答案", as
   assert.equal(ctx.requests.length, 2);
 });
 
+test("陪读提醒严格路径：空正文不换utility、不重试", async () => {
+  const ctx = fakeCtx("");
+  await assert.rejects(generateReply(ctx, {
+    systemPrompt: "", messages: [], retryDelaysMs: [], allowUtilityFallback: false,
+    modelRef: { provider: "openai-codex", model: "gpt-6-luna" },
+    catalog: { models: [{ provider: "openai-codex", model: "gpt-6-luna" }] },
+  }), { code: "MODEL_UNAVAILABLE" });
+  assert.equal(ctx.seen.stream, 1);
+  assert.equal(ctx.seen.utility, 0);
+});
+
 test("正常回包不碰 utility", async () => {
   const raw = ndjson({ type: "text-delta", delta: "在呢" }, { type: "done", requestId: "r", stopReason: "stop" });
   const ctx = fakeCtx(raw);

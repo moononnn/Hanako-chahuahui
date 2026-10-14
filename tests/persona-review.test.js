@@ -57,9 +57,10 @@ test("建议形状：七种之外的一律丢掉", () => {
 });
 
 test("模型回包：容错解析三种脏格式", () => {
-  const wrapped = parseDiagnosis('```json\n{"opening":"我先看了一遍","keep":[{"title":"有温度","quote":"待人有温度","why":"立得住"}],"grow":[{"title":"禁区太薄","quote":"不要拆成经验总结","why":"只有一条","direction":"补被装熟时怎么办"}]}\n```');
+  const wrapped = parseDiagnosis('```json\n{"opening":"我先看了一遍","keep":[{"title":"有温度","quote":"待人有温度","why":"立得住"}],"grow":[{"title":"禁区太薄","quote":"不要拆成经验总结","why":"只有一条","direction":"补被装熟时怎么办","example":"那你先说，我不插嘴"}]}\n```');
   assert.equal(wrapped.keep.length, 1);
   assert.equal(wrapped.grow[0].direction, "补被装熟时怎么办");
+  assert.equal(wrapped.grow[0].example, "那你先说，我不插嘴", "改好之后的样子要一并读出来");
   assert.deepEqual(wrapped.openings, ["我先看了一遍"], "老形状的单句 opening 也要读得出");
 
   const noisy = parseDiagnosis('好的，这是结论：{"opening":"嗯","keep":[],"grow":[{"title":"缺语料","quote":"","why":"一句原话都没有"}]} 希望有用');
@@ -74,6 +75,10 @@ test("模型回包：容错解析三种脏格式", () => {
   const silent = parseDiagnosis('{"keep":[{"title":"x","quote":"q","why":"w"}]}');
   assert.equal(silent.openings.length, 1, "模型漏了开场也不能空着");
   assert.ok(!silent.openings[0].includes("{"), "兜底那句要是人话，不是 JSON");
+
+  // 旧存档里没有 example 这个字段，读出来是空字符串，不是 undefined——界面上直接判真值就行
+  const legacy = parseDiagnosis('{"openings":["嗯"],"keep":[],"grow":[{"title":"a","quote":"q","why":"w"}]}');
+  assert.equal(legacy.grow[0].example, "");
 
   const chat = parseChatReply('{"reply":"那我先记一条","suggestions":[{"label":"补禁区","op":"scenario_add","questionId":"boundaries","scene":"她只回了一个嗯","reaction":"不要追问细节"}]}');
   assert.equal(chat.suggestions.length, 1);

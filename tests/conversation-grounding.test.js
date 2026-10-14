@@ -55,21 +55,37 @@ test('已确认的工作对话保留时间和会话来路，开工确认不变�
   assert.match(spec.systemPrompt, /叫醒/);
 });
 
-test('正常工作近况仍然能联动，不硬认全部记录为刚刚亲历', () => {
-  assert.match(LINKUP_DISCIPLINE, /自然/);
+test('正常工作近况仍然能联动，但接成自己的经历而不是一份记录', () => {
+  // 2026-10-14 重定：陪着工作、转头去手机里吐槽是同一个伙伴的联动，
+  // 所以问题不在“该不该接”，在“接成什么样”。下面两行是当年被否掉的写法，拿来钉反面。
+  assert.match(LINKUP_DISCIPLINE, /两条线/);
   assert.match(LINKUP_DISCIPLINE, /时间/);
+  assert.match(LINKUP_DISCIPLINE, /倒情绪/);
   assert.doesNotMatch(LINKUP_DISCIPLINE, /这些话要说得像「我自己刚经历完」|不许提「我看到」/);
 });
 
-test('电脑那边来的消息要点头绪，但不成长汇报（2026-10-14 实机）', () => {
+test('电脑那边来的消息不汇报自己看了什么，也不复述那边的结论（2026-10-14 实机两轮）', () => {
   const text = '【电脑那边最近发生的事 · 工作对话背景】\n[时间戳：…｜来源：电脑工作对话｜会话：c1｜说话人：用户→伙伴]（hanako）用户：人格和规则要分开';
   const spec = proactiveSpec({ partnerName: '小花', userName: '阿舟', greetingOnly: true, workfeedText: text, wakeEcho: { sourceText: '刚才困着' } });
-  // 原来只写“需要区分场合时可以顺口说”，是可选的，模型直接跳过：
-  // 一开口就是「我觉得最值得借的是…」，读的人得往回翻才知道说的是电脑那边。
-  assert.match(spec.systemPrompt, /开头半句就把来处点一下/);
-  assert.match(spec.systemPrompt, /这半句是坐标，不是开场白，写完就进正题/);
-  // 不能变成“我看了你在那边跟谁讨论了什么”。
-  assert.match(spec.systemPrompt, /别复述那边说过什么、别汇报自己看了什么/);
+  // 第一轮实机：只写「自然参与」，模型把工作结论原样搬过来，“我觉得最值得借的是…”，
+  // 读的人得往回翻才知道在讲哪件事。现在得说清那是他自己的经历。
+  assert.match(spec.systemPrompt, /同一个人的两条线/);
+  assert.match(spec.systemPrompt, /不用先交代自己是从哪儿看到的/);
+  // 第二轮实机：补救写成「开头半句点来处」，示例全是动作，于是交出「刚电脑那边瞄了一眼」。
+  // 新话题需要事情坐标，但不演成刚看了记录或获知工作。
+  assert.match(spec.systemPrompt, /另起一个话题时，顺口带上具体对象和发生的事/);
+  assert.match(spec.systemPrompt, /事情你本来就知晓/);
+  assert.match(spec.systemPrompt, /不是刚获知或读完记录/);
+  assert.match(spec.systemPrompt, /茶话会已在聊同一件事时直接接着说，不重复交代，不套固定开头/);
+  assert.doesNotMatch(spec.systemPrompt, /来处默认不提|别憋着也别铺垫/);
+  assert.match(spec.systemPrompt, /点的是那件事本身，不是你这个动作/);
+  assert.match(spec.systemPrompt, /「刚瞄了一眼」「刚电脑那边」不行/);
+  assert.doesNotMatch(spec.systemPrompt, /开头半句就把来处点一下/);
+  // 拿情绪不拿结论：这条专治把那边讨论出的方案搬过来复述。
+  assert.match(spec.systemPrompt, /拿来的是当时的感觉，不是当时的结论/);
+  // 坐标紧接自己的感觉，不压掉吐槽、不重演工作汇报。
+  assert.match(spec.systemPrompt, /别憋着/);
+  assert.match(spec.systemPrompt, /紧接你自己的感觉或吐槽，不写成工作汇报/);
   // 锚定不等于删掉“接成共同经历”的前提。
   assert.match(spec.systemPrompt, /可以玩笑、假设和联想/);
   assert.match(spec.systemPrompt, /她要是没在电脑那头找过你/);

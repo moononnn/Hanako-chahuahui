@@ -3,6 +3,17 @@ import assert from "node:assert/strict";
 
 import { cleanVoice, farewellSpec, hasOpenHook, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNighttimeSleepQuestion, isNoReply, LINKUP_DISCIPLINE, looksLikeAdTail, nightSpec, proactiveSpec, readFollowupStage, stirredSpec } from "../lib/compose.js";
 
+test('quote残片窄清洗：去格式保留正文，不误吞字面符号和安静出口', () => {
+  assert.equal(cleanVoice('来了~\n[/quote]\n靠过来'), '来了~\n靠过来');
+  assert.equal(cleanVoice('[quote]来了吗[/quote]\n在'), '来了吗\n在');
+  assert.equal(cleanVoice('[quote=朋友]来了吗[/quote]\n在'), '来了吗\n在');
+  assert.equal(cleanVoice('[/quote]'), '');
+  assert.equal(cleanVoice('[quote]\n在'), '在');
+  for (const text of ['[ok] 那样', '[img]图[/img]', '[不回]', '今天看到 <3 了', '无语.jpg', '1+1=2', '我说 [quote] 这个标签']) {
+    assert.equal(cleanVoice(text), text, text);
+  }
+});
+
 test("深夜普通主动消息拦住无依据的睡眠质量追问", () => {
   const lateNight = new Date(2026, 9, 12, 1, 11);
   const deepNight = new Date(2026, 9, 11, 23, 30);
@@ -534,7 +545,7 @@ test("晨间首句可以自然招呼，但不预设作息状态", () => {
   assert.match(first.userText, /作息状态没有明确依据时留白/);
   assert.doesNotMatch(first.userText, /问问她睡得怎么样/);
   assert.doesNotMatch(first.userText, /不要临时抽旧兴趣或共同话题凑一条内容消息/, "首句不该又被那道筛子拦住");
-  assert.match(first.systemPrompt, /按每条的时间、来源会话和说话人理解/, "第一句也要保留工作背景来路");
+  assert.match(first.systemPrompt, /日期以当前时间和原消息时间戳比较/, "第一句也得以时间戳对场，不能靠猜");
 
   const afternoon = proactiveSpec({
     partnerName: "小花",
@@ -548,7 +559,7 @@ test("晨间首句可以自然招呼，但不预设作息状态", () => {
   assert.match(afternoon.userText, /针脚留下的痕迹/);
 });
 
-test("电脑那边的近况自然参与闲聊，但不硬认作刚刚亲历", () => {
+test("电脑那边的近况接成自己的经历，不是接成一份记录", () => {
   const spec = proactiveSpec({
     partnerName: "小花",
     userName: "小林",
@@ -557,9 +568,14 @@ test("电脑那边的近况自然参与闲聊，但不硬认作刚刚亲历", ()
     greetingOnly: true,
   });
   assert.match(spec.userText, /电脑那边（Hana）最近的工作对话/);
-  assert.match(spec.systemPrompt, /不默认它发生在当前茶话会/);
+  // 2026-10-14 实机：老口径「不默认它发生在当前茶话会」把联动压成了观测，
+  // 模型于是汇报「刚电脑那边瞄了一眼」或直接搬结论。现在按同一个人的两条线处理。
+  assert.match(spec.systemPrompt, /同一个人的两条线/);
+  assert.match(spec.systemPrompt, /拿来的是当时的感觉，不是当时的结论/);
   assert.match(spec.systemPrompt, /那边就是空的/);
-  assert.equal(LINKUP_DISCIPLINE.includes("按每条的时间"), true);
+  // 时间戳和事实边界不能跟着口径一起松掉
+  assert.equal(LINKUP_DISCIPLINE.includes("日期以当前时间和原消息时间戳比较"), true);
+  assert.equal(LINKUP_DISCIPLINE.includes("事实、状态和联想分开"), true);
   const withoutFeed = proactiveSpec({ partnerName: "小花", userName: "小林", personaText: "我是小花。" });
   assert.doesNotMatch(withoutFeed.systemPrompt, /那边就是空的/, "没有近况就不提这茬");
 });
