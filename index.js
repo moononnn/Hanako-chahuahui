@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { splitReply } from "./lib/split.js";
+import { splitReply, stripTimeHeader } from "./lib/split.js";
 import { planTurn, DEFAULT_RHYTHM } from "./lib/rhythm.js";
 import { analyzeUserRhythm, userRhythmText } from "./lib/user-rhythm.js";
 import { loadPersona, renderPersona } from "./lib/persona.js";
@@ -46,6 +46,7 @@ import {
   withModelDeadline,
 } from "./lib/model.js";
 import { createStore, createDiagnostics } from "./lib/store.js";
+import { createFocusCompanion, focusReminderSpec, focusChatText } from "./lib/focus-companion.js";
 import { composeWithSupersedeRetry, hasNewerUserMessage } from "./lib/turn-window.js";
 import { createThreadRebuildScheduler } from "./lib/rebuild-queue.js";
 import { protectKey, isProtectedKey, encryptionStatus } from "./lib/crypto.js";
@@ -409,7 +410,7 @@ let compactReplyPilotId = "";
  * **发布副本构建时把它改成 false**，把这一整面关掉——这些入口能触发模型调用和后台写盘，
  * 不该暴露给只是装着玩的人（数据与流程上看，它们对普通使用者也毫无意义）。
  */
-const DEV_TOOLS = false;
+const DEV_TOOLS = true;
 // CHF-20261012-01~04：仅本地普通回复试点；设为空字符串即可回旧版。
 compactReplyPilotId = DEV_TOOLS ? "hanako" : "";
 // __CHAHUAHUI_DEV_ONLY_END__
@@ -422,6 +423,75 @@ export function apply(ctx) {
     registerTavernImportService(ctx, store, diagnostics);
   } catch (error) {
     diagnostics({ event: "tavern-import.registration.failed", error: describeError(error) });
+  }
+
+  const focusCompanion = createFocusCompanion({ ctx, diagnostics,
+    listPartners: async () => (await listPartners()).filter(row => isSettled(row.id)).map(row => ({ id: row.id, name: row.name || row.id })),
+    // 陪读头像与 /avatar/:agentId 共用同一份判定，别处改规则时这里跟着走。
+    partnerAvatar: async (agentId) => {
+      const partner = (await listPartners()).find(row => row.id === agentId && isSettled(row.id));
+      return partner ? resolvePartnerAvatar(agentId) : null;
+    },
+    send: sendFocusReminder,
+  });
+
+  async function sendFocusReminder({ active, kind, session, ownMessageId, isCurrent }) {
+    await loadUserName();
+    const agentId = active.companionId;
+    const partner = (await listPartners()).find(row => row.id === agentId && isSettled(row.id));
+    if (!partner || !isCurrent()) return false;
+    const knowing = store.getKnowing(agentId);
+    const persona = await getPersona(agentId);
+    const spec = focusReminderSpec({ active, kind, session, userName: USER_NAME });
+    // 只读陪读者自己的线程；投影掉附件、引用与其他元数据，不拼任何别人的正文。
+    const ownMessages = store.getThread(agentId).messages;
+    // 开场、收尾、走神三种提醒都不带上一轮的聊天正文。
+    // 开场读到上一轮就会拿客套当前开场白；收尾读到上一轮就会把刚聊完的话题再捡一遍
+    // （2026-10-14 实机：她在专注里说了「知道了知道了」，自己已经接过，计时一到又拿这句打趣了一遍）。
+    // 走神提醒的场面话本就声明“不知道聊天内容”，喂正文反而自相矛盾。
+    // 只有真在回她哪句时（reply，带 ownMessageId）才按那条往回给全。
+    const HISTORY_LIMIT = { start: 0, distracted: 0, end: 0 };
+    const visible = ownMessages.filter(row => ['user', 'assistant'].includes(row.role) && !row.recalled
+      && !['action', 'poke', 'tavern-opening'].includes(row.kind));
+    // 找不到那条就不能当成“从头给全”：那等于把整段历史又漏回去。
+    const replyEnd = ownMessageId ? visible.findIndex(row => row.id === ownMessageId) + 1 : 0;
+    const count = ownMessageId ? replyEnd : (HISTORY_LIMIT[kind] ?? 2);
+    // count 为 0（开场）时要真的给空，slice(0) 是“从头给全”，那正好是反的。
+    const ownRows = (count > 0 ? visible.slice(-count) : [])
+      .map(row => ({ role: row.role, text: String(row.text || '').slice(0, 300), at: row.at }));
+    // 陪读提醒也是 ta 开口，跟普通回复共用同一块钟表：没有它，ta 不知道现在是早上还是深夜，
+    // 早上会说晚安、深夜会说早安（2026-10-14 实机）。
+    const timeText = timeBlock({ now: new Date(), messages: ownMessages, userName: USER_NAME,
+      sleep: store.getPartnerSettings(agentId).sleep });
+    const ownMessageCurrent = () => !ownMessageId || store.getThread(agentId).messages.findLast(row => row.role === 'user' && !row.recalled)?.id === ownMessageId;
+    if (!ownMessageCurrent()) return 'stale';
+    const messages = [{ role: 'user', content: `【场景背景，非对方发言】\n${spec.user}` },
+      ...threadToMessages(ownRows, ownRows.length, { userName: USER_NAME })];
+    const systemPrompt = [renderPersona(persona, { partnerName: partner.name, userName: USER_NAME, nameFallback: true }),
+      timeText,
+      buildKnowingText({ disclosure: disclosureRatio(effectiveRelationship(knowing)), personality: knowing.personality,
+        hobbies: knowing.hobbies, recognition: knowing.recognition, palette: knowing.palette, userName: USER_NAME }),
+      relationshipNote(effectiveRelationship(knowing), knowing.relationSeed), teaseTextFor(agentId, knowing), spec.system].filter(Boolean).join('\n\n');
+    const catalog = await ctx.models.list();
+    const choice = resolveModelChoice(catalog, { partnerRef: store.getPartnerSettings(agentId).model,
+      globalRef: store.getGlobalSettings().model, agentRef: await agentDefaultModel(agentId) });
+    if (!isCurrent() || !ownMessageCurrent()) return 'stale';
+    const generated = await generateReply(ctx, { systemPrompt, messages,
+      diagnostics, maxTokens: 900, catalog, modelRef: choice ? { provider: choice.provider, model: choice.model } : null,
+      retryDelaysMs: [], allowUtilityFallback: false });
+    if (!isCurrent() || !ownMessageCurrent()) return 'stale';
+    // 这条路径不经过 splitReply，模型照抄历史消息的【日期 时间】前缀没人摘（2026-10-14 实机）。
+    const text = stripTimeHeader(cleanVoice(String(generated.text || ''), 'voice'));
+    if (!text) return false;
+    // 陪读消息也切成气泡：普通回复走 splitReply，不走的话它永远一坨一泡，界面上比别人的粗一档。
+    const bubbles = splitReply(text);
+    if (!bubbles.length) return false;
+    const stored = appendPartnerMessage(agentId, { role: 'assistant', text, bubbles,
+      focusReminder: { sessionId: active.id, kind }, ...(ownMessageId ? { repliedTo: ownMessageId } : {}), via: generated.via });
+    if (!stored) return false;
+    if (ownMessageId) store.markUserMessagesRead(agentId, new Date().toISOString(), { throughId: ownMessageId });
+    void announceArrival(agentId, partner.name);
+    return true;
   }
 
   function recordPartnerStickerUsage(agentId, bubbles, sentAt = new Date().toISOString()) {
@@ -741,6 +811,11 @@ export function apply(ctx) {
 
   /** 消息和音频一起完成后才提交语音额度；合成失败只留下文字回退。 */
   function appendPartnerMessage(agentId, message, prepared = null, replaceMessageId = null) {
+    const focus = focusCompanion.active();
+    if (focus && !message.focusReminder && (message.proactive || message.nudge || message.repliedTo && agentId === focus.companionId)) {
+      releaseVoiceGeneration(prepared);
+      return null;
+    }
     const entry = { ...message };
     if (prepared?.ok) entry.voice = prepared.voice;
     else if (prepared?.reason === "synthesis") entry.voice = prepared.failure;
@@ -1339,6 +1414,23 @@ export function apply(ctx) {
     }
     yuanCache.set(agentId, { at: Date.now(), yuan });
     return yuan;
+  }
+
+  /**
+   * 一位伙伴的头像：茶话会本地角色只认自己 dataDir 里的导入头像，不去 Hana 的 agents 目录找同名文件；
+   * 宿主伙伴先认 agents/<id>/avatars，再退到按「缘」分的默认脸。都没有返回 null（界面退回首字）。
+   * HTTP 路由和陪读 bus 服务都走这里，规则只有一份。
+   */
+  async function resolvePartnerAvatar(agentId) {
+    const id = String(agentId ?? "");
+    if (!isValidPartnerId(id)) return null;
+    if (store.localPartner(id)) {
+      const localAvatar = store.getLocalPartnerAvatar(id);
+      if (!localAvatar || !looksLikeImage(localAvatar.bytes)) return null;
+      return { bytes: localAvatar.bytes, contentType: localAvatar.contentType };
+    }
+    const avatar = await getAvatar("agent", id, await yuanOf(id));
+    return avatar ? { bytes: avatar.bytes, contentType: avatar.contentType } : null;
   }
 
   // ─────────────────── 茶话会里多加的那层 ───────────────────
@@ -2263,6 +2355,7 @@ export function apply(ctx) {
   }
 
   async function runAwaitingTickInternal() {
+    if (focusCompanion.active()) return { ok: true, reason: 'focus', report: [] };
     let partners;
     try {
       partners = await listPartners();
@@ -2359,6 +2452,7 @@ export function apply(ctx) {
   }
 
   async function runFeedTickInternal() {
+    if (focusCompanion.active()) return { ok: true, reason: 'focus', report: [] };
     let partners;
     try {
       partners = await listPartners();
@@ -2433,6 +2527,7 @@ export function apply(ctx) {
       });
       if (!emoji) continue;
 
+      if (focusCompanion.active()) { report.push({ agentId, action: 'blocked', reason: 'focus' }); continue; }
       const fedAt = new Date();
       const nextFeed = addPartnerFeed(target.partnerFeed, emoji, { at: fedAt.toISOString(), kind: signal.kind, reason: signal.reason });
       const updated = store.patchMessage(agentId, signal.messageId, { partnerFeed: nextFeed });
@@ -2516,6 +2611,7 @@ export function apply(ctx) {
 
     if (choice.kind === "poke") {
       const action = await deliverAction(agentId, { partnerName: partner.name, from: "partner" });
+      if (!action) return { action: 'blocked', reason: 'focus', nudges: Number(settings.awaiting?.nudges ?? 0) };
       if (action) noteAwaitingSent(new Date(action.at ?? new Date()));
       settle(nudges);
       diagnostics({ event: "awaiting.poke", agentId, stage: plan.stage, temperament: plan.temperament, waitedMs: plan.waitedMs ?? 0 });
@@ -2699,6 +2795,8 @@ export function apply(ctx) {
   }
 
   async function runProactiveTickInternal({ force = false } = {}) {
+    try { await focusCompanion.sync(); } catch { /* 可用的现有约定仍有效 */ }
+    if (focusCompanion.active()) return { ok: true, reason: 'focus', report: [] };
     // 账本读到坏文件时，store 会把坏的挪走留档。这里把记录捞进诊断，别让它静默发生。
     for (const row of store.takeCorruptLog()) {
       diagnostics({ event: "store.corrupt", file: row.file, moved: row.dest });
@@ -3021,7 +3119,8 @@ export function apply(ctx) {
           if (hasReplyInFlight(agentId) || threadStamp(agentId) !== stamp) return { ok: false, reason: "reply-in-flight" };
           const finalGate = autonomousGateNow(agentId, "proactive");
           if (!finalGate.ok) return { ok: false, reason: finalGate.reason, gateBlocked: true };
-          await deliverAction(agentId, { partnerName: partner.name, from: "partner" });
+          const action = await deliverAction(agentId, { partnerName: partner.name, from: "partner" });
+          if (!action) return { ok: false, reason: 'focus', gateBlocked: true };
           const sentAt = new Date();
           const noted = noteSent(
             { state: { ...store.getProactiveState(agentId), staged: pending.rest }, globalState: store.getGlobalRuntime(), now: sentAt },
@@ -3333,6 +3432,7 @@ export function apply(ctx) {
       from === "partner"
         ? renderActionLine(styleId, readMyTemplateEntry(globalSettings)?.text, partnerName)
         : renderMyActionLine(styleId, readTemplateEntry(settings)?.text, partnerName);
+    if (from === 'partner' && focusCompanion.active()) return null;
     const stored = store.appendMessage(agentId, {
       role: from === "partner" ? "assistant" : "user",
       kind: "action",
@@ -3935,6 +4035,7 @@ export function apply(ctx) {
    * 只管生成与入账，节奏、提醒那些外面各自接。
    */
   async function composeReply(agentId, { repliedTo = null, mayPass = false, currentMessageId = null, excludeMessageId = null, replaceMessageId = null, isCurrent = null, onCapture = null } = {}) {
+    if (focusCompanion.active()?.companionId === agentId) return { ok: false, reason: 'silent', generationMs: 0 };
     await loadUserName();
     const startedAt = Date.now();
     // 先把上次没看清的图补上：ta 这会儿要回话，得真看见那张图，而不是照着「没能看清」猜。
@@ -4176,9 +4277,14 @@ export function apply(ctx) {
     // 「模型这会儿用不了」不是生成失败，是这一轮根本不该发生：
     // 不换模型顶嘴（那会换掉 ta 的嗓子和记性），也不当失败重试。
     const callModel = async (system = systemPrompt) => {
+      // 延迟回复也按真正发请求时的状态取背景；暂停、休息、结束后不带旧专注状态。
+      const focusActive = focusCompanion.active();
+      const focusText = focusChatText({ active: focusActive, agentId, userName: USER_NAME });
+      diagnostics({ event: 'reply.focus.context', agentId, included: Boolean(focusText),
+        ...(focusText ? { focusSessionId: focusActive.id, targetAt: focusActive.targetAt } : {}) });
       try {
         return await generateReply(ctx, {
-          systemPrompt: system,
+          systemPrompt: [system, focusText].filter(Boolean).join('\n\n'),
           messages,
           diagnostics,
           maxTokens: 900,
@@ -4554,6 +4660,7 @@ export function apply(ctx) {
   }
 
   function autonomousGateNow(agentId, kind = "proactive", { ignoreSleep = false, todoReminder = false } = {}) {
+    if (focusCompanion.active()) return { ok: false, reason: 'focus', now: new Date() };
     const now = new Date();
     const settings = store.getPartnerSettings(agentId);
     const globalSettings = store.getGlobalSettings();
@@ -6679,6 +6786,7 @@ export function apply(ctx) {
           ...(attachment ? { attachment: { id: attachment.id, name: attachment.name, mimeType: attachment.mimeType, size: attachment.size }, visionNote, ...(visionVia ? { visionVia } : {}) } : {}),
           ...(visionNotice ? { notice: visionNotice } : {}),
         });
+        const duringFocus = focusCompanion.active() ? await focusCompanion.userSpoke({ agentId, messageId: stored.id }) : false;
         // 明确偏好先只做本地候选预筛：普通聊天不额外叫模型，候选也必须绑定已落盘的用户消息 id。
         const adaptationHint = adaptationCandidate(messageText);
         if (adaptationHint.candidate) {
@@ -6700,6 +6808,12 @@ export function apply(ctx) {
         // 不撤的话会在她正题后面跟着冒一句客套话。连戳合并那套照旧。
         if (cancelPendingActionReply(agentId)) {
           diagnostics({ event: "action.answer.cancelled", agentId });
+        }
+
+        if (duringFocus && focusCompanion.active()?.companionId === agentId) {
+          // 陪读伙伴只发合并后的提醒，不再另生成一段闲聊；正常关系记账仍保留。
+          cancelScheduledReply(agentId);
+          return c.json({ ok: true, messageId: stored.id, mode: 'focus', recall: recallEligibility(stored) });
         }
 
         // 模型这会儿用不了：消息已经存下来了，这一轮不安排回复。
@@ -7638,20 +7752,9 @@ export function apply(ctx) {
           return c.json({ ok: false, error: { message: "伙伴编号不合法" } }, 400);
         }
         try {
-          // 茶话会本地角色只从自己的 dataDir 读导入头像，不去 Hana agents 目录找同名文件。
-          if (kind === "agent" && store.localPartner(raw)) {
-            const localAvatar = store.getLocalPartnerAvatar(raw);
-            if (!localAvatar || !looksLikeImage(localAvatar.bytes)) {
-              return c.json({ ok: false, error: { message: "没有头像" } }, 404);
-            }
-            return c.body(localAvatar.bytes, 200, {
-              "Content-Type": localAvatar.contentType,
-              "Cache-Control": "private, max-age=300",
-            });
-          }
-          // 没配头像的伙伴用宿主自带的那张（按「缘」分）
-          const yuan = kind === "agent" ? await yuanOf(raw) : null;
-          const avatar = await getAvatar(kind, kind === "user" ? null : raw, yuan);
+          const avatar = kind === "user"
+            ? await getAvatar("user", null, null)
+            : await resolvePartnerAvatar(raw);
           if (!avatar) return c.json({ ok: false, error: { message: "没有头像" } }, 404);
           return c.body(avatar.bytes, 200, {
             "Content-Type": avatar.contentType,

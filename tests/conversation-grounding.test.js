@@ -61,6 +61,31 @@ test('正常工作近况仍然能联动，不硬认全部记录为刚刚亲历',
   assert.doesNotMatch(LINKUP_DISCIPLINE, /这些话要说得像「我自己刚经历完」|不许提「我看到」/);
 });
 
+test('电脑那边来的消息要点头绪，但不成长汇报（2026-10-14 实机）', () => {
+  const text = '【电脑那边最近发生的事 · 工作对话背景】\n[时间戳：…｜来源：电脑工作对话｜会话：c1｜说话人：用户→伙伴]（hanako）用户：人格和规则要分开';
+  const spec = proactiveSpec({ partnerName: '小花', userName: '阿舟', greetingOnly: true, workfeedText: text, wakeEcho: { sourceText: '刚才困着' } });
+  // 原来只写“需要区分场合时可以顺口说”，是可选的，模型直接跳过：
+  // 一开口就是「我觉得最值得借的是…」，读的人得往回翻才知道说的是电脑那边。
+  assert.match(spec.systemPrompt, /开头半句就把来处点一下/);
+  assert.match(spec.systemPrompt, /这半句是坐标，不是开场白，写完就进正题/);
+  // 不能变成“我看了你在那边跟谁讨论了什么”。
+  assert.match(spec.systemPrompt, /别复述那边说过什么、别汇报自己看了什么/);
+  // 锚定不等于删掉“接成共同经历”的前提。
+  assert.match(spec.systemPrompt, /可以玩笑、假设和联想/);
+  assert.match(spec.systemPrompt, /她要是没在电脑那头找过你/);
+});
+
+test('兴趣主动消息不做论证：只留观点加反应（2026-10-14 实机）', () => {
+  const spec = proactiveSpec({ partnerName: '小花', userName: '阿舟',
+    seed: { kind: 'self', motifName: '阳台换季', hook: '整组推倒重来还是留骨架', angle: '留稳骨架' } });
+  // 实机典型小作文：方案—对比论证—收个问题；选的是“连因为都不给”这一档。
+  assert.match(spec.systemPrompt, /不要论证/);
+  assert.match(spec.systemPrompt, /她要的是你刚才想到了什么，不是你把这件事分析了一遍/);
+  assert.match(spec.systemPrompt, /“我更想要 A 不是 B，因为 C”/);
+  assert.match(spec.systemPrompt, /不要把一个念头展开成“问题—分析—结论”/);
+  assert.match(spec.systemPrompt, /不要在末尾补一句“我还没想好”“你觉得呢”来把这条撑长/);
+});
+
 test('主动兴趣可以自足分享，不要求把买花和图片去重硬接起来', () => {
   const spec = proactiveSpec({ partnerName: '伙伴', userName: '阿舟', seed: { kind: 'self', motifName: '图片归档', hook: '疑似重复的图片先保留', angle: '不破坏之前聊天里用过图片的地方' } });
   assert.match(spec.systemPrompt, /不必.*上一句/);
