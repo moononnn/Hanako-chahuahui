@@ -221,7 +221,7 @@ test("提示词：图库为空就不提这回事；有图时说清词从哪来�
 });
 
 test("路径拼接：快照里的相对路径落在表情包数据目录下，且不允许穿越", () => {
-  const home = "C:\\Users\\x\\.hanako";
+  const home = "H:\\fake-home\\.hanako";
   assert.equal(
     stickerAbsolutePath(home, "stickers/1.jpg"),
     `${home}\\app-data\\biaoqingbao-app\\stickers\\1.jpg`,
