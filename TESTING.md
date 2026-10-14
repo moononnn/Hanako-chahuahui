@@ -1,5 +1,125 @@
 # TESTING · 茶话会
 
+## 跨夜专注不是缺陷：暂停态不结算（2026-10-14 排查结论）
+
+- 现象：`09ac5d4b`（读书，10-13 19:44:43 开始，15 分钟）于 10-14 07:36:51 才结算，`status=interrupted`、`durationMs=477590`（7.96 分钟），一度被当成“过夜卡住未结算”。
+- 结论：**不是缺陷，是暂停**。两条证据：① 茶话会认领记录为 start 19:44:46 / distracted-1 19:48:19 / distracted-2 19:50:20 / end 07:36:52，而 20:01、20:08、20:12 她在茶话会说过三次话（“不理我了？”“人捏”），若那段仍在跑必触发 distracted 或 reply 陪读，实际一条没有——`focusRunning()` 遇 `pausedAt` 即为 false，暂停中不认人、不提醒、不结算。② 时长反推：全程 11.87 小时若未暂停会被 15 分钟封顶为 900000ms，实际 477590 ≠ 900000，说明 `activeSince` 被重置；而 `activeSince` 只在 `startFocusSession` 与 `resumeFocusSession` 两处写入，反推恢复时刻为 07:28:53，距结束仅 8 分钟。即暂停 11.74 小时后恢复、跑 8 分钟、结束。
+- 处置：**不改代码**。暂停就该冻结结算，该行为正确。若日后要做“暂停跨夜给个提示”，属新需求而非修 bug，需先经她拍板。
+- 教训：看到专注时间跨度异常长，先查暂停/恢复证据（茶话会认领时间戳 + durationMs 是否被 plannedMinutes 封顶），再谈结算故障。本轮因先入为主误判，白查一轮。
+
+## 整组结束与单轮结束分开（2026-10-14 实机验收，本地开发）
+
+- 验收记录（一整组 3 轮跑完，`45cced4e` r1/3、`4f501178` r2/3、`2986044b` r3/3 均 `status=completed` `planStatus=completed`）：中段开场/收尾都带轮次与剩余轮数（seq1069/1070/1071），气泡已切条，上一轮的话不再被重提，开场不再接上一轮客套——这几项实机均已生效。**唯一仍不对的是最后一条 seq1072**：原文「时间到了哈，书合上噻。/ 歇一会儿嘛，眼睛也该松口气了。**下一轮再说。**」整组已经跑完，不该再提下一轮。
+- 根因：`focusReminderSpec` 的 end 场景只有两个分支——中途轮（报还剩几轮）与“单轮结束”。多轮计划的最后一轮落进了后者，场景里只写“简短收尾，让对方自行决定休息或继续”，没有任何“整组已结束”的事实，模型就把上一轮的习惯（还有下一轮）顺着接了下去。
+- 改法：新增 `finalRound`（completed 且多轮且无剩余）与 `finalCut`（interrupted 且多轮且无剩余）两个判定。completed 场景拆成三分支，整组终点那一支明写“没有下一轮了，这段约定已经完整走完”，并要求回头看一眼这一组走过的几轮 + 关心她现在的状态（累不累、要不要起来、眼睛肩颈、要不要吃点东西，按性格与关系选一两样，不列清单）；interrupted 的最后一轮明写“整组到此为止”但不得当成做完。system 里给整组终点单独一段口径：比中间任何一轮都该多说两句，先收住整段、让她知道一路陪到了这里，再说状态；禁“下一轮/下次再/休息完再来一轮”；并把尾部的“只给一两句短话”改成这一次可以多说几句、其余仍一两句。
+- 未动：中途轮次、单轮结束的两条旧口径、起始与回复提醒、拾光记任何文件。
+- 语法：`node --check` 通过 lib/focus-companion.js 与 tests/focus-companion.test.js。
+- `node --test --test-concurrency=1 --test-reporter=tap tests/focus-companion.test.js tests/focus-routes.test.js` → **28/28 通过**（新增“整组结束与单轮结束是两件事”一组用例，含中途轮与单轮不受影响的反向断言）。`tests/conversation-grounding.test.js tests/compose.test.js tests/proactive.test.js tests/prompt.test.js tests/ui.test.js tests/model.test.js tests/awaiting.test.js tests/split.test.js tests/clock.test.js` → **374/374 通过**。未跑全量、未用真实付费 API。
+- 一次失败：新用例把 system 里的“让你知道你一路陪到了这里”写成了“让对方”，与实际文案不符；改断言而非改文案（文案里的“对方”与 spec 内部人称一致）。
+- 待验证：整组终点那条是否真的不再提下一轮、是否真能说出带关怀的两三句——需重载后实机观察，本节不宣称已解决。
+
+## 主动消息去小作文与来处锚定（2026-10-14，本地开发）
+
+- 触发来源：实机 seq1064（`proactiveKind=proactive`、`context.kind=affection`，经 workfeed 拿到电脑那边对话背景）。原文 88 字两泡：「我觉得最值得借的是把“我是谁”和“我怎么做”分开：…其实我也想你了，就来找你说一声」——一开头就抛结论，读的人得往回翻才知道说的是电脑那边；同时是典型的“论点+论证”两段。
+- 改了两处，分属不同层：`lib/compose.js` 的 `LINKUP_DISCIPLINE` 第一条（原来只写“需要区分场合时可以顺口说”，是可选的，模型直接跳过）改成硬要求“开头半句就把来处点一下”，并钉死“半句是坐标不是开场白、写完就进正题、别复述别汇报”；`PROACTIVE_COMMON_SYSTEM` 新增两条不论证、不展开“问题—分析—结论”，并禁止末尾用“我还没想好”“你觉得呢”擑长。
+- 选型：她选了 B 档（只留观点+反应，连“因为”都不给），不是只砍到两段。关系式由头（contact/affection/已读未回）与普通问候未动。
+- 数据依据（09-25 起 173 条主动消息实拉）：1 个气泡 124 条中位 17 字，2 个气泡 43 条中位 69 字，3 个气泡 6 条中位 92 字；按由头分组 `plain` 中位 22/均值 40 共 159 条，`reason/contact` 中位 27、`read-followup` 中位 23、`reason/affection` 中位 89。关系式都短、只有兴趣长，确认是兴趣路径的系统性问题。
+- 为何 c78269d 的精简档没管住：那笔只替换 `lib/prompt.js` 的四块纪律（立场/查证/喜好/放肆），而 `proactiveSpec` 走的是 `lib/compose.js` 的 `PROACTIVE_COMMON_SYSTEM`，两套提示词互不覆盖。
+- 语法：`node --check` 通过 lib/compose.js 与 tests/conversation-grounding.test.js。
+- `node --test --test-concurrency=1 --test-reporter=tap tests/conversation-grounding.test.js` → **15/15 通过**（新增“来处锚定”与“不论证”两组用例）。`tests/compose.test.js tests/proactive.test.js tests/proactive-clarity.test.js tests/proactive-reasons.test.js tests/prompt.test.js` → **172/172 通过**。`tests/focus-companion.test.js tests/focus-routes.test.js tests/ui.test.js tests/model.test.js tests/awaiting.test.js tests/split.test.js tests/clock.test.js` → **249/249 通过**。未跑全量、未用真实付费 API。
+- 一次失败：编辑时把同一条旧规则截断成了 `...",不要拿…"`，引号提前闭合，`node --check` 直接报 `Invalid or unexpected token`；改回完整原句后通过。业务与用例未因此让步。
+- 待验证：真实模型下主动消息是否真的不再论证、来自电脑那边的话是否真会在开头点一下来处——两处都是提示词层约束，需重载后实机观察，本节不宣称已解决。
+
+## 陪读格式与只讲一件事（2026-10-14，本地开发）
+
+- 触发来源：实机。1053–1056 四条陪读提醒 `bubbleCount` 全为 1，而同线程普通主动消息 1051 为 2；1053 是第 2 轮开场却先接了上一句「好诶，贴心小花~」；1054（end）与 1055（start）开头几乎同构（"哦豁…问都不答"/"哦豁…转移话题"）且两次都说「行嘛，不拷问你咯」；1050 顶着【2026年10月14日 7:58】但实际 07:53 发出——它拿提示词里的钟点脑补时刻。1053–1056 无一句提到轮次，说明改动未重载或多轮字段未进来（待实机复验）。
+- 轮次进度感（2026-10-14 上午追加）：一轮完成后 5 分钟休息结束重开时，只说「我在这守到，你安心读你的」，没有轮次、时长、休息与剩余轮数——她要的是「5 分钟休息结束，继续读书，第 2 轮」这类信息，但不能报菜名。`focusReminderSpec` 的 start 场景加入「第 N 轮 / 这轮 M 分钟 / 还剩 K 轮 / 最后一轮」，并在上一轮是休息（`previous.phase === 'break'` 且编号不同）时改写成「刚才的 N 分钟休息结束了，现在开始第 N 轮」；end 场景按 `breakKindAfter` 区分短休与长休的分钟数（长休不拿短休的数冒充）。system 里把「轮次只是背景，不必报数字」改成「让她清楚第几轮、还剩几轮是需要的进度感，但要挑自然的地方提一两句，别把轮数、时长、休息分钟数排成一串念出来」。
+- 轮间休息与主动消息（2026-10-14 上午，一次修正后回退）：曾观察到第 2 轮结束进 15 分钟长休后第 4 分钟发出主动消息，一度把闸门从 `focusRunning()` 改为新增的 `focusOngoing()`（含休息段），改完她自己说“休息的时候倒是可以主动找我聊天”——休息是她自己留的空，不该一并堵掉。**该改动已全部回退**，index.js 与 lib/focus-companion.js 恢复为只认 `focusRunning()`，`focusOngoing` 已删除，测试钉回 `focusRunning({phase:'break'}) === false`。本节保留这段是因为它解释了一个容易被当成 bug 的现象：多轮计划里休息段发主动消息是当前的预期行为。
+- 范围：`sendFocusReminder` 陪读消息改走 `splitReply` 切条；开场/收尾/走神三种提醒一律不带上一轮聊天正文（`HISTORY_LIMIT` 三个都置 0），只有 `reply`（带 ownMessageId）才按那条往回给全；`focusReminderSpec` 的 system 补“不拿钟点编时间、开场不接上一轮客套”，user 末尾追加“只说眼前这一件事、不重复上一轮、不把没答的问题换个说法再问”。钟点表、多轮口径、午休边界均未改。
+- 收尾重提旧话题（09:0x 实机，`focus:end` seq 1061）：她在专注里说了「知道了知道了」，自己已用 `reply` 接过（seq 1060），计时一到收尾又把同一句捡起来打趣一遍。原因就是收尾仍带最近两条正文——收尾只该收计时，不该重开刚聊完的话题。开场同理（接上一轮客套），走神提醒的场景话本就声明“不知道聊天内容”，喂正文自相矛盾。
+- 休息字段来源：拾光记 `RECORD_FIELDS` 放行 `breakKindAfter/shortBreakMinutes/longBreakMinutes`（此前只放行轮次与 planStatus），否则茶话会收尾时不知道该歇多久。
+- 语法：`node --check` 通过 index.js、lib/focus-companion.js、tests/focus-companion.test.js、tests/focus-routes.test.js 四份 JS。
+- `node --test --test-concurrency=1 --test-reporter=tap tests/focus-companion.test.js tests/focus-routes.test.js` → **28/28 通过**。`tests/proactive.test.js tests/awaiting.test.js tests/ui.test.js tests/compose.test.js tests/model.test.js tests/prompt.test.js tests/awaiting-routes.test.js tests/partner-feed.test.js` → **354/354 通过**。`tests/split.test.js tests/clock.test.js tests/reply-supersede-routes.test.js tests/avatar.test.js tests/memory.test.js tests/relationship.test.js tests/focus-companion.test.js tests/focus-routes.test.js` → **131/131 通过**。未跑全量、未用真实付费 API。
+- 四次修正均在模拟环境，不绕门禁：一次失败是把旧用例里钉死 `focusCompanion.active()` 的断言改成 `ongoing()`，随后回退时改回；另一处 `indexOf('autonomousGateNow')` 命中调用点而非定义点，已随回退一并删除该用例。
+- 拾光记侧：`tests/focus-companion.test.js` **7/7 通过**（多轮投影用例含长短休分钟数）。`tests/focus-routes.test.js` 与 `tests/focus-reminder.test.js` 各有 **1 个失败，均为本次改动之前就已存在**，与轮次字段投影无关：① `focus-routes` 的实 apply 子进程用 `spawnSync(node, ['--input-type=module','-e', childCode])` 跑一段内联代码，该代码里 `/第 1\/1 轮开始/` 的正则被模板字符串里的反斜杠吃掉，在 eval 时抛 `SyntaxError: Invalid regular expression flags`；② `focus-reminder` 的通知断言写死 `/第 1\/4 轮开始/`，而当前轮次文案是「第 1/1 轮开始」。把本次改动临时回退后两处仍同样失败，已复现对照，未在本次修（属另两个测试自身的转义与断言口径，不属本改动范围）。合计 20 例中 18 通过。
+- 三次修正都在模拟环境，不绕门禁：① 新增“只讲一件事”断言后旧用例仍写 `主动招呼对方进入状态`，改断言为 `招呼对方进入新一轮的状态`；② focus-routes 实 apply 用例仍断言开场带最近 6 条（7 条消息），按新口径改为 1 条，隐私断言原样保留；③ 历史条数取 0 时 `slice(0)` 是“从头给全”正好相反，改为 `count > 0 ? slice(-count) : []` 并钉进用例。收尾重提旧话题那次修正同样落在模拟环境：走神提醒断言由 3 条改为 1 条，并删去已不成立的“留两条语境”断言。
+- 待验证：陪读消息切条后的界面观感、开场是否不再接上一轮客套、收尾与走神是否不再自我复读、多轮口径是否真的露出来——均需重载后实机观察，本节不宣称已解决。
+
+## 陪读拿钟点与多轮口径（2026-10-14，本地开发）
+
+- 范围：`sendFocusReminder` 注入 `timeBlock`（与普通回复同一份，不另造）并对生成正文补 `stripTimeHeader`；`lib/focus-companion.js` 的 FIELDS 放行轮次字段、`focusReminderSpec` 按轮次出话。拾光记 `focus/state` 投影同步放行轮次字段。人格、计分、权限、manifest 版本、README 与简介未改。
+- 触发来源：2026-10-14 实机。早上 07:36 收到 `focusReminder.kind=end` 却说「晚安，好梦哟~」，07:38 收到 `kind=start` 的陪读开场却是「【2026年10月14日 7:36】早哦~醒了没得嘛…」并整段复述前一晚的对话。两条的 sessionId 与拾光记 `focus-sessions.dat` 完全对得上，确属陪读提醒，不是普通主动消息；标题前缀是模型照抄 `threadToMessages` 给隔夜消息加的 `【年月日 时:分】`，而这条路径不经过 `splitReply`，没人剥。
+- 语法：`node --check` 检查 index.js、lib/focus-companion.js、tests/focus-companion.test.js 及拾光记 lib/focus-companion.js、tests/focus-companion.test.js 五份 JS，全部通过。
+- 茶话会局部：`node --test --test-concurrency=1 --test-reporter=tap tests/focus-companion.test.js` → **22/22 通过**（新增多轮口径与钟点两组断言）。`tests/focus-routes.test.js tests/split.test.js tests/clock.test.js` → **32/32 通过**。`tests/compose.test.js tests/prompt.test.js tests/model.test.js tests/proactive.test.js tests/awaiting.test.js tests/reply-supersede-routes.test.js tests/avatar.test.js` → **220/220 通过**。`tests/ui.test.js tests/clock.test.js tests/split.test.js tests/focus-companion.test.js tests/focus-routes.test.js` → **191/191 通过**。未跑全量、未用真实付费 API。
+- 拾光记局部：`tests/focus-companion.test.js` 首轮 6/7 通过，新增多轮投影用例里 `longBreakEvery` 期望值写错（该字段刻意不投影）→ 改为断言 `undefined` 并写明理由，**7/7 通过**；`tests/focus-routes.test.js tests/focus-reminder.test.js` → **11/11 通过**。未跑全量。
+- 边界：轮次字段读不到时按单轮处理，不报错也不编数字；休息阶段仍不算进行中，不打断既有安静口径；`stripTimeHeader` 只认死形状，`【小声】`一类情绪方括号不动。真实语气自然度仍待实机观察，未在此宣称解决。
+
+## 自然陪读开场与自身回应（2026-10-13，本地开发）
+
+- 范围：focusReminderSpec分阶段自然表达；sendFocusReminder仅读自身6条/每条300字的role/text/at投影，背景通知与真话分开；/turns传自身消息ID；合并、冷却边界及旧稿检查。人格、计分、权限、manifest版本和其他伙伴知情破例口径不改。
+- 语法：`node --check`检查index.js、lib/focus-companion.js、tests/focus-companion.test.js、tests/focus-routes.test.js四份JS。局部命令：`node --test --test-concurrency=1 --test-reporter=tap tests/focus-companion.test.js tests/focus-routes.test.js`。PowerShell7，HANA_HOME/HOME/USERPROFILE/TEMP/TMP隔离到C盘系统临时根，所有模型/网络为模拟；未用真实付费API、未全量回归。
+- 首轮19/19通过；审查后增加外部阵次、自己排队过期和撤回场景，第一次22例中21通过/1失败：新撤回fixture未初始化已入住性格，因此0次模型调用（isSettled门禁），补真实入住前提及断言。单独复验再失败一次：错要求readAt必为空，实际既有主动查看可已读；改为撤回后旧稿不得新增已读标记，不抹去合法既有已读。两次失败均发生在模拟环境，不改业务绕过门禁或既有查看流程，最终同范围结果追加于下。
+- 正常对照与护栏：开始无接下约定、时间目标只作背景；自身确认冷却内仍接住、连发只读最新ID；自身确认30秒后首次外部闲聊仍提醒、持续外部聊天不重复；新自身话/撤回/暂停/换段/超过90秒让旧稿stale。归档流水计数非次数额度，不加上限、不放宽迟到窗口、不重试/换模型。
+- 真apply：实际模型请求带自身最多6条并截断原文到300字，不带附件/引用元数据或其他伙伴私聊；成功own回应绑定repliedTo并补已读；撤回旧稿无落盘回应、无新增已读、不亮failed；结束后普通聊天专注背景移除。模拟预置正文只证明接线和边界，开场/确认自然度仍待真实使用观察。
+- 只读交叉审查复核：修补自身污染外部水位及撤回语义后，无具体阻断；保留从入队算90秒的既定过期原则。该新增阵次边界未保留修补前失败回放，仅静态发现与修后场景验证，不倒推旧实机曾发生。
+- 最终同两文件 **22/22通过**，0失败/取消/跳过，约40.3秒；四份JS语法通过。正式extension_manager reload后inspect为host=on/agent=on；已加载不代表真实生成自然度已验收。
+
+## 专注知情与自主破例口径（2026-10-13，本地开发）
+
+- 仅替换focusChatText现有场景块与相应文字断言：无论劝回还是愿意陪聊都显出对专注约定知情，短聊可知情破例，性格与关系决定态度，不统一宠溺/纵容、不每轮机械劝或报状态。未改陪读主动提醒、隐私接线、队列和其他逻辑。
+- 两份改动JS语法通过；命令 `node --test --test-reporter=tap --test-name-pattern='其他伙伴只获当下目标|真apply联动' tests/focus-companion.test.js tests/focus-routes.test.js`，本次 **2/2通过**，0失败/取消/跳过，约2秒。PowerShell7，HANA_HOME/HOME/USERPROFILE/TEMP/TMP隔离到系统临时根；模型/网络是模拟。
+- 场景断言覆盖知情、可选破例、不统一性格与私聊边界；真apply验证新块进普通回复请求、陪读请求仍无对象/正文及结束后背景移除。未跑其他用例/全量或真实付费模型，旧231项不冒充本轮数量；真实感觉仍待实机观察。
+
+## 专注回应与quote出口（2026-10-13，本地修复）
+
+- 基线：匿名输入 `hello\n[/quote]\ncome back` 在修改前cleanVoice保留残片，隔离临时副本加载旧compose确认；属于输出后处理复现，不是真实模型重新生成。原实机回包及旧请求未完整留存，状态有效不等于证实旧请求含背景。
+- 命令：`node --test --test-concurrency=1 --test-reporter=tap tests/focus-companion.test.js tests/focus-routes.test.js tests/compose.test.js tests/prompt.test.js tests/split.test.js tests/model.test.js tests/proactive.test.js tests/awaiting.test.js tests/reply-supersede-routes.test.js`，最终 **231/231通过**，0失败/取消/跳过，约25.4秒；9份改动JS语法通过。PowerShell7，HANA_HOME/HOME/USERPROFILE/TEMP/TMP隔离到系统临时根，模型/网络为模拟。
+- 保留首轮：230/231通过，1失败是focusChatText旧字面断言仍要求“熟悉程度与关系”，新版已改为“性格与关系”；核实既有人格关系块未删后同步该断言，同范围复验231通过。首轮与最终TAP均在工作台 `_test_runs/chahuahui_focus_quote_20261013*.tap.log`，不抹掉首轮失败。
+- 覆盖：quote配对外壳/作者属性/独立残片去除且保留正文；[ok]/[img]/[不回]/字面讲解/普通符号不误伤；历史仅清伙伴模型副本，用户文本及原对象不变；真apply模拟从带quote回包到落盘无残片；专注场景状态参与、性格关系与未知私聊边界仍在。没有修改splitReply断句行为。
+- 交叉静态复核：无导入循环、不吞表情与安静出口；不添加其他标签族的泛化清洗。收尾移除一条过度针对样本的问话禁令，仅保留状态参与要求；对应单条场景断言1/1与模块语法复验通过。已提醒判断仍来自既有近期对话，不新增阵次追踪；窗口滚动后可能再次提醒，不宣称跨窗口强去重。
+- reply.focus.context只证明应用在调用前拼入与否，不证明provider实际收到或生成已遵循，重试可能有多条记录。未跑全量、真实付费模型/API或新的人工语气验收；旧账本与已显示异常气泡没有改写，运行态见PROJECT_LOG。
+
+## 专注期间闲聊感知与连续聊天合并（2026-10-13，本地开发）
+
+- 修改范围：`index.js` 普通回复调用模型前动态追加有效专注目标；`lib/focus-companion.js` 的闲聊提醒口径、连续聊天阵次和在途时效。拾光记现有受管状态服务已足够，未改其源码、共享快照、manifest、权限或两边版本。
+- 两个专注文件先验 **15/15通过**；四个改动JS的 `node --check` 通过。
+- 相关命令：`node --test --test-concurrency=1 --test-reporter=tap tests/focus-companion.test.js tests/focus-routes.test.js tests/model.test.js tests/prompt.test.js tests/proactive.test.js tests/awaiting.test.js tests/reply-supersede-routes.test.js`，首轮 **177/177通过**，0失败/取消/跳过，约22.8秒。审查补充开场暂停恢复、排队过期以及结束后第五次失败保留断言后，最终 **178/178通过**，0失败/取消/跳过，约25.5秒。四个最终JS语法检查通过。首轮、审查轮与最终完整TAP均保留，本机工作台 `_test_runs/chahuahui_focus_20261013_final.tap.log` 为最终结果。PowerShell 7执行，`HANA_HOME/HOME/USERPROFILE/TEMP/TMP` 均隔离到本机系统临时根，模型与网络为模拟出口。
+- 验证：每60秒发言持续超过旧冷却仍只提醒一次；发言间隔恰满90秒算新阵；超过旧三次上限仍能招呼新阵；重载保留合并、旧账本升级保守合并、新专注段重置。生成中暂停再恢复与超过90秒旧稿均判stale，不算模型失败、不自动重试；旧开场不补发、排队过期不调用模型。第五次提醒失败及结束后该失败仍可见有断言；保存结束阵次数，旧已结束账本兼容原三次状态。
+- 真apply/真实临时磁盘模拟：其他伙伴请求含目标与ta的配置性格/关系，私聊正文只进ta自己的messages；陪读请求不含另一位伙伴名字或私聊关键词且要求主动招呼。陪读普通闲聊抑制、普通主动暂停、结束后普通回复不带专注背景均覆盖。
+- 未跑全量回归、真实付费模型/API或人工实机语气验收。178条只代表本次直接相关范围，不代表全应用全绿或真实表达已自然；运行重载证据另见PROJECT_LOG。
+
+## 实机目录合并后全量回归（2026-10-13）
+
+- 使用 Windows PowerShell 7.5.1；串行枚举并运行 `tests/` 下全部 85 个 `*.test.js` 文件：`$tests = Get-ChildItem tests -Filter '*.test.js' -File | ForEach-Object FullName; node --test --test-concurrency=1 --test-reporter=tap @tests`。
+- `HANA_HOME`、`HOME`、`USERPROFILE`、`TEMP`、`TMP` 隔离到本机系统临时目录的独立测试根；没有调用真实付费模型/API。
+- **最终 1417/1417 通过**，0 失败、取消、跳过，耗时约 34.2 秒。完整 TAP：`L:\哈娜的工作台\_test_runs\chahuahui_full_retry_20261013_151617.tap.log`。
+- 诊断记录：首次把测试临时根放在工作台 `L:` 时 1413/1417 通过，4 个失败中有两项是临时账本 `renameSync` 的 `EPERM`，另有一项模型等待超时和一项数量上限断言失败；将这四个文件单独移到本机系统临时目录复验后 101/101 通过，再在同一临时目录完成全量 1417/1417。证据指向首轮临时路径/环境差异，但底层原因未单独证实，不据此归因于应用或安全软件。
+- 首轮与专项 TAP 保留在工作台 `_test_runs`；测试隔离目录已清理。源码、未提交工作区内容及 `manifest.version=0.7.533` 未因测试改变。
+
+## 陪读头像尺寸闸抬高（2026-10-13，本地开发）
+
+- `lib/focus-companion.js` 的 `MAX_AVATAR_BYTES` 512KB→6MB：宿主伙伴头像实为 1~2MB，旧闸把真图全挡掉、拾光记只剩首字。头像判定仍共用 `resolvePartnerAvatar`（自己的头像优先，没有的走按「缘」默认脸）。
+- 命令：`node --test --test-reporter=tap tests/focus-companion.test.js tests/avatar.test.js`，**29/29 通过**，零失败/取消/跳过；两个修改JS语法通过。
+- 断言调整：尺寸用例新增 1~2MB 正例（必须过）、7MB 超限负例（仍空），并将 `huge` 加入名单使超限闸真正被测到。
+- **实机验收（2026-10-13）**：拾光记重载后专注页伙伴头像正常显示，本 App 诊断日志同步印证八位伙伴头像均读到（真图 + 默认脸）。bus 承载 ~3MB base64 载荷已实机确认。
+
+## 拾光记头像选人服务（2026-10-13，本地开发）
+
+- 仅新增focus/avatar受管服务接线，头像规则提取为resolvePartnerAvatar，原页面头像路由与服务共用；本地角色只取本地导入图，宿主伙伴沿用头像/按缘默认脸。不读私聊正文，不修改提示词、关系、权限或版本。
+- 仅允许拾光记调用、合法id且处于陪读名单；512KB限制，空图返回null。拾光记代理另验证图魔数/MIME匹配、no-store及不透传路径错误。
+- 主会话命令：`node --test --test-reporter=tap tests/focus-companion.test.js tests/focus-routes.test.js tests/avatar.test.js`。最终 **30/30通过**，0失败/取消/跳过，3个修改JS语法检查通过。
+- 无全量回归、真实模型/API或宿主跨App头像验收；版本保留0.7.533。正式重新加载结果见PROJECT_LOG。
+
+## 专注陪伴联动（2026-10-12，本地开发，不升版本）
+
+- 依赖拾光记的限定调用方服务；不读取其他伙伴私聊正文，只接收本段目标/所选伙伴/时间，以及茶话会发言事件。独立场景提示保留性格；普通主动、等回音、投喂及伙伴主动动作在最终写入点受专注门约束，不覆盖既有设置。
+- 命令：`node --test --test-reporter=tap tests/focus-routes.test.js tests/focus-companion.test.js tests/model.test.js tests/proactive.test.js tests/awaiting.test.js tests/reply-supersede-routes.test.js tests/ui.test.js`；最终 **271/271通过**，0失败/取消/跳过。此前268通过，随后新增跨实例认领、结束失败状态及生成迟到拦截三项。迟到守卫后首轮270通过/1失败：旧用例仍将生成中结束判为failed，而当前正确语义为stale；核实场景后更新旧断言，相关范围复验271通过。相关6个JS语法检查通过。
+- 新控制器测试覆盖开始/暂停/继续/结束、1.5秒合并、90秒冷却/最多三次、持久防重复、跨实例排他文件认领、结束失败在无active时仍可见、旧开始不补发、调用方隔离。真apply模拟集成覆盖伙伴既有人格/所选模型、其他私聊关键词不进提醒请求、选中伙伴普通回复抑制、其他伙伴正常回复、普通主动暂停。最终投喂/戳写入门与戳阻断不记额度另有源码接线断言；并非所有异步竞态都做了行为注入。
+- 保留首轮失败：模拟模型调用对象误读 `.systemPrompt/messages`，实际应为 `.request.systemPrompt/messages`；主动tick返回需读 `.body.result.reason`，均为测试接线修正。首次较宽相关范围reply-supersede出现“3 !== 2”；无专注时避免多一次跨App等待后，窄与相关范围复验通过，但没有修改前稳定复现证据，不将首轮失败根因宣称已证实。
+- 模型提醒关闭自动重试与utility fallback，保留原模型；成功/失败/未知送达状态独立保存，不用自动重投增加费用。跨实例claim使用本App数据目录内哈希文件排他创建，无正文；历史claim不主动删除。超时/停机后的pending只代表未确认送达。
+- 两App官方静态校验均0错误/1警告（动态依赖/运行时加载未证明）；初次调用校验器漏 `--dir`，按其Usage修正后通过。一次遗漏显式TAP导致输出筛选为空，未据退出0报告数量，重新显式TAP取到上述有效计数。
+- 未做全量回归、真实付费模型/API、实际MiniMax短输出与两App实机互调/视觉验收。仅静态与模拟通过，不宣称真实提醒自然度或整个应用全绿。运行态另见PROJECT_LOG。
+
 ## v0.7.532–533 · 主动由头与新对象轻介绍（2026-10-12傍晚）
 
 - 范围：主动理由选择、关系双轨/性格权重、独立联系表达、实际已介绍记录、兴趣既有clarity入口、发送接线与直接相关回归。普通回复、频率/限额/静默、关系记账算法和模型预算未改。
