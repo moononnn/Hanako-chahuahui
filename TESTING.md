@@ -1,5 +1,11 @@
 # TESTING · 茶话会
 
+## 联动吐槽的事情坐标（2026-10-14，本地开发）
+
+- `node --check lib/compose.js` 与 `node --check tests/conversation-grounding.test.js` 通过。
+- `node --test --test-concurrency=1 tests/conversation-grounding.test.js tests/compose.test.js`：54/54通过，0失败/取消/跳过，约0.54秒；覆盖已有背景归属/事实/日期与模型拼装，追加新题对象坐标、本来知晓/非刚获知、同题不重复以及不复述工作结论的静态契约。
+- `git diff --check -- lib/compose.js tests/conversation-grounding.test.js` 通过。未全量、未真实模型调用；静态规则在场不代表实际措辞合格，真实主动表达待观察。
+
 ## 跨夜专注不是缺陷：暂停态不结算（2026-10-14 排查结论）
 
 - 现象：`09ac5d4b`（读书，10-13 19:44:43 开始，15 分钟）于 10-14 07:36:51 才结算，`status=interrupted`、`durationMs=477590`（7.96 分钟），一度被当成“过夜卡住未结算”。
@@ -92,7 +98,7 @@
 
 - 使用 Windows PowerShell 7.5.1；串行枚举并运行 `tests/` 下全部 85 个 `*.test.js` 文件：`$tests = Get-ChildItem tests -Filter '*.test.js' -File | ForEach-Object FullName; node --test --test-concurrency=1 --test-reporter=tap @tests`。
 - `HANA_HOME`、`HOME`、`USERPROFILE`、`TEMP`、`TMP` 隔离到本机系统临时目录的独立测试根；没有调用真实付费模型/API。
-- **最终 1417/1417 通过**，0 失败、取消、跳过，耗时约 34.2 秒。完整 TAP：`L:\哈娜的工作台\_test_runs\chahuahui_full_retry_20261013_151617.tap.log`。
+- **最终 1417/1417 通过**，0 失败、取消、跳过，耗时约 34.2 秒。完整 TAP：工作台 `_test_runs` 目录下的 `chahuahui_full_retry_20261013_151617.tap.log`。
 - 诊断记录：首次把测试临时根放在工作台 `L:` 时 1413/1417 通过，4 个失败中有两项是临时账本 `renameSync` 的 `EPERM`，另有一项模型等待超时和一项数量上限断言失败；将这四个文件单独移到本机系统临时目录复验后 101/101 通过，再在同一临时目录完成全量 1417/1417。证据指向首轮临时路径/环境差异，但底层原因未单独证实，不据此归因于应用或安全软件。
 - 首轮与专项 TAP 保留在工作台 `_test_runs`；测试隔离目录已清理。源码、未提交工作区内容及 `manifest.version=0.7.533` 未因测试改变。
 
