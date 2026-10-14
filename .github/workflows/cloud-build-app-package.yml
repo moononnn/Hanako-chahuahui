@@ -1,0 +1,165 @@
+# 云端构建最终官方 App 包（模板，由 cloud/install-workflow.mjs 装进目标仓库）
+#
+# 三条硬规矩，改之前先读完：
+#  1. 只有 workflow_dispatch。没有 push 触发，也不建 Release、不推 tag、不碰市场。
+#     产物只作为 workflow artifact 落下来，发布仍由本地主引擎按发布契约执行。
+#  2. 缓存只缓存「官方工具链分发包的下载」，key 就是 pin 住的 sha256；
+#     恢复后照样重算 sha256 校验 —— 缓存命中不等于门禁通过。
+#  3. 私名红线词表不设 secret、不上传。只在本机用；云端只跑形态检查，
+#     产物证据里固定写 candidateOnly=true / releasable=false。
+#     job 绿只代表“候选包构建成功”，不代表可发布。
+#
+# 另：平台审批 Builder 不能由本流程自动代批准。任何需要人批准的步骤都停住等人。
+
+name: cloud-build-app-package
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: '要构建的 ref（tag / commit）'
+        required: false
+        default: ''
+        type: string
+      reason:
+        description: '这次构建的原因（写进证据）'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: 检出干净 checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: 装 Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: 读便携配置与 pin
+        id: pin
+        run: |
+          $cfg = Get-Content -LiteralPath '.cloud-build\config.json' -Raw | ConvertFrom-Json
+          $pin = $cfg.toolchain.pin
+          "sha256=$($pin.sha256)"        >> $env:GITHUB_OUTPUT
+          "size=$($pin.size)"            >> $env:GITHUB_OUTPUT
+          "version=$($pin.version)"      >> $env:GITHUB_OUTPUT
+          "platform=$($pin.platform)"    >> $env:GITHUB_OUTPUT
+          "file=$($pin.file)"            >> $env:GITHUB_OUTPUT
+          "mirrors=$($pin.mirrors -join '|')" >> $env:GITHUB_OUTPUT
+          "channelManifest=$($pin.channelManifest)" >> $env:GITHUB_OUTPUT
+          Write-Host "pin: $($pin.version) $($pin.sha256)"
+
+      - name: 恢复官方工具链分发包缓存
+        uses: actions/cache@v4
+        with:
+          path: .cache/hanaserver.tar.gz
+          key: hana-toolchain-${{ steps.pin.outputs.sha256 }}
+          # 命中也不跳过校验：下一步照样算 sha256
+
+      - name: 下载官方工具链分发包（固定公开版本）
+        if: hashFiles('.cache/hanaserver.tar.gz') == ''
+        run: |
+          $file = "${{ steps.pin.outputs.file }}"
+          $dest = '.cache/hanaserver.tar.gz'
+          New-Item -ItemType Directory -Force -Path '.cache' | Out-Null
+          $urls = @("https://dl.openhanako.com/$file") +
+                  ("${{ steps.pin.outputs.mirrors }}" -split '\|' | ForEach-Object { "$_/$file" })
+          $ok = $false
+          foreach ($u in ($urls | Select-Object -Unique)) {
+            try {
+              Write-Host "下载 $u"
+              Invoke-WebRequest -Uri $u -OutFile $dest -UseBasicParsing
+              $ok = $true; break
+            } catch { Write-Warning "$u 失败：$($_.Exception.Message)" }
+          }
+          if (-not $ok) { throw '所有公开镜像都下载失败' }
+
+      - name: 校验分发包 sha256（缓存命中也走这里）
+        run: |
+          $actual = (Get-FileHash -LiteralPath '.cache/hanaserver.tar.gz' -Algorithm SHA256).Hash.ToLower()
+          $want = "${{ steps.pin.outputs.sha256 }}".ToLower()
+          if ($actual -ne $want) { throw "分发包 sha256 不符：实际 $actual，pin $want" }
+          $size = (Get-Item -LiteralPath '.cache/hanaserver.tar.gz').Length
+          if ("$size" -ne "${{ steps.pin.outputs.size }}") { throw "分发包大小不符：$size" }
+          Write-Host "sha256 OK $actual"
+
+      - name: 解包工具链并设定 HANA_APP_TOOLS_ROOT
+        run: |
+          New-Item -ItemType Directory -Force -Path '.cache/tools' | Out-Null
+          tar -xzf '.cache/hanaserver.tar.gz' -C '.cache/tools'
+          # 分发包里 scripts/ 与包根同级；向上找到含 scripts\extension-pack.mjs 的那层
+          $found = Get-ChildItem -LiteralPath '.cache/tools' -Recurse -Filter 'extension-pack.mjs' -File |
+                   Where-Object { $_.Directory.Name -eq 'scripts' } | Select-Object -First 1
+          if (-not $found) { throw '解包里没有 scripts\extension-pack.mjs' }
+          $root = Split-Path -Parent $found.Directory.FullName
+          # 安装态的 .verified 未必随分发包携带；仅在此已重新核验的归档上生成构建态证明。
+          $archiveSha = (Get-FileHash -LiteralPath '.cache/hanaserver.tar.gz' -Algorithm SHA256).Hash.ToLower()
+          if ($archiveSha -ne "${{ steps.pin.outputs.sha256 }}".ToLower()) { throw '解包前后归档指纹发生变化' }
+          $proof = @{ version = "${{ steps.pin.outputs.version }}"; platformArch = "${{ steps.pin.outputs.platform }}"; sha256 = $archiveSha; source = 'pinned archive verified by workflow' }
+          $verifiedPath = Join-Path $root '.verified'
+          if (Test-Path -LiteralPath $verifiedPath) {
+            $existing = Get-Content -LiteralPath $verifiedPath -Raw | ConvertFrom-Json
+            if ($existing.sha256 -ne $archiveSha) { throw '分发目录既有证明与归档不一致' }
+          } else {
+            [IO.File]::WriteAllText($verifiedPath, ($proof | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+          }
+          "HANA_APP_TOOLS_ROOT=$root" >> $env:GITHUB_ENV
+          Write-Host "HANA_APP_TOOLS_ROOT=$root"
+
+      - name: 跑云端门禁与官方打包
+        run: |
+          New-Item -ItemType Directory -Force -Path 'out' | Out-Null
+          node .cloud-build\pack.mjs `
+            --checkout . `
+            --out out `
+            --config .cloud-build `
+            --tools-root $env:HANA_APP_TOOLS_ROOT `
+            --require-commit
+          # 注意：本步 exit 0 = 候选包构建成功，不是发布许可。
+          # 真正可发布的判定在本机：下载本 artifact → 本地词表私名扫描 → 审查 → 安装 → 才上传。
+
+      - name: 证据摘要
+        if: always()
+        run: |
+          if (Test-Path 'out\cloud-build.json') {
+            $e = Get-Content -LiteralPath 'out\cloud-build.json' -Raw | ConvertFrom-Json
+            Write-Host "项目      : $($e.project.id)@$($e.project.version)"
+            Write-Host "候选包    : candidateOnly=$($e.candidateOnly)  releasable=$($e.releasable)"
+            Write-Host "隐私证明  : privacyProven=$($e.privacyProven)（云端永远为 false，私名扫描在本机做）"
+            if ($e.zip) { Write-Host "zip sha256: $($e.zip.sha256)  $($e.zip.size) bytes  $($e.zip.entries) 条目" }
+            if ($e.violations.Count) {
+              Write-Host "门禁未过  :"
+              $e.violations | ForEach-Object { Write-Host "  - $_" }
+            }
+          } else { Write-Warning '没有产出 cloud-build.json' }
+
+      - name: 上传候选包（仅 artifact，不发布）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-app-package-${{ github.run_id }}
+          path: |
+            out/pack/*.zip
+            out/pack/*.entry.json
+            out/cloud-build.json
+          if-no-files-found: warn
+          retention-days: 30

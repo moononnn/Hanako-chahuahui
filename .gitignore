@@ -27,3 +27,6 @@ node_modules/
 _backups/
 *.zip
 *.bak
+
+# 云构建模块的安装登记清单（本机生成，不进仓库）
+.installed-by.json

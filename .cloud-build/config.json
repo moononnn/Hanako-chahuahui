@@ -1,0 +1,141 @@
+{
+  "schema": 1,
+  "project": {
+    "id": "chahuahui",
+    "name": "茶话会",
+    "kind": "app",
+    "version": "0.8.0",
+    "repoUrl": "moononnn/Hanako-chahuahui"
+  },
+  "publisher": "moononnn & 小花",
+  "source": {
+    "roots": [
+      "."
+    ]
+  },
+  "checks": {
+    "testCommands": [],
+    "deferredTo": "existing-ci + local precise verify"
+  },
+  "package": {
+    "topLevel": "chahuahui",
+    "entry": "index.js",
+    "include": [],
+    "excludeDirs": [
+      "tests",
+      "node_modules",
+      ".git",
+      ".github",
+      "_backups",
+      ".cloud-build",
+      ".cache",
+      "out"
+    ],
+    "excludeFiles": [
+      "PENDING_CHANGES.md",
+      "PUBLISHING.md",
+      "PROJECT_LOG.md",
+      "TESTING.md",
+      "PROMPT_OPTIMIZATION.md",
+      "lib/reply-rule-probe.js",
+      "tests/reply-rule-probe.test.js",
+      ".gitignore",
+      ".gitattributes",
+      ".installed-by.json",
+      "data.json",
+      "preferences.json",
+      "probe-result.json"
+    ],
+    "excludeGlobs": [
+      "DESIGN-*.md",
+      "PLAN-*.md",
+      "*.log",
+      "*.tmp",
+      "analysis-*.json",
+      "taste-*.json",
+      "*.corrupt-*",
+      ".corrupt-*"
+    ]
+  },
+  "devOnly": {
+    "targets": [
+      "index.js"
+    ],
+    "startMark": "// __CHAHUAHUI_DEV_ONLY__",
+    "endMark": "// __CHAHUAHUI_DEV_ONLY_END__",
+    "residue": [
+      "DEV_TOOLS",
+      "内测",
+      "/probe",
+      "/notify/test",
+      "/proactive/tick",
+      "tasteProbe",
+      "analyzePersonalityOnce",
+      "startPersonalityAnalysis",
+      "chahuahui_ping",
+      "chahuahui_taste_probe"
+    ],
+    "replacements": [
+      {
+        "file": "CHANGELOG.md",
+        "from": "DEV_TOOLS",
+        "to": "内测开关"
+      }
+    ]
+  },
+  "privacy": {
+    "redlineSource": "local-only（云端不持有词表；本机用 projects/<id>.json 的 redline 扫）",
+    "textExtensions": [
+      ".js",
+      ".mjs",
+      ".cjs",
+      ".json",
+      ".md",
+      ".html",
+      ".css",
+      ".txt",
+      ".yml",
+      ".yaml",
+      ".ps1"
+    ],
+    "allowedNames": [
+      "小花",
+      "moononnn",
+      "Hanako",
+      "Moonon"
+    ]
+  },
+  "resources": {
+    "manifestFile": "manifest.json",
+    "bases": [
+      "",
+      "ui/"
+    ],
+    "pointers": [
+      "icon",
+      "contributes.cards[].face.image",
+      "contributes.cards[].pageIcon",
+      "contributes.cards[].route"
+    ]
+  },
+  "output": {
+    "archiveBaseName": "app-chahuahui-{version}",
+    "zipExtension": ".zip"
+  },
+  "toolchain": {
+    "packScript": "scripts/extension-pack.mjs",
+    "pin": {
+      "channel": "beta",
+      "channelManifest": "https://dl.openhanako.com/channels/beta.json",
+      "version": "1.1.0-beta",
+      "platform": "win32-x64",
+      "file": "server-1.1.0-beta-win32-x64.tar.gz",
+      "sha256": "a9644df9c7a5e8ea3ae94667c7b3713a453568f8b89275b00f3690d9098d45bd",
+      "size": 241206113,
+      "mirrors": [
+        "https://dl.openhanako.com",
+        "https://github.com/liliMozi/openhanako/releases/download/train-beta-37"
+      ]
+    }
+  }
+}
