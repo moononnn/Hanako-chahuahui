@@ -1241,7 +1241,8 @@
       for (const profile of Object.values(PROFILES)) {
         const opt = document.createElement("option");
         opt.value = profile.id;
-        opt.textContent = `${profile.label}·${profile.hint}`;
+        // 下拉里只写名字（2026-10-14 实机反馈：那句音色解释多余）。想知道什么感觉，去试听页听。
+        opt.textContent = profile.label;
         sel.appendChild(opt);
       }
       sel.value = current ?? (withFollow ? "" : DEFAULT_PROFILE_ID);
@@ -2264,6 +2265,8 @@
           if (row.quote) item.appendChild(rNode("em", "review-quote", `档案里写着：${row.quote}`));
           if (row.why) item.appendChild(rNode("p", "", row.why));
           if (row.direction) item.appendChild(rNode("p", "review-direction", `往哪改：${row.direction}`));
+          // 改好之后大概长什么样：只说「哪里松」是医生只报病不给药，带一句能念出来的样子才算真说清。
+          if (row.example) item.appendChild(rNode("p", "review-example", `大概会是这样：${row.example}`));
           list.appendChild(item);
         }
         card.appendChild(list);
@@ -2749,6 +2752,74 @@
         footerNote.hidden = true;
       }
       detailPanels.personality.appendChild(personCard);
+
+      // ── 设定文件用量：超预算的那部分到底被砍在哪，写卡的人以前完全看不到 ──
+      const usageCard = detailCard(
+        "ta 的设定文件进来多少",
+        "每份设定文件都有字数上限，超出的部分这次聊天里 ta 读不到。这里把实际用量摊开给你看。",
+      );
+      const usageNote = document.createElement("p");
+      usageNote.className = "loading-note";
+      usageNote.textContent = "正在看 ta 的设定文件…";
+      usageCard.appendChild(usageNote);
+      const usageBody = document.createElement("div");
+      usageBody.className = "persona-usage";
+      usageBody.hidden = true;
+      usageCard.appendChild(usageBody);
+      const usageQuiet = document.createElement("p");
+      usageQuiet.className = "empty-note";
+      usageQuiet.textContent = "还没找到 ta 的设定文件。";
+      usageQuiet.hidden = true;
+      usageCard.appendChild(usageQuiet);
+      detailPanels.personality.appendChild(usageCard);
+      void (async () => {
+        try {
+          const res = await api("GET", `persona-usage/${encodeURIComponent(agentId)}`);
+          if (requestSeq !== partnerRequestSeq || currentId !== agentId) return;
+          usageNote.remove();
+          const rows = (res?.usage?.files ?? []).filter((row) => row.status !== "empty");
+          if (!rows.length) { usageQuiet.hidden = false; return; }
+          const fmt = (n) => `${n} 字`;
+          for (const row of rows) {
+            const item = document.createElement("div");
+            item.className = `persona-usage-row${row.status === "trimmed" ? " trimmed" : ""}`;
+            const name = document.createElement("span");
+            name.className = "persona-usage-name";
+            name.textContent = row.label;
+            const num = document.createElement("span");
+            num.className = "persona-usage-num";
+            num.textContent = `${fmt(row.chars)} / 上限 ${fmt(row.budget)}`;
+            item.append(name, num);
+            const track = document.createElement("span");
+            track.className = "persona-usage-track";
+            const fill = document.createElement("i");
+            const ratio = row.budget > 0 ? Math.min(1, row.chars / row.budget) : 0;
+            fill.style.width = `${Math.max(4, Math.round(ratio * 100))}%`;
+            if (row.status === "trimmed") fill.className = "over";
+            track.appendChild(fill);
+            item.appendChild(track);
+            usageBody.appendChild(item);
+            if (row.status === "trimmed") {
+              const cut = document.createElement("p");
+              cut.className = "persona-usage-cut";
+              cut.textContent = row.droppedHead
+                ? `超出的 ${fmt(row.dropped)} 没被读到。从这里开始的：${row.droppedHead}…`
+                : `超出的 ${fmt(row.dropped)} 没被读到。`;
+              usageBody.appendChild(cut);
+            }
+          }
+          if (!res?.usage?.trimmedCount) {
+            const allIn = document.createElement("p");
+            allIn.className = "empty-note";
+            allIn.textContent = "这些都完整进去了，没有砍掉的部分。";
+            usageBody.appendChild(allIn);
+          }
+          usageBody.hidden = false;
+        } catch {
+          if (requestSeq !== partnerRequestSeq || currentId !== agentId) return;
+          usageNote.textContent = "没读出来，等一会儿再打开这一页看看。";
+        }
+      })();
 
       const resetCard = detailCard("重新开始", "保留 ta 现在的性格、性格分析和基础设置，清掉聊天记录，以及从相处里长出来的记忆、关系和话题。这个动作不能撤回。");
       const resetActions = document.createElement("div");

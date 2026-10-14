@@ -6,7 +6,12 @@
      --dd-thumb       滚动条滑块
      --dd-thumb-hover 滚动条滑块 hover
    用法：配合 beautify-select.js，对原生 <select> 调用 beautifySelect(sel) */
-.dd { position: relative; min-width: 0; }
+/* min-width 给在包裹层，不在面板：面板靠 left:0; right:0 跟着触发栏走，
+   一旦单独给面板限宽，两边就不再相等，看着别扭（面板更宽或更窄都别扭）。
+   原生 select 的固有宽度按「所有选项里最长的那个」算，所以只要还有一个长选项就不会塌；
+   但如果一个下拉的选项全是两三个字的短名（茶话会提示音七个音色就是），它会缩成两个字宽，
+   面板也跟着只剩几十像素，选项全被省略号吃掉。先把触发栏垫到能放下文字，面板自然一样宽。 */
+.dd { position: relative; min-width: 120px; }
 .dd-native { display: none; }
 .dd-trigger {
   width: 100%; min-height: 38px;

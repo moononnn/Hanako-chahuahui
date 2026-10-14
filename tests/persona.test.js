@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { extractDialectBlock, personaSeedText, renderPersona } from "../lib/persona.js";
+import { extractDialectBlock, personaSeedText, renderPersona, readPersonaUsage, PERSONA_BUDGET } from "../lib/persona.js";
 
 test("取料：identity 是正主，没有就往下退到自我介绍、对外那份、钉选", () => {
   assert.equal(personaSeedText({ identity: "我是 X" }).key, "identity");
@@ -81,4 +81,64 @@ test("模板占位符换成真名：{{agentName}} 没渲染过时不能拿空名
   assert.doesNotMatch(text, /\{\{/);
   const half = renderPersona({ files: { identity: "我是{{char}}" } }, { partnerName: "小七" });
   assert.match(half, /我是小七/);
+});
+
+/** 假 ctx：按相对路径回文件内容，读不到就报同一个错，跟真资源层一样。 */
+function fakeCtx(files) {
+  return {
+    resources: {
+      read: async ({ path: p }) => {
+        const key = Object.keys(files).find((k) => p.endsWith(k.replace(/\\/g, "/")));
+        if (!key) return { error: "not found" };
+        return { content: files[key] };
+      },
+    },
+  };
+}
+
+test("用量盘点：没超的照实报，超了的把砍掉多少和砍在哪儿一起报出来", async () => {
+  const ctx = fakeCtx({
+    "identity.md": "人".repeat(120),
+    "AGENTS.md": `<!-- biaoqingbao-dialect:start -->${"话".repeat(30)}<!-- biaoqingbao-dialect:end -->`,
+  });
+  const usage = await readPersonaUsage(ctx, { agentsRoot: "/agents", agentId: "hanako" });
+  const identity = usage.files.find((row) => row.key === "identity");
+  assert.equal(identity.chars, 120);
+  assert.equal(identity.budget, PERSONA_BUDGET.identity);
+  assert.equal(identity.status, "ok");
+  assert.equal(identity.dropped, 0);
+
+  // 方言只算标记里那块，不拿整份 AGENTS.md 的长度吓人
+  const dialect = usage.files.find((row) => row.key === "dialect");
+  assert.equal(dialect.chars, 30);
+  assert.equal(dialect.status, "ok");
+});
+
+test("用量盘点：超预算的那份标成 trimmed，并摘出被砍掉那段的开头", async () => {
+  const limit = PERSONA_BUDGET.description;
+  const head = "头".repeat(limit);
+  const tail = "被砍掉的重点内容";
+  const ctx = fakeCtx({ "description.md": head + tail });
+  const usage = await readPersonaUsage(ctx, { agentsRoot: "/agents", agentId: "hanako" });
+  const row = usage.files.find((item) => item.key === "description");
+  assert.equal(row.status, "trimmed");
+  assert.equal(row.dropped, tail.length);
+  assert.equal(usage.trimmedCount, 1);
+  assert.match(row.droppedHead, /^被砍掉的重点内容/);
+});
+
+test("用量盘点：没写的算空、读不到算读不到，不当成超了", async () => {
+  const usage = await readPersonaUsage(fakeCtx({ "identity.md": "有人格" }), { agentsRoot: "/agents", agentId: "hanako" });
+  const empty = usage.files.find((row) => row.key === "pinned");
+  assert.equal(empty.status, "empty");
+  assert.equal(empty.dropped, 0);
+  // AGENTS.md 压根不存在时方言读不到，但其余照样盘得出来
+  assert.equal(usage.files.length, 7);
+  assert.equal(usage.files.filter((row) => row.status === "trimmed").length, 0);
+});
+
+test("用量盘点：编号不合法直接空盘，不去拼路径", async () => {
+  const usage = await readPersonaUsage(fakeCtx({ "identity.md": "x" }), { agentsRoot: "/agents", agentId: "../etc" });
+  assert.deepEqual(usage.files, []);
+  assert.equal(usage.trimmedCount, 0);
 });

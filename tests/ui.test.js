@@ -2270,9 +2270,28 @@ test("并排小卡要给宿主那排窗口按钮让位，整页打开时不留�
   assert.match(panel, /applySlotSafeArea\(hana\.lifecycle\?\.getSnapshot\?\.\(\)\)/, "开页先按当前形态摆一次，不能等下一次快照");
   assert.match(panel, /hana\.lifecycle\?\.subscribe\?\.\(applySlotSafeArea\)/);
   assert.match(css, /body\.slot-embedded \{ --host-safe-top: 36px;/, "顶上要空出一条带，宿主那排按钮才不会盖住我们的控件");
-  assert.match(css, /body\.slot-embedded \.shell \{ padding-top: calc\(var\(--shell-pad-top\) \+ var\(--host-safe-top\)\); \}/);
+  assert.match(css, /body\.slot-embedded \.shell \{\s*padding: 0;/, "外壳不叠额外间距，安全区由同一个头部提供");
+  assert.match(css, /body\.slot-embedded \.chat-head \{ padding-top: calc\(13px \+ var\(--host-safe-top\)\); \}/, "头像控件仍让出36px宿主按钮区");
+  assert.match(panel, /<div class="chat-head">\s*<div class="slot-band">/, "标题与头像栏在同一个头部共享磨砂");
+  assert.doesNotMatch(css, /\.slot-band[^{}]*::before/, "标题带不再单独画一层不同取景的磨砂");
+  assert.match(css, /body\.slot-embedded \.chat \{\s*background-image: none !important;[\s\S]*?background-color: transparent;[\s\S]*?border-radius: 0;/, "嵌入聊天窗不再独立裁背景或切出圆角缺口");
+  assert.doesNotMatch(css, /--shell-pad-top|body\.slot-embedded \.friends-head/, "展板标题不重复让出宿主安全区");
   assert.match(css, /body\.slot-embedded \.settings-view,\nbody\.slot-embedded \.favorites-view \{ top: calc\(12px \+ var\(--host-safe-top\)\); \}/, "绝对定位的浮层不跟着 padding 走，得单独挪");
   assert.doesNotMatch(css, /\.shell \{ padding-top: 3\dpx/, "不能让整页也背上这条带");
+});
+
+test("并排输入栏柔和收边且最后消息停在清晰区，不裁浮层", () => {
+  const css = fs.readFileSync(new URL("../ui/assets/panel.css", import.meta.url), "utf8");
+  const bottom = css.match(/body\.slot-embedded \.chat\.has-bg \.composer::before \{([^}]+)\}/)?.[1];
+  assert.ok(bottom, "保留底栏柔和收边");
+  assert.match(css, /--composer-fade: 48px;/);
+  assert.match(css, /body\.slot-embedded \.chat\.has-bg \.stream \{\s*padding-bottom: calc\(var\(--composer-fade\) \+ 12px\);/, "最后消息预留距离大于渐隐范围");
+  assert.match(bottom, /inset: calc\(-1 \* var\(--composer-fade\)\) 0 0;/, "雾与安全距离共用同一尺寸");
+  assert.match(bottom, /mask-image: linear-gradient/);
+  assert.match(bottom, /pointer-events: none;/, "底色不拦截输入控件");
+  const composer = css.match(/body\.slot-embedded \.chat\.has-bg \.composer \{([^}]+)\}/)?.[1] ?? "";
+  assert.match(composer, /backdrop-filter: none;/);
+  assert.doesNotMatch(composer, /overflow:\s*(hidden|clip)/, "表情抽屉和回底按钮仍能向上展开");
 });
 
 test("新消息提示音等消息显示后再响，每条回复只响一次", () => {
@@ -2299,7 +2318,7 @@ test("新消息提示音等消息显示后再响，每条回复只响一次", ()
   assert.match(panel, /for \(const payload of pendingMessageSoundEvents\.splice\(0\)\) receiveMessageArrival\(payload\)/, "设置尚未读完时收到的事件也要走延后逻辑");
   assert.match(panel, /if \(keys\.includes\(MESSAGE_SOUND_KEY\)\) void loadMessageSoundPreference\(\)/, "设置页改完，聊天页当场要跟着变");
   assert.match(sound, /new AudioContextType\(\)/);
-  assert.match(sound, /gain\.gain\.exponentialRampToValueAtTime\(peak, noteStart \+ 0\.012\)/, "提示音要有实际可听的幅度");
+  assert.match(sound, /gain\.gain\.exponentialRampToValueAtTime\(Math\.max\(0\.0002, peak \* \(note\.level \?\? 1\)\), noteStart \+ attack\)/, "提示音要有实际可听的幅度");
   assert.match(sound, /export const MAX_GAIN = 0\.3/, "音量拉满也不能刺耳");
   assert.doesNotMatch(panel, /new Notification|Notification\.requestPermission/);
 });
@@ -2307,10 +2326,41 @@ test("新消息提示音等消息显示后再响，每条回复只响一次", ()
 test("提示音设置页能按伙伴挑音色、调音量，两处共用一份声音模块", () => {
   const settings = fs.readFileSync(new URL("../ui/settings.html", import.meta.url), "utf8");
   const sound = fs.readFileSync(new URL("../ui/assets/message-sound.js", import.meta.url), "utf8");
-  assert.match(settings, /import \{ PROFILES, DEFAULT_PROFILE_ID, ensureAudio, normalizeSettings, play as playMessageSound \} from "\.\/assets\/message-sound\.js"/);
   assert.match(settings, /id="msg-sound-switch"/, "总开关要有");
   assert.match(settings, /id="msg-sound-volume"/, "音量滑块要有");
   assert.match(settings, /id="msg-sound-profile-cell"/, "默认音色要有");
+
+  // 2026-10-14 实机听感反馈：「清铃」和「木音」听起来差不多。
+  // 根因是当时四个音色全是 sine 加同一种 0.012 起音，只换了音高。
+  // 现在波形、起音长度、有没有噪声三样一起参与区分，钉住不许退回去。
+  const profiles = (() => {
+    const json = sound.slice(sound.indexOf("export const PROFILES"), sound.indexOf("export const DEFAULT_PROFILE_ID"))
+      .replace(/export const PROFILES\s*=\s*/, "").trim().replace(/;$/, "");
+    return new Function(`return ${json}`)();
+  })();
+  const keys = Object.keys(profiles);
+  assert.equal(new Set(keys).size, keys.length, "id 不许重复");
+  assert.ok(keys.length >= 6, `提示音不该退回四种，现在 ${keys.length} 种`);
+  for (const key of keys) {
+    const p = profiles[key];
+    assert.equal(p.id, key);
+    assert.equal(p.hint, undefined, `${key} 那句音色解释已经不用了，别把它加回来`);
+    assert.ok((p.notes ?? []).length + (p.noise ?? []).length > 0, `${key} 总得有点声音`);
+  }
+  // 同一个「形状」在两个音色里不能重复：波形 + 时长 + 起音 + 有无噪声一起算。
+  const shape = (p) => (p.notes ?? []).map((n) => `${n.wave ?? "sine"}/${n.duration}/${n.attack ?? 0.012}/${n.level ?? 1}`).join("+") + (p.noise?.length ? `#noise${p.noise.length}` : "");
+  const seen = new Map();
+  for (const key of keys) {
+    const sig = shape(profiles[key]);
+    assert.ok(!seen.has(sig), `${key} 和 ${seen.get(sig)} 的波形包络完全一样，听起来就会像`);
+    seen.set(sig, key);
+  }
+  const chime = profiles.chime;
+  const bamboo = profiles.bamboo;
+  assert.doesNotMatch(shape(chime), /triangle/, "清铃保持明亮的正弦音，不跟敲的东西混");
+  assert.match(shape(bamboo), /triangle/, "木音改走三角波 + 极短起音，做出敲击感");
+  assert.ok(bamboo.noise?.length, "木音要带一小段噪声，否则还是像铃");
+  assert.ok(!chime.noise?.length, "清铃不该有噪声");
   assert.match(settings, /id="msg-sound-partners"/, "按伙伴分开的音色列表要有");
   assert.match(settings, /hana\.storage\.global\.get\(MESSAGE_SOUND_KEY\)/, "跟聊天页读同一个键");
   assert.match(settings, /hana\.storage\.global\.set\(MESSAGE_SOUND_KEY, next\)/);

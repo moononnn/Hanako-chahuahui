@@ -431,6 +431,7 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 .review-quote { display: block; margin-top: 3px; color: var(--ink-soft); font-size: 11.5px; font-style: normal; overflow-wrap: anywhere; }
 .review-group li p { margin: 3px 0 0; color: var(--ink); font-size: 12.5px; line-height: 1.65; overflow-wrap: anywhere; }
 .review-direction { color: var(--mint-deep) !important; }
+.review-example { margin: 6px 0 0; padding: 8px 11px; border-left: 3px solid var(--mint-soft); border-radius: 0 var(--r-xs) var(--r-xs) 0; background: var(--mint-soft); color: var(--mint-deep); font-size: 12.5px; line-height: 1.65; overflow-wrap: anywhere; }
 .review-empty { margin: 8px 0 0; color: var(--ink-soft); font-size: 12.5px; }
 .review-stream { margin-top: 4px; }
 .review-composer { display: flex; align-items: flex-end; gap: 8px; }
@@ -501,3 +502,14 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
+
+/* ── 设定文件用量：超预算被砍掉的那部分，写卡的人要一眼看见 ── */
+.persona-usage { display: flex; flex-direction: column; gap: 12px; }
+.persona-usage-row { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 4px 12px; }
+.persona-usage-name { color: var(--ink); font-size: 13.5px; overflow-wrap: anywhere; }
+.persona-usage-num { color: var(--ink-soft); font-size: 12.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.persona-usage-row.trimmed .persona-usage-num { color: var(--blossom); font-weight: 600; }
+.persona-usage-track { grid-column: 1 / -1; height: 6px; border-radius: 999px; background: var(--paper-deep); overflow: hidden; }
+.persona-usage-track > i { display: block; height: 100%; border-radius: 999px; background: var(--mint); }
+.persona-usage-track > i.over { background: var(--blossom); }
+.persona-usage-cut { margin: -6px 0 0; color: var(--ink-soft); font-size: 12.5px; line-height: 1.6; overflow-wrap: anywhere; }

@@ -75,12 +75,55 @@ html, body {
    嵌入小卡时在顶上让出一条空带：聊天头部、展板、设置与收藏浮层都从这条带下面开始，谁也不会被盖住。
    整页打开（左侧导航那一项）时那排按钮不在页面里，所以一条带都不留。
    改这条带的高度只改 --host-safe-top 一处。 */
-body.slot-embedded { --host-safe-top: 36px; --shell-pad-top: 12px; }
-body.slot-embedded .shell { padding-top: calc(var(--shell-pad-top) + var(--host-safe-top)); }
-/* 这两个是绝对定位在 .shell 上的，.shell 的 padding 管不到，得单独挪。 */
+body.slot-embedded { --host-safe-top: 36px; }
+/* 嵌入卡由宿主提供外边界，内部不再套一层圆角卡片和留白。 */
+body.slot-embedded .shell {
+  padding: 0;
+  background-color: var(--paper);
+  background-image: linear-gradient(rgba(247, 244, 236, var(--slot-band-veil, 0)), rgba(247, 244, 236, var(--slot-band-veil, 0))), var(--slot-band-image, none);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+body.slot-embedded .chat {
+  background-image: none !important; /* 覆盖聊天窗的内联图片，整页仍用原样。 */
+  background-color: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+/* 安全区在同一个聊天头部内部；展板另行让位，避免把标题切成第二层磨砂。 */
+body.slot-embedded .chat-head { padding-top: calc(13px + var(--host-safe-top)); }
+body.slot-embedded .friends { margin-top: var(--host-safe-top); }
+body.slot-embedded .appearance-popover { top: calc(56px + var(--host-safe-top)); }
+/* 这两个是绝对定位在 .shell 上的，得单独挪。 */
 body.slot-embedded .settings-view,
 body.slot-embedded .favorites-view { top: calc(12px + var(--host-safe-top)); }
-body.slot-embedded .friends-head { padding-top: calc(16px + var(--host-safe-top)); }
+
+/* 顶带是聊天头部内部的标题行，只放字；两行共享头部的唯一磨砂层。
+   36px 保留给宿主窗口按钮，不叠额外间距或第二层遮罩。 */
+.slot-band { display: none; }
+body.slot-embedded .slot-band {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: var(--host-safe-top);
+  z-index: 1;
+  pointer-events: none;
+  overflow: hidden;
+}
+/* 标题只作轻量页签，不再额外套一颗实色胶囊。 */
+body.slot-embedded .slot-band-title {
+  position: relative;
+  padding: 2px 12px;
+  color: var(--primary-ink);
+  text-shadow: 0 1px 3px var(--paper);
+  font-size: 12px;
+  letter-spacing: .08em;
+  line-height: 1.5;
+}
 
 /* 设置从聊天页打开，仍留在同一张茶话会卡里；iframe 只复用现有设置页，不另造一套表单。 */
 .settings-view {
@@ -572,6 +615,51 @@ body.slot-embedded .friends-head { padding-top: calc(16px + var(--host-safe-top)
 }
 .chat.has-bg .chat-head { box-shadow: 0 14px 20px -12px rgba(255, 253, 249, .95); }
 .chat.has-bg .composer { box-shadow: 0 -14px 20px -12px rgba(255, 253, 249, .95); }
+/* 并排栏的磨砂本身也要渐隐：阴影只化开白色，仍会留下模糊/清晰的一刀切。 */
+body.slot-embedded .chat.has-bg .chat-head {
+  background: transparent;
+  border-bottom: 0;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+body.slot-embedded .chat.has-bg .chat-head::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 -64px;
+  z-index: -1;
+  pointer-events: none;
+  /* 外壳已有完整浓度遮罩，这里只加轻雾，避免白度叠成明显横带。 */
+  background: rgba(255, 253, 249, calc(var(--mc-veil, .5) * .25));
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 64px), rgba(0,0,0,.88) calc(100% - 48px), rgba(0,0,0,.5) calc(100% - 32px), rgba(0,0,0,.12) calc(100% - 16px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 64px), rgba(0,0,0,.88) calc(100% - 48px), rgba(0,0,0,.5) calc(100% - 32px), rgba(0,0,0,.12) calc(100% - 16px), transparent 100%);
+}
+/* 滚动出去的消息柔和退场，停在底部的最后消息则留在渐隐区上方。 */
+body.slot-embedded .chat.has-bg { --composer-fade: 48px; }
+body.slot-embedded .chat.has-bg .stream {
+  padding-bottom: calc(var(--composer-fade) + 12px);
+}
+body.slot-embedded .chat.has-bg .composer {
+  background: transparent;
+  border-top: 0;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+body.slot-embedded .chat.has-bg .composer::before {
+  content: "";
+  position: absolute;
+  inset: calc(-1 * var(--composer-fade)) 0 0;
+  z-index: -1;
+  pointer-events: none;
+  background: rgba(255, 253, 249, calc(var(--mc-veil, .5) * .25));
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, rgba(0,0,0,.12) calc(var(--composer-fade) * .25), rgba(0,0,0,.5) calc(var(--composer-fade) * .5), rgba(0,0,0,.88) calc(var(--composer-fade) * .75), #000 var(--composer-fade));
+  mask-image: linear-gradient(to bottom, transparent 0, rgba(0,0,0,.12) calc(var(--composer-fade) * .25), rgba(0,0,0,.5) calc(var(--composer-fade) * .5), rgba(0,0,0,.88) calc(var(--composer-fade) * .75), #000 var(--composer-fade));
+}
 .empty { margin: auto; text-align: center; color: var(--ink-soft); font-size: 13px; line-height: 2; }
 .empty .empty-hint { display: block; margin-top: 6px; font-size: 12px; line-height: 1.7; opacity: .85; }
 
@@ -1916,8 +2004,6 @@ body.ob-open { overflow: hidden; }
 
 /* 窄窗里展板是浮上来的（top: 8px），让位带得单独算，不然展板标题照样贴着宿主那排按钮。 */
 @media (max-width: 600px) {
-  body.slot-embedded .shell { --shell-pad-top: 8px; }
-  body.slot-embedded .friends { top: calc(8px + var(--host-safe-top)); }
-  body.slot-embedded .friends-head { padding-top: calc(8px + var(--host-safe-top)); }
+  body.slot-embedded .friends { top: calc(8px + var(--host-safe-top)); margin-top: 0; }
 }
 

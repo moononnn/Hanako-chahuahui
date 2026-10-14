@@ -4,7 +4,7 @@ import path from "node:path";
 import { splitReply, stripTimeHeader } from "./lib/split.js";
 import { planTurn, DEFAULT_RHYTHM } from "./lib/rhythm.js";
 import { analyzeUserRhythm, userRhythmText } from "./lib/user-rhythm.js";
-import { loadPersona, renderPersona } from "./lib/persona.js";
+import { loadPersona, renderPersona, readPersonaUsage } from "./lib/persona.js";
 import { resolveUserDisplayName } from "./lib/host-user.js";
 import { isValidPartnerId } from "./lib/partner-id.js";
 import {
@@ -8037,6 +8037,20 @@ export function apply(ctx) {
           return agentId;
         }
       };
+
+      /**
+       * 设定文件用量盘点：给写卡的人看每份进来多少、超了砍掉多少。
+       * 不调模型、不写档案、不进任何提示词，只读盘上那几个文件。
+       */
+      app.get("/persona-usage/:agentId", async (c) => {
+        const agentId = String(c.req.param("agentId") ?? "").trim();
+        if (!agentId) return c.json({ ok: false, error: { message: "要带伙伴编号" } }, 400);
+        try {
+          return c.json({ ok: true, usage: await readPersonaUsage(ctx, { agentsRoot, agentId }) });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 500);
+        }
+      });
 
       app.get("/persona-review/:agentId", (c) => {
         const agentId = c.req.param("agentId");

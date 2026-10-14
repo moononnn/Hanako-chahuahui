@@ -51,6 +51,7 @@
 
     <section class="chat" id="chat">
       <div class="chat-head">
+        <div class="slot-band"><span class="slot-band-title">茶话会</span></div>
         <span class="chat-av" id="chat-avatar" title="双击戳一下" hidden>
           <span class="ph">?</span>
           <img class="im" alt="" hidden>
@@ -1599,9 +1600,11 @@
     const EMBEDDED_SLOTS = new Set(["card", "widget", "function-panel"]);
     function applySlotSafeArea(snapshot) {
       document.body.classList.toggle("slot-embedded", EMBEDDED_SLOTS.has(String(snapshot?.slot ?? "")));
+      applySlotBandBackground();
     }
 
     let autoScrollAllowed = true;
+    let slotBandPaint = { url: "", veil: 0 };
     let renderingAll = false;
     let bottomFeedbackTimer = null;
     const SCROLL_BOTTOM_GAP = 24;
@@ -3334,6 +3337,7 @@
       el.chat.style.removeProperty("background-position");
       el.chat.style.removeProperty("background-repeat");
       el.chat.classList.remove("has-bg");
+      clearSlotBandBackground();
     }
 
     async function adaptSendButtonColor(url) {
@@ -3370,6 +3374,38 @@
       el.chat.style.setProperty("background-repeat", "no-repeat");
       // 头尾那两条磨砂玻璃跟着同一个浓度走：她调暗背景，条子也一起变白
       el.chat.style.setProperty("--mc-veil", String(veil));
+      paintSlotBandBackground(veil, url);
+    }
+
+    /**
+     * 并排小卡顶上那条让给宿主窗口按钮的空带：同一张照片继续往上铺，再蒙同一层浓度。
+     * 不铺的话那里是一块空白，看着像漏出来的洞；铺上就不是「空」了，是照片的一部分。
+     * 只在嵌入形态下铺——整页打开时没有那条带，body 铺了只会在四周留一圈。
+     */
+    function paintSlotBandBackground(veil, url) {
+      slotBandPaint = { url: url || "", veil: Number(veil) || 0 };
+      applySlotBandBackground();
+    }
+
+    /** 按 body 上那个 class 判，而不是 isCanvasSlot()：带子是 card/widget/function-panel 三种
+     *  都算，isCanvasSlot() 只认前两种，两者对不上的时候照片就铺不上（2026-10-14 实机）。
+     *  也不在 paint 时直接判断：slot-embedded 是页面起来之后才打上的，早一步画完背景的话
+     *  条件还不成立，之后没人再补。所以每次 class 变化都重刷一遍。 */
+    function applySlotBandBackground() {
+      const on = document.body.classList.contains("slot-embedded") && Boolean(slotBandPaint.url);
+      document.body.style.setProperty("--slot-band-image", on ? `url("${slotBandPaint.url}")` : "");
+      document.body.style.setProperty("--slot-band-veil", String(slotBandPaint.veil));
+      // 有没有背景图写成一个属性：不带图的时候带上这条纸色带，不留一块无意义的空白
+      const band = document.querySelector(".slot-band");
+      if (band) {
+        if (on) band.setAttribute("data-has-bg", "1");
+        else band.removeAttribute("data-has-bg");
+      }
+    }
+
+    function clearSlotBandBackground() {
+      slotBandPaint = { url: "", veil: 0 };
+      applySlotBandBackground();
     }
 
     function closeAppearance() {
