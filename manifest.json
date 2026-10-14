@@ -2,9 +2,9 @@
   "manifestVersion": 2,
   "id": "chahuahui",
   "name": "茶话会",
-  "version": "0.7.533",
+  "version": "0.8.0",
   "entry": "index.js",
-  "description": "像聊聊天软件一样和 AI 伙伴唠嗑，ta 也会根据自己的兴趣爱好主动找你聊天搭话。搭配「表情包」可以互相斗图，搭配「拾光记」还能聊天气、提醒待办。",
+  "description": "像聊天软件一样和 AI 伙伴唠嗑，ta 也会根据自己的兴趣爱好主动找你聊天搭话。搭配「表情包」可以互相斗图，搭配「拾光记」不仅可以感知天气、提醒待办，还能在使用「专注」功能时，陪你沉浸式专注。",
   "icon": "assets/icon.png",
   "minAppVersion": "0.1020.0",
   "capabilities": [
@@ -57,7 +57,7 @@
       },
       {
         "id": "canvas",
-        "title": "茶话会·并排",
+        "title": "茶话会·小窗",
         "description": "跟主对话框并排用的茶话会小卡，同一份聊天账。",
         "face": {
           "image": "assets/icon.png"
