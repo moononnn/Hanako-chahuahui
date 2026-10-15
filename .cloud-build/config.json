@@ -29,7 +29,8 @@
       "_backups",
       ".cloud-build",
       ".cache",
-      "out"
+      "out",
+      "attachments"
     ],
     "excludeFiles": [
       "PENDING_CHANGES.md",
