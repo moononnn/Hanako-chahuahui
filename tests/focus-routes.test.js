@@ -4,12 +4,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { bootChahuahui, reopenThread } from './helpers/app-harness.js';
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+// 这条用例靠内测路由 /proactive/tick 驱动主动联系；发布副本整块剥掉哨兵后那条路由不存在，
+// 这种形态下该验的是副本跑得起来（load.test.js 已验），联动行为本身在源码形态下验。如实跳过。
+const strippedSentinel = !fs.readFileSync(new URL("../index.js", import.meta.url), "utf8")
+  .includes("// __CHAHUAHUI_DEV_ONLY_END__");
 async function waitUntil(check) {
   const until = Date.now() + 4000;
   while (!check()) { if (Date.now() > until) throw new Error('等待落盘超时'); await wait(10); }
 }
 
-test('真apply联动：选中伙伴人格、暂停普通主动、向另一伙伴发言提醒但不泄露正文、结束恢复', async () => {
+test('真apply联动：选中伙伴人格、暂停普通主动、向另一伙伴发言提醒但不泄露正文、结束恢复', {
+  skip: strippedSentinel ? '发布副本已剥掉内测路由，这条联动用例只对带哨兵的源码成立' : false,
+}, async () => {
   const handlers = {};
   let active = { id: 'focus-route-1', phase: 'focus', startedAt: new Date().toISOString(),
     targetAt: new Date(Date.now() + 30 * 60_000).toISOString(), plannedMinutes: 30,

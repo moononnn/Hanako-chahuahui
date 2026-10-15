@@ -64,8 +64,17 @@ test("装载期不碰受保护接口（碰了宿主可能判定装载失败、�
 test("内测入口必须包在 DEV_TOOLS 开关里（本地验收要用、发布版不许开）", () => {
   const src = fs.readFileSync(new URL("../index.js", import.meta.url), "utf8");
   // 这些口子能触发模型调用或后台写盘，发布副本构建时 DEV_TOOLS 置 false，整面关掉
-  for (const route of ["/probe/last", "/probe/taste", "/analyze/personality", "/notify/test", "/proactive/tick"]) {
+  const routes = ["/probe/last", "/probe/taste", "/analyze/personality", "/notify/test", "/proactive/tick"];
+  // 发布副本是整块剥掉哨兵，不是只关开关；那种形态下该验的是它们确实不在包里，
+  // 而下面那条“包在开关里”只对带哨兵的源码成立。两种形态分别断言，不把一种冒充另一种。
+  const stripped = !src.includes("// __CHAHUAHUI_DEV_ONLY_END__");
+  for (const route of routes) {
     const escaped = route.replace(/\//g, "\\/");
+    const pattern = new RegExp(`(?:if \\(DEV_TOOLS\\) )?app\\.(?:get|post)\\("${escaped}"`);
+    if (stripped) {
+      assert.doesNotMatch(src, pattern, `发布副本里不该还留着 ${route}`);
+      continue;
+    }
     assert.match(src, new RegExp(`if \\(DEV_TOOLS\\) app\\.(?:get|post)\\("${escaped}"`), `${route} 没包进 DEV_TOOLS`);
   }
   // 三个内测工具也不能裸着
@@ -73,6 +82,12 @@ test("内测入口必须包在 DEV_TOOLS 开关里（本地验收要用、发布
   const guarded = new Set();
   let found;
   while ((found = toolRe.exec(src))) guarded.add(found[1]);
+  if (stripped) {
+    for (const name of ["chahuahui_ping", "chahuahui_remind_now", "chahuahui_taste_probe"]) {
+      assert.doesNotMatch(src, new RegExp(`name: "${name}"`), `发布副本里不该还留着内测工具 ${name}`);
+    }
+    return;
+  }
   assert.deepEqual(
     [...guarded].sort(),
     ["chahuahui_ping", "chahuahui_remind_now", "chahuahui_taste_probe"],

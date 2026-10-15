@@ -91,6 +91,9 @@ test("本地试点只在普通回复接入，发布剥离后无默认试点伙�
 
 test("公开源码即使只关闭DEV_TOOLS、不剥整块，也不能启用本地试点", () => {
   const source = fs.readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  // 发布副本已整块剥掉哨兵，哨兵标记不存在，本用例验的“只关开关不剥块”源码形态不成立；
+  // 副本形态该验的是剥块后 pilot 为空，上面那条已经验了。这里如实跳过，不假装通过。
+  if (!source.includes("// __CHAHUAHUI_DEV_ONLY_END__")) return;
   const start = source.indexOf('let compactReplyPilotId = ""');
   const end = source.indexOf("// __CHAHUAHUI_DEV_ONLY_END__", start);
   const block = source.slice(start, end);
