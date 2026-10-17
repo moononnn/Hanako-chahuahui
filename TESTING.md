@@ -1,5 +1,151 @@
 # TESTING · 茶话会
 
+## 内部时间/主动来由标记泄漏（2026-10-17）
+
+- 修复前样本：两条普通回复中的时间标题与主动来由说明已落入 assistant `text`/`bubbles`。第一轮与交叉复核补漏前各留了一份修复前快照（10 份、9 份文件），均逐份 SHA-256 核对一致。
+- 第一轮新回归在旧实现上3/3按预期失败。只读交叉复核随后发现来由原文换行、标记同行回显、装饰性时间括号误删及空正文注入幽灵消息；追加括号嵌套/转义边界后，补修前共6项失败。
+- 最终 `node --test --test-concurrency=1 tests/split.test.js tests/compose.test.js tests/prompt.test.js` **102/102通过**；`node --test --test-concurrency=1 tests/reply.test.js tests/proactive.test.js tests/proactive-expression.test.js tests/focus-companion.test.js` **106/106通过**。六份相关JS文件 `node --check` 均通过，指定源码/测试/记录的 `git diff --check` 无输出。
+- `awaiting nudge` 不走 `cleanVoice`，但实际进入 `splitReply`；本次在该边界也接入同一窄清理，无需扩大为其余残片规则。只运行直接相关的局部测试，没有跑全量测试；未调用真实/付费模型。
+- 最终补修后 `extension_manager` 正式reload从当前磁盘重载成功，列表为 `app:chahuahui on / 0.8.0`。代码已保存并加载，模型自然复现仍待后续聊天观察。
+
+## B站参与名单与合计上限集中设置（2026-10-17）
+
+- 开工前已读取当日《B站登录状态为何失效》会话及当前源码/项目记录，以最新加密持久登录和二维码倒计时为基线，不沿用旧内存登录方案。快照位于本机工作台 `_chahuahui-backups/video-participants_2026-10-17_110633_current_login`，10文件逐份SHA-256核对；未读取真实配置或凭据。
+- 缺失videoSharingEnabled默认false，仅严格true参与，明确旧true/false保留。集中PUT `/settings/video-sharing`必填 `{maxPerDay,partnerIds}`：额度0～5整数、名单严格字符串/合法ID，范围与GET设置相同的可见伙伴列表；未知或隐藏ID拒绝、去重。原子写入次数及原伙伴布尔字段，写成功才替换运行内存；隐藏/暂时不可见伙伴及其他偏好不改，不另存名单。0暂停不清选择，旧伙伴PUT仍写同一字段。
+- UI同一块编辑名单和合计次数，明确保存按钮，加载前/保存中锁定，错误或不完整回包保留草稿和原状态。伙伴页只读并跳转集中卡片。恢复伙伴时按服务端值初始化新增可见项、旧项保留草稿；非B站伙伴保存慢回包不盖参与字段；列表GET与集中PUT共用现有队列，payload在出队后构造，覆盖恢复伙伴期间立即保存的边界。
+- 新存储6用例在改前全部失败，修后通过；后端首轮32项31过1失败由新测试错误使用初始化fixture store而非App运行实例造成，改用真实模拟HTTP设置/隐藏路由后两项新路由测试通过，未为测试改业务。独立只读审查反馈的刷新/慢回包遗漏均有定向回归补齐，最后构造时点由主会复核并扩写并发用例。
+- 最终命令：`node --test --test-concurrency=1 --test-reporter=tap tests/video-settings-store.test.js tests/video-settings-ui.test.js tests/video-share-routes.test.js tests/video-login.test.js tests/video-source.test.js`，TEMP/TMP使用系统临时目录。**220/220通过，0失败/取消/跳过，约20.87秒**；最终TAP在本机工作台 `_test_runs/chahuahui_video_participants_final_verified_20261017.log`。UI32项含内联脚本解析/DOM监听、保存失败/不完整回显、并发名单保护、原倒计时和按钮稳定态；相关JS语法及定向diff空白检查通过。仅局部验证，没有真实网络或付费模型调用。
+- 最终源码对比开工快照：`lib/video-login.js`、`lib/video-source.js`逐份SHA一致；index中的createVideoLogin持久接线、UI完整扫码/倒计时块逐字一致。因此没有覆盖另一个窗口的新登录修复。未修改manifest版本/简介/README，未提交、推送或发布。
+- 正式reload返回从当前磁盘重载成功，inspect为host=on/agent=on。已保存且已加载，设置页实机视觉/实际名单操作和自动分享仍待验，不能用模拟测试代表实际分享。未重启Hana、未代改生产参与选择或要求重扫账号。
+
+## B站二维码按钮闪烁与有效期倒计时（2026-10-17，本地完成，已重载）
+
+- 根因：二维码轮询每2秒执行；每轮开始与结束都调用`videoButtons()`，把两个按钮的`disabled`在真/假间切换。`ui/assets/settings.css`中`button:disabled`会把透明度降到`.52`，所以按钮周期性变灰再恢复。轮询锁`videoRequestBusy`本身仍需保留以防并发。
+- 修复：轮询仍持有内部并发锁，但不再刷新按钮禁用态；显式生成/刷新操作仍保留原有即时禁用反馈。慢轮询时按钮不闪，点击刷新仍不会发起并行请求。
+- 倒计时：复用API给出的同一`expiresAt`，显示`二维码剩余有效期：MM:SS`并每秒更新；数字使用等宽数字，倒计时单独放在`aria-live=off`区域，避免屏幕阅读器每秒重复播报。计时到0时立即清二维码并停轮询；成功、B站过期、异常、刷新、离页或隐藏都会清掉倒计时。
+- 验证：改前UI定向测试 **24/24通过**；新按钮稳定态回归在旧实现上按预期 **1/1失败**（慢轮询中`disabled`为true）。修后命令`node --test --test-concurrency=1 --test-reporter=tap tests/video-settings-ui.test.js` **26/26通过**，覆盖每秒递减、已扫码状态、到期清理、离页/隐藏清理、慢轮询不并发及内联脚本语法/DOM监听目标。结果分别留在`_test_runs/chahuahui_qr_ui_countdown_baseline_20261017.log`、`_test_runs/chahuahui_qr_buttons_red_20261017.log`、`_test_runs/chahuahui_qr_ui_countdown_final_20261017.log`。
+- 仅跑直接相关UI测试，未跑全量应用测试；合成时钟验证通过，真实设置页显示待界面复验。当前代码已通过正式 App reload，未重启Hana或改简介/README。
+
+## B站二维码登录跨重载持久化（2026-10-17，本地完成，实机待验）
+
+- 基线：改前定向命令 `node --test --test-concurrency=1 --test-reporter=tap tests/video-login.test.js tests/video-source.test.js tests/video-share-routes.test.js tests/video-settings-ui.test.js`，**199/199通过**。
+- 原因与改动：扫码确认及nav验证成功后，旧实现只把SESSDATA留在进程内，Hana/App重载便会丢失。现复用Windows DPAPI `CurrentUser`保护，只把nav验证通过的SESSDATA原子写入既有凭据文件；应用新实例读取后仍先以B站nav复验，不凭文件存在就报已登录。
+- 清除边界：仅B站明确返回`code=-101`或`data.isLogin=false`时清除当前内存凭据及对应DPAPI文件。网络、HTTP、JSON错误和未知响应均保留凭据；状态缓存仍为5分钟。DPAPI保存失败时登录仅限本次运行，设置页如实显示。
+- 手动兼容入口`/video/login`继续要求`persist:false`，只替换本次运行内存，不覆盖或清除已有扫码登录文件；若手动临时登录另一账号，重载后仍会恢复原先保存的扫码账号。设置页不调用此入口。
+- 最终局部验证：同一四文件命令 **204/204通过，0失败/取消/跳过**；包含二维码扫码存储、未知状态保留、明确过期清除、DPAPI文件拒绝明文、主路由读取、设置文案以及父进程写入、子Node进程新建登录管理器并重新nav验证。跨进程测试只向stdout输出状态和布尔值；另静态断言DPAPI Protect/Unprotect均固定为`CurrentUser`。
+- `node --check`：7份JS通过；`git diff --check`指定源码/测试/UI文件通过。最终TAP：`_test_runs/chahuahui_video_persistent_login_20261017_final.log`。中间两轮发现的语法/旧文案断言与3条过时严格期望均已修复后完整复跑；第二轮记录保留于`_test_runs/chahuahui_video_persistent_login_20261017.log`。
+- 本轮未跑全量测试、未真实扫码/联网验证B站账号、未调真实模型、未读写生产凭据；仅用合成凭据验证DPAPI跨Node进程解密。extension_manager已从当前磁盘代码正式reload，应用仍为`on / 0.8.0`；未重启Hana、未改版本/简介/README或发布状态。
+
+## 重启后嵌入小窗输入框偏大（2026-10-17，待实机复验）
+
+- 基线：嵌入小窗在 Hana 重启后输入框偶尔变高，关闭并重开小窗可恢复。当前源码路径只在打开伙伴、输入等场景调用 `autosizeInput()`；此前没有页面加载完成或宿主窗口尺寸恢复后的重测。根因仍是代码线索推断，实际重启布局尚未取到运行时测量。
+- 修复：页面 `load` 与 `resize` 后等待两帧，再走原有输入框自适应高度逻辑；高度上限继续由 CSS 控制。
+- 新增回归断言改前失败。命令 `node --test --test-name-pattern="输入框：|首次打开及|并排小卡要给宿主|并排输入栏柔和收边" tests/ui.test.js`：4/4 通过。`node --test --test-concurrency=1 tests/ui-loading.test.js`：25/25 通过。`panel.html` 两段内联脚本语法解析通过，`git diff --check -- ui/panel.html tests/ui.test.js` 通过。
+- 较宽的 `node --test --test-concurrency=1 tests/ui.test.js tests/ui-loading.test.js`：159/164，5 条与本次输入框无关的应用断言失败（设置接口字段、起跑线痕迹、醒睡门控、等回音硬门、安静收尾）。因此不宣称整组通过。
+- App 已正式 reload 并 inspect 到 `host=on / agent=on`；Hana 重启后的实际小窗外观仍待人工复验。
+
+## 扫码登录实机验收通过（2026-10-16 21:56，UTC+8）
+
+- 页面显示已登录；安全诊断13:56:49.992Z记录最终poll确认回包存在SESSDATA字段且提取成功，sessionCookieInResponse=true，sessionCookieFromEarlierPoll=false；13:56:50.113Z进入logged-in阶段。该阶段只在nav返回code=0、isLogin=true并通过二维码有效性与代次检查后提交，实机扫码登录已通过。
+- 本次使用最终确认响应头中的凭据，未依赖早期poll候选，也未进入跨域换票；不可将成功归因于跨poll暂存。本轮同时包含星号兼容与请求来源对齐，未隔离变量验证，之前失败的单一根因仍不能确认。
+- 仅验收设置内扫码登录及真实nav验证，不代表字幕读取/伙伴自动分享整链已实机通过。未读取凭据内容、未调用额外模型或对外写接口。
+
+## 旧成功路线对齐：请求来源与跨轮询候选（2026-10-16）
+
+- 正式会话《茶话会趣味内容分享功能探讨》turn8记录：当天09:13:58扫码守护已取得SESSDATA，之后字幕探针记录nav isLogin=true。旧`qr-keeper.mjs`从每次poll的getSetCookie累积Map，本身无nav；后续`probe8-subtitle-auth.mjs`用原生fetch做真实nav验证。此处不重读凭据文件、不运行旧脚本、不复述账号资料。
+- 对照静态差异并最小对齐：显式Referer为登录接口passport /login、nav www根地址；同二维码跨合法poll仅暂存SESSDATA，明确确认前不更新登录态、不发nav；最终确认后验证才提交。刷新、过期、新登录清空候选，空/无效值及Max-Age<=0或过去Expires清除候选，有效Max-Age优先。候选不进入UI、模型或诊断，仍只用ctx.network.fetch，不引入完整Cookie jar/后台调度器/磁盘保存。
+- 新请求来源/跨poll场景修复前2/2失败，证明与旧脚本的可复现行为差异，不等于复现了真实账号的失败根因。独立审查指出非空值+删除属性遗漏，新增3负例修前失败，再补最小属性判断与1优先级正例；刷新/过期隔离及明确空值覆盖。
+- 最终验证命令：`node --test --test-concurrency=1 --test-reporter=tap tests/video-login.test.js tests/video-settings-ui.test.js tests/video-share-routes.test.js`（TEMP/TMP为系统目录）。**147/147通过，0失败/取消/跳过，约5.69秒**；模块99、UI24、路由24项。TAP本机工作台 `_test_runs/chahuahui_qr_success_baseline_final_20261016.log`。语法和diff空白检查通过，没有真实扫码、网络或付费模型调用。
+- 必须保留的首轮异常：补属性处理前同组三文件143项中142过、1失败，`tests/video-share-routes.test.js:310`普通回复视频记忆召回断言模型调用次数2!==1；该用例未走扫码请求，最终相同场景通过，但原因与归属未定位。未改该用例/记忆业务、不能用最后通过声称偶发问题已修；首轮TAP `_test_runs/chahuahui_qr_success_baseline_20261016.log`保留。
+- 独立只读核查当前安装artifact：未找到ctx.network.fetch主动过滤Set-Cookie证据；headers用entries键值对往返并重建Response，显式Referer/Cookie被转发，未有自动Cookie jar。仅最终响应可读，中间重定向头没有保证；此限制不证明本次确有Cookie丢失。此次GET未使用请求体或宿主缓存，不处理无关SDK问题。
+- 独立静态复核未见本轮阻断问题；正式reload成功，manifest仍0.8.0，简介/README未改。待实机扫码与新安全诊断，不能宣称本次真实登录故障已解决。
+
+## 合法星号凭据与字段存在性诊断（2026-10-16）
+
+- 实机记录确认：扫码成功进入passport.biligame.com固定HTTPS换票路径，HTTP200、Cookie头存在，但没有有效SESSDATA；尚不知是未返回该字段还是其值被拒。没有读取或记录真实凭据，不据此归因宿主。
+- 静态发现sessionCookie额外字符白名单误拒Cookie合法字符星号；新增带星号的合成换票回归，修改前明确失败。最小修正仅允许星号，保留其他格式/请求头注入限制和nav验证；增加SESSDATA字段存在布尔诊断，与值通过校验的布尔值分开，不记录内容。合法性参考RFC6265 cookie-octet中%x23-2B包含星号，此依据不证明真实凭据中含星号。
+- 同三文件局部 **138/138通过，0失败/取消/跳过，约5.53秒**，模块90、UI24、路由24项；TAP为本机工作台 `_test_runs/chahuahui_qr_cookie_star_20261016.log`。模块语法与diff空白检查通过，未真实联网/扫码或调模型。
+- 正式reload成功。已修的是可复现格式兼容缺陷；其是否解释本次实机失败、实际登录是否成功仍待下一次扫码验证。
+
+## 扫码按钮稳定布局与确认阶段诊断（2026-10-16）
+
+- 实机已能生成二维码，安全记录stage=ready；截图确认后显示未取到凭据的受控提示。原文“需要宿主支持”缺乏本次换票响应证据，已改中性表述，不将旧跳转能力限制当本次已知根因。
+- 按明确布局反馈仅调整刷新在左、扫码固定右侧、按钮38px同高，沿用现有按钮样式；DOM顺序/局部CSS及中性受控文案有回归。未做最终页面视觉验收。
+- 确认阶段增加安全记录：已知域名类别、HTTPS/固定路径/参数存在性、HTTP码、Cookie头及SESSDATA存在布尔值、nav状态；不记录原URL、ticket、key、Cookie、账号资料或异常文本。支持官方poll确认响应直接带SESSDATA，仍必须nav验证才提交，不带则走原URL/换票路径。
+- 同三个直接相关文件 **137/137通过，0失败/取消/跳过，约5.07秒**，模块89、UI24、路由24项；新增直接Cookie验证、无Cookie换票阶段与未知地址安全拒绝验证。命令同后文三文件组，系统TEMP/TMP；TAP在本机工作台 `_test_runs/chahuahui_qr_confirm_buttons_20261016.log`。语法及diff空白检查通过，没有真实网络/扫码或模型调用。
+- 正式reload成功。本轮取凭据故障仍待再次扫码后的实际阶段记录，不能用模拟通过宣称登录已解决。
+
+## 官方account二维码内容域兼容（2026-10-16）
+
+- 实机诊断：HTTP200，url/key均为string，officialUrl=false，属于本地地址校验拒绝。一次不带账号凭据的公开生成接口探测只输出安全形状：HTTP200、业务码0、HTTPS、host为account.bilibili.com，无fragment/凭据/端口，唯一qrcode_key与独立字段匹配；没有输出、落盘或向模型提供二维码key/原URL，也未扫码登录。此探测不是宿主网络路线实机验收。
+- 旧代码只认passport.bilibili.com；新增合成account域回归，修改前1项明确失败。最小修改仅将account.bilibili.com加入二维码内容精确白名单；不请求该地址，不改manifest网络域名，不放宽key绑定及其他URL规则。
+- 修正后同三文件模拟组 **132/132通过，0失败/取消/跳过，约4.66秒**；含passport/account合法内容与伪装子域拒绝。命令同下一节，TAP在本机工作台 `_test_runs/chahuahui_qr_account_host_20261016.log`。语法及diff空白检查通过；无真实模型调用。
+- 正式reload成功，修正已加载；仍需重新点击生成、实际扫码及最终nav登录验证。此前无全局URL的VM假说只在人工缺URL环境可复现，没有当前App缺URL的直接证据，未据此修改其他模块或声称是实际根因。
+
+## 二维码生成失败安全诊断（2026-10-16，实机反馈后）
+
+- 实机基线0.8.0：设置按钮下显示“二维码暂时生成失败，请检查连接后重试。”；宿主日志确认20:16新版已装载，不能直接归因未重载。旧代码将网络、HTTP/业务拒绝、JSON/字段校验与本地编码合并为同一句提示，没有足够记录确认根因。修改前相关模块/index/测试已另存本地时间戳备份并核哈希。
+- 改动只加安全诊断与精确提示，不放宽二维码URL/key绑定、不绕宿主网络、不更换二维码编码器。诊断仅含阶段、HTTP/业务码、字段类型和布尔校验、允许清单错误码/类型，不含URL、key、ticket、Cookie、原始响应或异常文本。
+- 命令：`node --test --test-concurrency=1 --test-reporter=tap tests/video-login.test.js tests/video-settings-ui.test.js tests/video-share-routes.test.js`。**3文件131/131通过，0失败/取消/跳过，约4.79秒**，系统TEMP/TMP；TAP在本机工作台 `_test_runs/chahuahui_qr_diagnostics_20261016.log`。本轮只跑直接相关局部，不与前轮201相加。
+- 模块85项（含新增网络/HTTP/业务/JSON/格式/编码六类安全诊断），UI22项（四条精确安全提示及近似/私密异常不透传），路由24项。index和登录模块语法、diff空白检查通过。没有真实网络/登录或模型调用。
+- 正式extension_manager reload回包成功，说明本轮磁盘代码已重载。**二维码实机故障根因仍未知，等待再次点击生成后读取安全诊断；不能把诊断能力落地当作已解决登录。**
+
+## 戳一戳/小动作误触发文字回复（2026-10-16）
+
+- 基线：0.8.0，不升版本；只动本轮回复目标与恢复链，新增 `tests/reply-action-target.test.js`，不改 manifest/简介/README，不跑全量、不调真实模型、不读写生产账本。
+- 最终命令：`node --test --test-concurrency=1 tests/reply-action-target.test.js tests/reply-supersede-routes.test.js tests/reply-supersede.test.js tests/reply.test.js tests/poke.test.js tests/prompt.test.js tests/awaiting.test.js tests/actions.test.js`，TEMP/TMP/HOME/USERPROFILE/HANA_HOME 全指新建系统临时根。
+- 初轮8文件142/142通过；主线匿名化用例并补齐动作两种kind、旧待办仅动作、伙伴动作不遮真文字，以及真正生成中的动作时序后，**最终8文件144/144通过，0失败/取消/跳过**（新文件7项）。最终日志在本机工作台 `_test_runs/chahuahui_action_review_20261016.log`；初轮基线及修后日志保留在 `_test_runs/2026-10-16_2012_baseline/`。主线复验五项环境变量指向系统临时根，index/turn-window语法检查通过。
+- 修前基线：5 条中 2 条真实复现失败——末尾只剩未读用户戳一戳仍发出 1 次模型请求；真文字后夹戳一戳时回复目标被戳一戳夺走（拿到 poke 的 id 而非真文字 id）。另两条修前已过，属防回归：旧待办指向动作时靠 `tail.find` 偶然取到真文字；生成期间的 poke 因 `deliveringReplies` 守卫没排出第二轮。两处已被显式判定取代，不再靠巧合。
+- 覆盖：末尾只有未读poke/action→重载不生成且不盖已读；旧pendingReply只有动作→清待办且不调模型、不盖读；旧动作待办后有真文字→恢复文字且上下文末端是该文字；真文字后夹用户及伙伴动作→目标仍是真文字；模型挂起期间来poke→不排第二轮文字、动作仍落线程；`canAnswerPoke` 连戳规则未变。
+- 来源核对：本地实机宿主用量账与茶话会diagnostics、线程交叉核对；恢复轮由未读动作触发，线程过滤动作后末端为伙伴自己的主动文字。原始请求编号与私人原话仅留本地原证据，不复制进项目。
+- 交叉复核补修：手动重新生成拒绝动作目标、引用目标只取真实发言；待办/搜索/兴趣判断的latestUser也排除动作。补修前新增2项均失败（动作重生成误返回200；辅助语义接线缺过滤），补修后同一8文件最终**146/146通过，0失败/取消/跳过，约12.04秒**；新文件共9项，其中辅助语义项为静态接线断言，不冒充搜索自然度测试。补修前日志`_test_runs/chahuahui_action_extra_baseline_20261016.log`，最终日志`_test_runs/chahuahui_action_final_20261016.log`。补修前命令的管道退出码未可靠透传，以日志2项失败为基线；最终命令先保存node退出码再打印日志，退出0且非空146项通过。
+- 未覆盖：随机回戳定时器未实机，只验了`canAnswerPoke`判定与动作落线程；没有调用真实模型检验聊天自然度。正式加载状态以PROJECT_LOG最后记录为准，不把加载成功等同实机验收。已撤回占位在异常持久化旧pending中可能反复恢复的窄风险另记待查，本轮未改撤回语义。
+
+## B站扫码与逐伙伴开关、实际失效提醒（2026-10-16）
+
+- 基线：0.8.0，不升开发版本；原有长期记忆与表达改动保留。只验证本轮登录、设置、Store及主动表达直接相关范围，不全量、不调用真实模型、不真实扫码、不读写生产账本。
+- 最终命令：`node --test --test-concurrency=1 --test-reporter=tap tests/video-login.test.js tests/video-share-routes.test.js tests/video-login-notice-compose.test.js tests/video-settings-ui.test.js tests/proactive-expression.test.js tests/store.test.js tests/video-sharing.test.js`，TEMP/TMP为系统临时目录。
+- **最终7文件201/201通过，0失败/取消/跳过，约8.77秒**。TAP在本机工作台 `_test_runs/chahuahui_qr_partner_reviewed_20261016.log`。此前193、198项通过后，按独立复核补三条时序/旧凭据回归并修正主接线，再跑最终组，不将多轮数目相加。
+- 登录模块79项：本地二维码生成、旧URL和crossDomain票据、只提SESSDATA、Cookie头Expires逗号、验证成功才提交、网络未知不假报过期、五分钟缓存与合并、旧nav/扫码/票据在途回包代次隔离、2秒节流和180秒TTL、刷新/失败安全终止、凭据不进入公开回包或磁盘。
+- 真实apply模拟路由24项：保留原字幕/额度/认知链；增加伙伴开关兼容、持久化、隔离及非法类型、生成中关闭、过期提醒不混视频且计主动总额、重新登录后旧提醒作废、同事件每日去重/拒绝退避、扫码start/poll/status整路和安全失败回包。
+- 设置UI17项：本地SVG在img隔离显示，轮询串行、离页/刷新/终态停止、迟到回包不恢复；伙伴开关失败保留真实状态；start12秒、poll30秒覆盖后端多段请求，普通API仍8秒。只精确匹配受控取凭据失败显示宿主限制，其余原始异常泛化。
+- 独立静态复核发现的阶段开关、出站await、失效事件和sceneEcho冲突均已修正；第二轮复核又发现线程基线保存太晚及旧磁盘账号复活风险，已改为探索/提醒入口任何await前取基线，并停止主流程自动载入旧账号文件（文件原样保留）。新增实测覆盖utility等待时线程变化不搜索、人格读取等待时线程变化不发提醒/不记额、旧文件不读取也不删除覆盖。审查伙伴静态确认三处闭环；utility等待时开启专注的动态分支未单独实测，仅源码确认门禁存在。正式reload已申请，但新增域名authority仍须用户审核，不能宣称已加载。
+- 已做index、登录模块、compose、store及新增路由测试语法检查和diff空白检查；vendor与UI脚本另有局部语法验证。
+- **待实机**：新增Passport域名权限正式生效，真实二维码可扫与登录确认，当前宿主是否能取得新ticket的最终Cookie，真实模型自然提醒/分享及页面视觉。凭据目前仅本次运行内存，重载需重扫；不能将198项模拟通过当作真实登录成功。
+
+## B站字幕视频分享整路接入（2026-10-16，本地开发）
+
+- 范围：视频材料三层、分享条目纯逻辑、真实apply模拟路由、设置UI、搜索隐私、既有探索/主动/记忆/Store的直接相关部分。共18个文件，非全量回归；模型和网络均为模拟，没有真实付费模型调用、B站账号动作或生产账本读写。
+- 最终命令：`node --test --test-concurrency=1 --test-reporter=tap tests/video-source.test.js tests/video-material.test.js tests/video-materials.test.js tests/video-sharing.test.js tests/video-share-routes.test.js tests/video-settings-ui.test.js tests/topic-search.test.js tests/interest-exploration.test.js tests/split.test.js tests/compose.test.js tests/proactive.test.js tests/proactive-reasons.test.js tests/memory.test.js tests/store.test.js tests/store-durability.test.js tests/longterm.test.js tests/longterm-store.test.js tests/longterm-routes.test.js`。
+- **460/460通过，0失败/取消/跳过，约23.84秒**。HANA_HOME/HOME/USERPROFILE/TEMP/TMP全部指向新建的系统临时测试根。完整TAP留在本机工作台 `_test_runs/chahuahui_video_systemtemp_20261016_152343.tap.log`；之后仅补一条video-stale诊断，另行定点复验路由14/14通过、17份JS语法及diff空白检查通过，不重跑无关全量。
+- 视频材料124项：固定两轮成功且同中文轨/全段文本和时间一致、逐段时间合法、分P取自身cid/时长、P2不误拿顶层P1的cid拒绝、时长先过闸，无字幕不自动拿弹幕替代；加密失败拒绝明文落盘、读取也拒明文与伪加密标记（2026-10-17 修订：系统锁拿不到时改退本机锁，两种锁都拿不到才拒绝落盘，本机锁也是 AES-256-GCM 密文）。材料节选明示、外部内容不作为指令、【字幕资料】与头部规则分隔。
+- 14个真实apply模拟路由：设置0～5及非法值、无登录不出网、已登录只搜索B站并存字幕候选、Cookie不送字幕CDN、内存登录不写文件/设置/回包；当前伙伴模型实际生成、完整链接落消息后才建条目并记视频额/主动总额；[不回]冷却，缺链接不发；生成中关闭视频/主动总闸/伙伴开关或降低总额度时旧稿不发且不白白冷却；普通回复召回字幕资料、静默认知反馈与具体用户再提续期、删除来源失效；明确停止优先于情绪归因，普通单条/某类不喜欢不误关。
+- 分条修复：通用HTTP(S) URL的`?p=2`、`&`参数、英文标点及长网址不再被拆坏，旁边中文句号仍可分句；split局部18项通过。分享额外在实际气泡文本中再验完整链接，未送出不扣额度。
+- 中间失败如实保留：第一轮458/460，新增memory.videoSharing默认形状未补进reset测试断言，已补；另一项为工作台临时目录连续写650条时renameSync EPERM。暂停后核源码、版本、git diff和备份存在；persistence.js无改动，失败临时目标JSON完整、临时写入文件已按既有catch清除。两失败用例在系统默认临时目录定点2/2通过。第二次把整组临时根仍放工作台时459/460，仍仅同项EPERM；之后改用独立系统临时根、日志仍留工作台，整组460/460通过。未改持久化逻辑、未加绕过权限重试、未关闭安全软件/加白名单；具体占用来源未证明，不能断言是安全软件。
+- 宿主网络只读源码核查：当前1.1.7-beta的IPC不传redirect、底层默认跟随；不同源会删Cookie，allowedHosts不逐跳检查。manifest仅新增当前实际请求的api.bilibili.com、aisubtitle.hdslb.com并设2MB上限；Referer/分享链接不是额外网络请求。没有声称禁止所有跨域跳转。
+- **待实机**：域名权限的正式生效、真实账号字幕返回、所选模型是否自然决定分享/拒绝、后续聊天的语义理解与自然度、实际费用及设置页面视觉。未把模拟绿当真实视频归属证明；仅查源码不算带凭据重定向验证。正式加载状态另记PROJECT_LOG：正式reload要求用户审核新增authority，未代批准；inspect仅证明host/agent仍启用，不能声称本轮已加载。
+
+## B站视频材料续接核查（2026-10-16）
+
+- 基线：manifest 0.8.0，三份 video 测试 68/68 通过；尚未接入主动消息、设置与记忆链路，宿主域名授权也未配置。
+- 复现：模拟第一次取得正常字幕、第二次播放器接口 HTTP 503，旧 fetchSubtitle 仍返回 ok:true。新增回归先失败，补显式复核成功标记后通过；同时补存所选字幕 URL，避免校验辅助信息一直为空。
+- 验证：`node --check lib/video-source.js`；`node --test tests/video-material.test.js tests/video-materials.test.js tests/video-source.test.js`，69/69 通过。仅视频材料相关测试，未全量、未调用真实模型、未重载宿主。
+- 真实只读探测：同一视频、aid/cid 与分P不变，前两轮播放器字幕清单的中文轨道 ID 不同；所选中文字幕分别为55段（2.92～275.18秒）和223段（0.1～536.5秒），视频537秒。证明本轮返回确有变化，尚不能证明具体风控机制。第三轮所选地址未命中探针限定域名，未取正文。
+- 待核：全文一致性、字幕轨道固定、正文预算截断与来源边界、凭据在宿主沙箱中的真实加密失败处理。弹幕可读不代表知道视频内容，不能用两者合并的成功率充当视频阅读覆盖率。
+
+## 人类式长期记忆（2026-10-15 开工，2026-10-16 局部验证）
+
+- 基线：manifest 0.8.0 / HEAD `16a94f2`，工作区干净，10份原文件已在本机专项备份目录核对SHA-256。此项是已授权的新能力，不是已复现的旧实机故障。
+- 语法：`node --check` 通过 index、facts、memory、store、summarize、longterm，以及 store/longterm/longterm-store/longterm-routes 四份测试，共10份JS；`git diff --check` 通过。README、manifest版本/简介未改。
+- 最终命令：`node --test --test-concurrency=1 --test-reporter=tap tests/longterm.test.js tests/longterm-store.test.js tests/longterm-routes.test.js tests/memory.test.js tests/facts.test.js tests/summarize.test.js tests/store.test.js tests/store-durability.test.js tests/prompt.test.js tests/compose.test.js tests/conversation-grounding.test.js tests/recall.test.js tests/reply-rules-compact.test.js tests/reply-supersede-routes.test.js tests/fact-migration.test.js`。
+- **15个相关测试文件，292/292通过，0失败/取消/跳过，约8.50秒**。仅相关局部测试，未跑全量。完整TAP日志在本机工作台 `_test_runs/chahuahui_memory_verified_20261016_073715.tap.log`。临时Store与真apply均用独立临时目录，宿主模型/语音/网络出口为模拟；最终合跑另把HANA_HOME/HOME/USERPROFILE/TEMP/TMP指向本轮独立临时根，不接生产模型或读写生产账本。
+- 新的3个测试文件共56例：纯逻辑31、Store8、真实apply模拟17。覆盖长期条目不随650条历史或注入预算FIFO删除、141条落盘重开/清聊天保留；旧事实早于最后12条仍能按原文对象唤起、无关不注入；无效来源不在召回层二次投影；已读软撤回保留既有认知，不随来源移出窗口忽隐忽现；硬撤回/删除依赖失效。
+- 反馈覆盖hold/doubt/revise、嘴上让步但保留判断、逐字quote与来源id/预期快照、并发迟到和幂等、已作废旧稿不落账；完整/畸形/未闭合/孤立闭合协议先于气泡/徽章/表情/语音处理剥离，语音请求无协议或条目id。撤回当前回复目标后stale、不落回复/记忆且无wav残留；因真实路由在processing时阻止撤回，此项在合成等待期间用Store补丁模拟状态，不能当成界面撤回验收。
+- 整理覆盖原摘要与原事实整理两次utility，不额外加第三次；有效entries写入与水位推进；JSON损坏、非空旧facts或在途源撤回时不写条目/摘要、不推进水位，同场景重试成功且不重复；未被接话的主动独白两份材料均排除。批末主动消息在完整线程已被近期窗口回应时，两份材料均保留且可作逐字证据；资格在等待期间改变则放弃本次提交。
+- 过程中修正：reset测试预期补新增longterm；旧两字对象的事实缺少显式触发词，补原文主语/引号名/英文对象提取而不任意二字切词；该正则初次误写u模式下非法转义，已修并重验语法。交叉审查与整路用例另发现并修正facts无证据旧通道、目标撤回旧稿、批次资格变化、截断后再次误删批末主动消息、下游二次投影与非空旧数组被过滤成成功空结果。没有为了跑绿削弱这些业务断言。
+- **尚未验收**：真实模型的提取重要性、语义关联、是否自然hold/doubt/revise、长期相处自然度及实际费用。本轮没有真实付费模型调用，没有自动全历史回填、向量检索、人格改写或新界面。旧事若已彻底丢失，不能凭空恢复。正式加载状态单列在PROJECT_LOG，不以源码/模拟测试替代运行时证据。
+
+
 ## 联动吐槽的事情坐标（2026-10-14，本地开发）
 
 - `node --check lib/compose.js` 与 `node --check tests/conversation-grounding.test.js` 通过。
@@ -792,3 +938,24 @@ node <HANA_ROOT>/scripts/validate-app.mjs --dir . --json
 **已知边界**（有意留白，不是漏）：一句话里连报两件事（「浇完啦顺便把衣服收了」）不认——单句挂不住两件事，宁漏勿错；同义说法（待办写「吃维生素d」而她说「药吃了」）不认，要认得扩同义词表，那是另一件事。
 
 **待实机验收**：重载茶话会后，在茶话会里对任一伙伴说「浇完啦」，看拾光记那条待办是否真的被划掉、伙伴是否顺口带一句（而不是报「已为你勾选」这种系统话）。当前自动测试覆盖的是判定与调用，全程真机链路仍需这一次实跑。
+
+---
+
+## 2026-10-16 · 主动联系的表情固化（CHF-20261016-01）
+
+**改前基线**：manifest 0.8.0、HEAD `16a94f2`，`lib/compose.js` 已在本机专项备份目录保留并核 SHA-256。工作区另有未提交的长期记忆工作，本轮不碰。
+
+**改了什么**：只动 `lib/compose.js` 的三处提示词——affection 由头落点、contact 由头落点、`greetingOnly` 早安招呼块；另把 `introducedText` 那块说明从「仅核对是否介绍过」扩为兼顾「哪些动作和开头刚用过」。选择权重、`isRepeatedPhrasing` 去重、间隔、配额、静默、已读未回护栏一律未动。
+
+**本轮自动测试**：`node --test tests/compose.test.js tests/proactive.test.js tests/proactive-reasons.test.js tests/proactive-expression.test.js tests/proactive-clarity.test.js`，**143/143**，0 失败。语法检查 `node --check` 过。
+
+**改测试的地方**：`tests/proactive-expression.test.js` 里「想念可以直接说」一条原本守 `/落点自己挑/` 和 `/别每回想念都落成同一个样子/`，这两句随提示词改写换成了新表述（意图不变：绕着说的路子要留、直说是正路不是让步、不补解释、软话与撒娇不一刀切），并新增身体落点、非身体落点、contact 换路三条在场断言。
+
+**未测 / 待验证**：
+
+- 真实自然度**未验证**——没有调用付费模型，也没触发真实主动消息。提示词文本在场只证明它被送到了模型，不证明模型会照做。
+- `isRepeatedPhrasing` 的整句 0.86 / 6 小时窄口径**未改**。这是根因之一，但这轮不动：要判「同一类动作」得从中文里抽身体动作与句式，容易误伤，且属新模块。先看提示词改完实机还固不固化。
+- 由头记账偏差（一条内容型思考被记成 affection）不在本轮范围。
+- 其余测试文件未跑，属相关范围之外的相邻回归，未申报全应用结果。
+
+**回退**：从本机专项备份的基线恢复 `lib/compose.js` 与该测试文件，正式重新加载；不删聊天、不改人格、不重置关系。
