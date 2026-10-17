@@ -42,6 +42,9 @@ jobs:
       run:
         shell: pwsh
     steps:
+      - name: 关掉检出时的自动换行转换
+        run: git config --global core.autocrlf false
+
       - name: 检出干净 checkout
         uses: actions/checkout@v4
         with:
