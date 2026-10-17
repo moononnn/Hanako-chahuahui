@@ -13,6 +13,18 @@
       document.head.appendChild(link);
     }
   </script>
+  <style>
+    /* B站设置局部补丁：复用设置页组件，反馈独立于操作行。 */
+    #video-share-card .choice-block { margin-top: 16px; }
+    #video-login-actions { flex-wrap: nowrap; justify-content: flex-end; }
+    #video-login-actions button { flex: none; margin: 0; height: 38px; white-space: nowrap; }
+    #video-login-status { display: block; overflow-wrap: anywhere; }
+    #video-login-status:empty { display: none; }
+    #video-qrcode-countdown { font-variant-numeric: tabular-nums; }
+    #video-qrcode { display: block; width: min(224px, 100%); height: auto; aspect-ratio: 1; margin-top: 16px; padding: 12px; background: #fff; border: 1px solid var(--line-soft); border-radius: var(--r-md); }
+    .video-partner-note { display: block; overflow-wrap: anywhere; }
+    .video-partner-note:empty { display: none; }
+  </style>
 </head>
 <body>
   <main class="wrap">
@@ -306,6 +318,35 @@
           </div>
         </div>
       </article>
+      <article class="setting-card" id="video-share-card">
+        <div class="setting-copy">
+          <h3>B站视频分享</h3>
+          <p id="video-share-copy">所有参与伙伴合计共享每日上限，分享计入上面的主动消息总量。主动联系总闸关闭时不会自动分享；选择参与不保证每日必发。暂停不会清除分享历史。</p>
+          <p>沿用每 18～36 小时的兴趣探索节奏，仅在有可用字幕时分享；每日上限不代表每天一定会发。</p>
+        </div>
+        <div class="choice-block">
+          <span class="choice-label" id="video-partners-label">哪些伙伴参与</span>
+          <div class="seg" id="video-share-partners" role="group" aria-labelledby="video-partners-label"></div>
+        </div>
+        <div class="choice-block">
+          <span class="choice-label" id="video-share-label">所有参与伙伴合计，一天最多分享几条</span>
+          <div class="seg" id="video-share-options" role="group" aria-labelledby="video-share-label" aria-describedby="video-share-copy"></div>
+        </div>
+        <small class="detail-field-note" id="video-share-status" role="status" aria-live="polite">正在读取B站分享设置…</small>
+        <div class="detail-actions">
+          <button class="primary-button" id="video-share-save" type="button" disabled>保存B站分享设置</button>
+        </div>
+        <div class="detail-field">
+          <small class="detail-field-note" id="video-login-note">扫码后在B站确认登录。登录凭据加密保存在本机，下次打开不用重扫；只有B站明确判定过期才清除，网络暂时不可用不会清掉凭据。不评论、不点赞、不投币。</small>
+          <div class="detail-actions" id="video-login-actions">
+            <button class="soft-button" id="video-qrcode-refresh" type="button" hidden>刷新二维码</button>
+            <button class="primary-button" id="video-login-button" type="button">扫码登录B站</button>
+          </div>
+          <img id="video-qrcode" alt="B站登录二维码，请使用B站客户端扫码" hidden>
+          <small class="detail-field-note" id="video-login-status" role="status" aria-live="polite">正在读取B站登录状态…</small>
+          <small class="detail-field-note" id="video-qrcode-countdown" aria-live="off" hidden></small>
+        </div>
+      </article>
     </section>
 
     <section id="panel-partners" role="tabpanel" aria-labelledby="tab-partners" tabindex="0" hidden>
@@ -420,6 +461,7 @@
     ];
     const GAP_CHOICES = [[15, "一刻钟"], [30, "半小时"], [60, "一小时"]];
     const MAX_CHOICES = [[12, "十来句"], [24, "二十多句"], [30, "三十句"]];
+    const VIDEO_SHARE_CHOICES = [[0, "暂停"], [1, "1条"], [2, "2条"], [3, "3条"], [4, "4条"], [5, "5条"]];
     const KIND_LABEL = { interest: "兴趣", worry: "心事", plan: "打算", gossip: "八卦", want: "想要", other: "其他" };
     const STATE_LABEL = { fermenting: "还在搁", ready: "可以找你说", used: "说过了", dropped: "放下了" };
 
@@ -439,6 +481,10 @@
     let partners = [];
     let hiddenPartners = [];
     let globalSettings = {};
+    // 次数和可见伙伴共用一份页面草稿，不另存参与名单。
+    let videoShareDraft = null;
+    let videoShareSaving = false;
+    let videoShareNotice = "";
     // 安静时间关掉之前的那一段：恢复时原样回去，而不是每次都塞一段默认的 23:00~08:00。
     let lastQuietRange = null;
     // 提示音偏好存在 App 自己的全局存储里（跟聊天页共用），不走后端设置。
@@ -488,6 +534,7 @@
     }
 
     el.backToChat.addEventListener("click", () => {
+      stopVideoQr();
       if (window.parent !== window) {
         window.parent.postMessage({ type: "chahuahui:close-settings" }, "*");
         return;
@@ -513,6 +560,7 @@
     };
 
     function setTab(name) {
+      if (name !== "proactive") stopVideoQr();
       for (const [key, node] of Object.entries(el.panels)) node.hidden = key !== name;
       document.querySelectorAll(".tab").forEach((b) => {
         const active = b.dataset.tab === name;
@@ -1182,7 +1230,93 @@
       else note.textContent = "模型已选，但还没通过测试。";
     }
 
+    function paintVideoSharing() {
+      const locked = !videoShareDraft || videoShareSaving;
+      const host = document.getElementById("video-share-partners");
+      host.replaceChildren();
+      for (const partner of partners) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = partner.name || partner.id;
+        const selected = videoShareDraft?.partnerIds.includes(partner.id) === true;
+        button.className = selected ? "on" : "";
+        button.setAttribute("aria-pressed", String(selected));
+        button.disabled = locked;
+        button.addEventListener("click", () => {
+          if (!videoShareDraft || videoShareSaving) return;
+          videoShareDraft.partnerIds = selected
+            ? videoShareDraft.partnerIds.filter((id) => id !== partner.id)
+            : [...videoShareDraft.partnerIds, partner.id];
+          videoShareNotice = "尚未保存";
+          paintVideoSharing();
+        });
+        host.appendChild(button);
+      }
+      if (!partners.length && videoShareDraft) host.textContent = "还没有可参与的伙伴。";
+      choiceGroup(document.getElementById("video-share-options"), VIDEO_SHARE_CHOICES, videoShareDraft?.maxPerDay ?? 0, (value) => {
+        if (!videoShareDraft || videoShareSaving) return;
+        videoShareDraft.maxPerDay = Number(value);
+        videoShareNotice = "尚未保存";
+        paintVideoSharing();
+      });
+      document.querySelectorAll("#video-share-options button").forEach((button) => {
+        button.disabled = locked;
+        button.setAttribute("aria-pressed", String(button.classList.contains("on")));
+      });
+      const save = document.getElementById("video-share-save");
+      save.disabled = locked;
+      save.textContent = videoShareSaving ? "正在保存…" : "保存B站分享设置";
+      document.getElementById("video-share-status").textContent = !videoShareDraft ? "正在读取B站分享设置…"
+        : `${videoShareDraft.maxPerDay === 0 ? "全部暂停，参与名单保留" : `所有参与伙伴合计每日最多${videoShareDraft.maxPerDay}条`}。${videoShareSaving ? "正在保存…" : videoShareNotice}`;
+    }
+
+    async function saveVideoSharing() {
+      if (!videoShareDraft || videoShareSaving) return;
+      videoShareSaving = true;
+      paintVideoSharing();
+      // 与其他全局保存串行，避免旧全局回包覆盖本次次数回显。
+      const run = globalSaveChain.then(async () => {
+        try {
+          const payload = { maxPerDay: videoShareDraft.maxPerDay, partnerIds: partners.filter((p) => videoShareDraft.partnerIds.includes(p.id)).map((p) => p.id) };
+          const data = await api("PUT", "settings/video-sharing", payload);
+          const limit = data?.global?.videoShareMaxPerDay;
+          if (!Number.isInteger(limit) || limit < 0 || limit > 5 || !Array.isArray(data.partners)
+            || !partners.every((row) => typeof data.partners.find((saved) => saved?.id === row.id)?.videoSharingEnabled === "boolean")) {
+            throw new Error("B站分享设置回显不完整");
+          }
+          globalSettings = data.global;
+          for (const row of partners) {
+            const saved = data.partners.find((p) => p?.id === row.id);
+            if (saved) {
+              row.settings ??= {};
+              row.settings.videoSharingEnabled = saved.videoSharingEnabled === true;
+            }
+          }
+          videoShareDraft = {
+            maxPerDay: globalSettings.videoShareMaxPerDay,
+            partnerIds: partners.filter((p) => p.settings?.videoSharingEnabled === true).map((p) => p.id),
+          };
+          document.querySelectorAll("[data-video-partner-id]").forEach((node) => {
+            const row = partners.find((p) => p.id === node.dataset.videoPartnerId);
+            node.textContent = row?.settings?.videoSharingEnabled === true ? "参与B站分享" : "不参与B站分享";
+          });
+          videoShareNotice = "已保存";
+          say("B站分享设置已保存", "ok");
+        } catch {
+          videoShareNotice = "没存上，草稿已保留，请点击保存重试。";
+          say("B站分享设置没存上，草稿已保留。", "err");
+        } finally {
+          videoShareSaving = false;
+          paintVideoSharing();
+        }
+      });
+      globalSaveChain = run.then(() => undefined, () => undefined);
+      await run;
+    }
+    document.getElementById("video-share-save").addEventListener("click", saveVideoSharing);
+
     function paintGlobalChoices() {
+      paintVideoSharing();
       choiceGroup(document.getElementById("gate-gap-options"), GAP_CHOICES, globalSettings.globalGate?.minGapMinutes ?? 30, async (value) => {
         if (await saveGlobal({ globalGate: { minGapMinutes: Number(value) } }, "主动消息间隔已调整")) paintGlobalChoices();
       });
@@ -1207,6 +1341,203 @@
         styleHost.appendChild(button);
       }
     }
+
+    // 扫码登录局部状态；id 与 SVG 仅留在本页内存，不保存、不打印。
+    let videoStatusRevision = 0;
+    let videoQrTimer = null;
+    let videoQrCountdownTimer = null;
+    let videoQrId = "";
+    let videoQrExpiresAt = 0;
+    let videoRequestBusy = false;
+
+    function videoNote(text) {
+      document.getElementById("video-login-status").textContent = text;
+    }
+
+    function videoButtons() {
+      document.getElementById("video-login-button").disabled = videoRequestBusy;
+      document.getElementById("video-qrcode-refresh").disabled = videoRequestBusy;
+    }
+
+    function stopVideoQr() {
+      const hadQr = Boolean(videoQrId);
+      ++videoStatusRevision;
+      clearTimeout(videoQrTimer);
+      videoQrTimer = null;
+      clearTimeout(videoQrCountdownTimer);
+      videoQrCountdownTimer = null;
+      videoQrId = "";
+      videoQrExpiresAt = 0;
+      const countdown = document.getElementById("video-qrcode-countdown");
+      countdown.hidden = true;
+      countdown.textContent = "";
+      const image = document.getElementById("video-qrcode");
+      image.hidden = true;
+      image.removeAttribute("src");
+      if (hadQr) videoNote("扫码已暂停，需要登录时请重新获取二维码。");
+    }
+
+    function videoQrVisible() {
+      return !document.hidden && !document.getElementById("panel-proactive").hidden;
+    }
+
+    function updateVideoQrCountdown(revision) {
+      if (revision !== videoStatusRevision || !videoQrId) return;
+      if (!videoQrVisible()) {
+        stopVideoQr();
+        return;
+      }
+      const remainingMs = videoQrExpiresAt - Date.now();
+      if (remainingMs <= 0) {
+        stopVideoQr();
+        videoNote("二维码已过期，请刷新二维码。");
+        return;
+      }
+      const remainingSeconds = Math.ceil(remainingMs / 1000);
+      const minutes = String(Math.floor(remainingSeconds / 60)).padStart(2, "0");
+      const seconds = String(remainingSeconds % 60).padStart(2, "0");
+      const countdown = document.getElementById("video-qrcode-countdown");
+      countdown.textContent = `二维码剩余有效期：${minutes}:${seconds}`;
+      countdown.hidden = false;
+      const timer = setTimeout(() => {
+        if (videoQrCountdownTimer === timer) videoQrCountdownTimer = null;
+        updateVideoQrCountdown(revision);
+      }, 1000);
+      videoQrCountdownTimer = timer;
+    }
+
+    function videoSavedNote(storage) {
+      if (storage === "encrypted") return "已登录 · 凭据已由Windows系统加密保存在本机";
+      if (storage === "local") return "已登录 · 凭据已加密保存在本机，下次打开不用重扫";
+      return "已登录 · 凭据仅在本次运行保留";
+    }
+
+    function paintVideoStatus(status) {
+      if (status.status === "loggedIn" && status.hasLogin === true) {
+        videoNote(videoSavedNote(status.storage));
+      } else if (status.status === "expired") {
+        videoNote("B站登录凭据已过期，请重新扫码登录。");
+      } else if (status.status === "none") {
+        videoNote("尚未登录B站，可以扫码登录。");
+      } else if (status.storage === "encrypted") {
+        videoNote("网络暂时无法确认登录状态，已加密保存的凭据会保留；网络恢复后再复核。");
+      } else if (status.storage === "local") {
+        videoNote("网络暂时无法确认登录状态，保存在本机的凭据会保留；网络恢复后再复核。");
+      } else {
+        videoNote("网络暂时无法确认登录状态，当前凭据仅本次运行保留；网络恢复后再复核。");
+      }
+    }
+
+    async function refreshVideoStatus() {
+      if (videoRequestBusy) return;
+      const revision = ++videoStatusRevision;
+      videoRequestBusy = true;
+      videoButtons();
+      try {
+        const status = await api("GET", "video/status");
+        if (status.ok !== true) throw new Error("Invalid status");
+        if (revision === videoStatusRevision) paintVideoStatus(status);
+      } catch {
+        if (revision === videoStatusRevision) videoNote("B站登录状态读取失败，请检查连接后重试扫码。");
+      } finally {
+        videoRequestBusy = false;
+        videoButtons();
+      }
+    }
+
+    function scheduleVideoQrPoll(revision) {
+      if (revision !== videoStatusRevision || !videoQrId || !videoQrVisible()) return;
+      videoQrTimer = setTimeout(() => pollVideoQr(revision), 2000);
+    }
+
+    async function pollVideoQr(revision) {
+      videoQrTimer = null;
+      if (revision !== videoStatusRevision || !videoQrId || !videoQrVisible() || videoRequestBusy) return;
+      if (Date.now() >= videoQrExpiresAt) {
+        stopVideoQr();
+        videoNote("二维码已过期，请刷新二维码。");
+        return;
+      }
+      videoRequestBusy = true;
+      // 轮询锁只防并发，不反复切换按钮禁用态，避免每两秒闪一下。
+      let again = false;
+      try {
+        const result = await apiWith("POST", "video/qrcode/poll", { id: videoQrId }, 30000);
+        if (revision !== videoStatusRevision) return;
+        if (result.ok !== true) throw new Error("Invalid poll");
+        if (result.status === "loggedIn") {
+          stopVideoQr();
+          videoNote(videoSavedNote(result.storage));
+        } else if (result.status === "expired") {
+          stopVideoQr();
+          videoNote("二维码已过期，请刷新二维码。");
+        } else if (result.status === "waiting" || result.status === "scanned") {
+          videoNote(result.status === "scanned" ? "已扫码，请在B站确认登录。" : "等待扫码，请使用B站客户端扫描二维码。");
+          again = true;
+        } else throw new Error("Invalid poll status");
+      } catch (error) {
+        if (revision === videoStatusRevision) {
+          stopVideoQr();
+          videoNote(error?.message === "未能取得有效登录凭据，请重新扫码"
+            ? "扫码已确认，但未取得可用登录凭据，尚未登录成功。请先查看诊断结果，不必连续扫码。"
+            : "扫码状态读取失败，请检查连接后刷新二维码重试。");
+        }
+      } finally {
+        videoRequestBusy = false;
+        if (again) scheduleVideoQrPoll(revision);
+      }
+    }
+
+    async function startVideoQr() {
+      if (videoRequestBusy || !videoQrVisible()) return;
+      stopVideoQr();
+      const revision = videoStatusRevision;
+      videoRequestBusy = true;
+      videoButtons();
+      videoNote("正在生成本地二维码…");
+      try {
+        const result = await apiWith("POST", "video/qrcode/start", {}, 12000);
+        if (revision !== videoStatusRevision) return;
+        const expiry = typeof result.expiresAt === "number" ? result.expiresAt : Date.parse(result.expiresAt);
+        // SVG 在 img 隔离上下文渲染，且拒绝脚本、外链和事件属性，不注入页面 HTML。
+        if (result.ok !== true || typeof result.id !== "string" || !result.id || typeof result.svg !== "string"
+          || !/^\s*<svg\b/i.test(result.svg) || /<!|<\s*(?:script|foreignObject|image|use)\b|\bhref\s*=|\bon\w+\s*=|url\s*\(|@import/i.test(result.svg)
+          || !Number.isFinite(expiry) || expiry <= Date.now()) throw new Error("Invalid QR response");
+        videoQrId = result.id;
+        videoQrExpiresAt = expiry;
+        const image = document.getElementById("video-qrcode");
+        image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(result.svg)}`;
+        image.hidden = false;
+        document.getElementById("video-qrcode-refresh").hidden = false;
+        videoNote("等待扫码，请使用B站客户端扫描二维码。");
+        updateVideoQrCountdown(revision);
+        scheduleVideoQrPoll(revision);
+      } catch (error) {
+        if (revision === videoStatusRevision) {
+          stopVideoQr();
+          const safeMessage = [
+            "连接B站二维码接口失败，请检查网络权限或连接。",
+            "B站二维码接口拒绝了请求，请稍后重试。",
+            "B站返回的二维码格式暂不兼容。",
+            "本地二维码编码失败。",
+          ].find((message) => message === error?.message);
+          videoNote(safeMessage || "二维码暂时生成失败，请检查连接后重试。");
+        }
+      } finally {
+        videoRequestBusy = false;
+        videoButtons();
+      }
+    }
+
+    document.getElementById("video-login-button").addEventListener("click", startVideoQr);
+    document.getElementById("video-qrcode-refresh").addEventListener("click", startVideoQr);
+    window.addEventListener("pagehide", () => stopVideoQr());
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        stopVideoQr();
+        videoNote("已暂停扫码，回来后请重新获取二维码。");
+      }
+    });
 
     document.getElementById("msg-avatars-switch").addEventListener("click", async () => {
       const next = !Boolean(globalSettings.messageAvatars);
@@ -1690,16 +2021,23 @@
       return box;
     }
 
-    async function savePartner(agentId, patch, successText = "已保存") {
+    async function savePartner(agentId, patch, successText = "已保存", failureText = null) {
       try {
         const data = await api("PUT", `settings/partner/${encodeURIComponent(agentId)}`, patch);
         const row = partners.find((p) => p.id === agentId);
-        if (row) row.settings = data.settings;
+        if (row) {
+          // 非B站设置的慢回包不能覆盖集中保存刚更新的参与状态。
+          if (!Object.hasOwn(patch, "videoSharingEnabled")) {
+            if (Object.hasOwn(row.settings ?? {}, "videoSharingEnabled")) data.settings.videoSharingEnabled = row.settings.videoSharingEnabled;
+            else delete data.settings.videoSharingEnabled;
+          }
+          row.settings = data.settings;
+        }
         say(successText, "ok");
         holdViewport();
         return data.settings;
       } catch (error) {
-        say(`没存上：${error.message}`, "err");
+        say(failureText ?? `没存上：${error.message}`, "err");
         return null;
       }
     }
@@ -1715,6 +2053,28 @@
       if (copy) { const p = document.createElement("p"); p.textContent = copy; head.appendChild(p); }
       card.appendChild(head);
       return card;
+    }
+
+    function partnerVideoField(agentId, settings) {
+      const status = document.createElement("small");
+      status.className = "detail-field-note video-partner-note";
+      status.dataset.videoPartnerId = agentId;
+      status.setAttribute("role", "status");
+      status.textContent = settings.videoSharingEnabled === true ? "参与B站分享" : "不参与B站分享";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "soft-button";
+      button.textContent = "前往主设置管理B站分享";
+      button.addEventListener("click", () => {
+        setTab("proactive");
+        paintVideoSharing();
+        const card = document.getElementById("video-share-card");
+        card.scrollIntoView({ block: "start" });
+        document.getElementById("video-share-save").focus({ preventScroll: true });
+      });
+      const row = field("B站分享", status);
+      row.appendChild(button);
+      return row;
     }
 
     async function openPartner(agentId, detailTab = "contact") {
@@ -1886,6 +2246,7 @@
         }
       });
       contactCard.appendChild(field("给你递小东西", feedSw));
+      contactCard.appendChild(partnerVideoField(agentId, s));
 
       const voiceCard = detailCard("偶尔用声音说话", "这一位的语音只会在短回复、合适的情境里低频出现；长回复仍然发文字。");
       const voiceSwitch = document.createElement("button");
@@ -3534,29 +3895,48 @@
     });
 
     async function reloadSettings() {
-      const data = await api("GET", "settings");
-      partners = data.partners ?? [];
-      hiddenPartners = data.hiddenPartners ?? [];
-      globalSettings = data.global ?? {};
-      styleCatalog = data.styles ?? [];
-      modelCatalog = data.models ?? [];
-      visionModelCatalog = data.visionModels ?? [];
-      voiceChoices = data.voiceChoices ?? [];
-      voiceGroups = data.voiceGroups ?? [];
-      voiceTiers = data.voiceTiers ?? [];
-      voicePresets = data.voicePresets ?? [];
-      daybookInstalled = Boolean(data.daybookInstalled);
-      if (currentId && !partners.some((p) => p.id === currentId)) currentId = partners[0]?.id ?? null;
-      paintGlobal();
-      paintPartnerList();
-      if (currentId) await openPartner(currentId);
-      else el.partnerBody.replaceChildren();
+      // GET本身也入队，避免先取得的旧快照在集中保存之后回填。
+      const run = globalSaveChain.then(async () => {
+        const data = await api("GET", "settings");
+        const previousVisibleIds = new Set(partners.map((p) => p.id));
+        partners = data.partners ?? [];
+        hiddenPartners = data.hiddenPartners ?? [];
+        globalSettings = data.global ?? {};
+        styleCatalog = data.styles ?? [];
+        modelCatalog = data.models ?? [];
+        visionModelCatalog = data.visionModels ?? [];
+        voiceChoices = data.voiceChoices ?? [];
+        voiceGroups = data.voiceGroups ?? [];
+        voiceTiers = data.voiceTiers ?? [];
+        voicePresets = data.voicePresets ?? [];
+        daybookInstalled = Boolean(data.daybookInstalled);
+        if (!videoShareDraft) {
+          const limit = globalSettings.videoShareMaxPerDay;
+          videoShareDraft = {
+            maxPerDay: Number.isInteger(limit) && limit >= 0 && limit <= 5 ? limit : 0,
+            partnerIds: partners.filter((p) => p.settings?.videoSharingEnabled === true).map((p) => p.id),
+          };
+        } else {
+          // 旧可见伙伴保留未保存选择；新出现（含恢复）的伙伴按服务端字段初始化。
+          videoShareDraft.partnerIds = partners.filter((p) => previousVisibleIds.has(p.id)
+            ? videoShareDraft.partnerIds.includes(p.id)
+            : p.settings?.videoSharingEnabled === true).map((p) => p.id);
+        }
+        if (currentId && !partners.some((p) => p.id === currentId)) currentId = partners[0]?.id ?? null;
+        paintGlobal();
+        paintPartnerList();
+        if (currentId) await openPartner(currentId);
+        else el.partnerBody.replaceChildren();
+      });
+      globalSaveChain = run.then(() => undefined, () => undefined);
+      await run;
     }
 
     async function boot() {
       try {
         hana.ready?.({ ok: true });
         await reloadSettings();
+        void refreshVideoStatus();
         await loadMessageSound();
       } catch (error) {
         const message = String(error?.message ?? "");

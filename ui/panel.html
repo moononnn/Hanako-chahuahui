@@ -1667,6 +1667,11 @@
       el.input.style.height = "0px";
       el.input.style.height = `${el.input.scrollHeight}px`;
     }
+    function settleComposerAfterLayout() {
+      requestAnimationFrame(() => requestAnimationFrame(autosizeInput));
+    }
+    window.addEventListener("load", settleComposerAfterLayout, { once: true });
+    window.addEventListener("resize", settleComposerAfterLayout);
     function clearPendingQuote() {
       pendingQuote = null;
       el.pendingQuote.hidden = true;
@@ -1751,6 +1756,41 @@
 
     let lastRenderedConversationAt = null;
 
+    /** 气泡里的链接：只认 http/https，点击交给宿主打开；宿主不给开就退回浏览器默认行为。 */
+    const BUBBLE_LINK = /https?:\/\/[^\s<>"'\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]+/gu;
+
+    async function openBubbleLink(url) {
+      try {
+        if (hana?.external?.open) {
+          const result = await hana.external.open(url);
+          if (result?.opened) return;
+        }
+      } catch { /* 没授权或旧宿主，走下一层 */ }
+      try { window.open(url, "_blank", "noopener,noreferrer"); } catch { /* 都打不开就只剩手动复制 */ }
+    }
+
+    /** 把一段文本填进气泡，链接单独成 <a>，其余仍然是纯文本（不拼 HTML）。 */
+    function fillBubbleText(node, text) {
+      const body = String(text ?? "");
+      let last = 0;
+      for (const match of body.matchAll(BUBBLE_LINK)) {
+        if (match.index > last) node.appendChild(document.createTextNode(body.slice(last, match.index)));
+        const url = match[0];
+        const link = document.createElement("a");
+        link.className = "bubble-link";
+        link.href = url;
+        link.textContent = url;
+        link.rel = "noreferrer noopener";
+        link.addEventListener("click", (event) => {
+          event.preventDefault();
+          void openBubbleLink(url);
+        });
+        node.appendChild(link);
+        last = match.index + url.length;
+      }
+      if (last < body.length) node.appendChild(document.createTextNode(body.slice(last)));
+    }
+
     function bubble(role, text, anchor = null, at = null) {
       el.emptyTip?.remove();
       const parsedAt = Date.parse(at ?? "");
@@ -1781,7 +1821,7 @@
       }
       const b = document.createElement("div");
       b.className = "bubble";
-      b.textContent = text;
+      fillBubbleText(b, text);
       line.append(b, time);
       col.appendChild(line);
       row.appendChild(col);

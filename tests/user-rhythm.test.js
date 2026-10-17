@@ -16,7 +16,7 @@ test("数据不足时不硬凑生活节拍", () => {
 
 test("同一天刷够消息也不能直接建立生活节拍", () => {
   const messages = Array.from({ length: 8 }, (_, i) => row(1, `08:${String(i).padStart(2, "0")}`));
-  const profile = analyzeUserRhythm(messages);
+  const profile = analyzeUserRhythm(messages, { now: new Date("2026-09-02T12:00:00+08:00") });
   assert.equal(profile.ready, false);
   assert.equal(profile.distinctDays, 1);
 });
@@ -26,7 +26,7 @@ test("从用户自己的发言提取常见时段，并按工作日分组", () =>
     row(1, "08:00"), row(2, "08:20"), row(3, "08:10"), row(4, "08:30"),
     row(5, "08:00"), row(6, "23:30", "我睡啦"), row(7, "23:40", "晚安"), row(8, "08:15"),
   ];
-  const profile = analyzeUserRhythm(messages);
+  const profile = analyzeUserRhythm(messages, { now: new Date("2026-09-10T12:00:00+08:00") });
   assert.equal(profile.ready, true);
   assert.match(profile.usualWindow.start, /^08:/);
   assert.ok(Object.keys(profile.weekdayWindows).length > 0);
@@ -37,7 +37,7 @@ test("早晚两个离散高峰不会被合并成横跨全天的窗口", () => {
     row(1, "08:00"), row(2, "08:10"), row(3, "08:20"), row(4, "08:30"),
     row(5, "23:30"), row(6, "23:40"), row(7, "23:50"), row(8, "23:55"),
   ];
-  const profile = analyzeUserRhythm(messages);
+  const profile = analyzeUserRhythm(messages, { now: new Date("2026-09-10T12:00:00+08:00") });
   assert.equal(profile.ready, true);
   assert.equal(profile.usualWindow.start, "08:00");
   assert.ok(profile.usualWindow.end < "10:00");
@@ -48,10 +48,10 @@ test("语气词变化只作为弱信号，且要有足够样本", () => {
     ...Array.from({ length: 6 }, (_, i) => row(i + 1, "08:00", "今天处理点事情")),
     ...Array.from({ length: 6 }, (_, i) => row(i + 10, "08:00", "哈哈啦~")),
   ];
-  const profile = analyzeUserRhythm(messages);
+  const profile = analyzeUserRhythm(messages, { now: new Date("2026-09-20T12:00:00+08:00") });
   assert.equal(profile.style.changed, true);
   assert.equal(profile.style.direction, "lighter");
-  assert.match(userRhythmText(messages), /弱信号/);
+  assert.match(userRhythmText(messages, { now: new Date("2026-09-20T12:00:00+08:00") }), /弱信号/);
 });
 
 test("今天没有出现且明显晚于平时才生成迟到观察", () => {

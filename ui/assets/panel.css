@@ -731,6 +731,15 @@ body.slot-embedded .chat.has-bg .composer::before {
   animation: pop .18s ease-out;
   transition: transform .14s ease, box-shadow .14s ease;
 }
+/* 链接跟气泡同一个颜色，只靠下划线认；不另起一种蓝色，不然一眼就像推送。 */
+.bubble .bubble-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.bubble .bubble-link:hover { text-decoration-thickness: 2px; }
 .row.me .bubble {
   background: var(--bubble-me-bg, #dff0e8);
   border: 1px solid var(--bubble-me-border, #c5e4d6);

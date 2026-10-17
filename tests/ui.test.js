@@ -396,6 +396,10 @@ test("输入框：空着就一行，写多了自己长，长到头就在框里�
   assert.doesNotMatch(panel, /Math\.min\(120,/, "上限交给 CSS，别在 JS 里再写一份数字");
 });
 
+test("首次打开及宿主窗口尺寸恢复后重新测量输入框", () => {
+  assert.match(panel, /function settleComposerAfterLayout\(\) \{\s*requestAnimationFrame\(\(\) => requestAnimationFrame\(autosizeInput\)\);\s*\}\s*window\.addEventListener\("load", settleComposerAfterLayout, \{ once: true \}\);\s*window\.addEventListener\("resize", settleComposerAfterLayout\);/);
+});
+
 test("聊天入口拒绝超长消息和非法伙伴 ID", () => {
   assert.match(app, /code: "INVALID_PARTNER_ID", message: "伙伴 ID 不合法"/);
   assert.match(app, /text\.length > 12000/);
@@ -407,7 +411,7 @@ test("设置接口只接受用户设置字段", () => {
   assert.match(app, /app\.use\("\*", async \(c, next\) =>/);
   assert.match(app, /INVALID_PARTNER_ID/);
   assert.match(app, /const GLOBAL_SETTING_KEYS = new Set\(\[/);
-  assert.match(app, /const PARTNER_SETTING_KEYS = new Set\(\["tier", "proactiveEnabled", "model", "vision", "voice", "partnerFeedEnabled"\]\)/);
+  assert.match(app, /const PARTNER_SETTING_KEYS = new Set\(\[[\s\S]{0,240}?"videoSharingEnabled"[\s\S]{0,40}?\]\)/);
   assert.match(app, /code = "UNKNOWN_SETTING"/);
   assert.match(app, /pickSettingsPatch\(body, PARTNER_SETTING_KEYS, "伙伴设置"\)/);
   assert.doesNotMatch(app, /function normalizePartnerSettingsPatch\(body\) \{\n\s*const patch = \{ \.\.\.\(body/);
@@ -930,20 +934,20 @@ test("起跑线：自动量那边的痕迹，也能自己定从哪儿算，只�
   assert.match(app, /seedStale\(knowing\.relationSeed, seedLastTry\)/, "该重量的就重量一份（量不出东西也有节流）");
   assert.doesNotMatch(app, /session:list/, "量会话那条路 v2 应用走不通，别写");
   assert.match(app, /note: relationshipNote\(effectiveRelationship\(knowing\), knowing\.relationSeed\)/, "回复那一句也要带上起跑线");
-  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, askBudgetSpent: askSpent, reason: sendReason, introducedText \}\)/, "主动消息只带与当前消息类型相符的兴趣发现，同时带上本人人格、电脑那边的近况、「纯招呼」标志、关系式由头与已经介绍过什么");
+  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, video: shareableVideo, videoLoginNotice, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, askBudgetSpent: askSpent, reason: sendReason, introducedText \}\)/, "主动消息只带与当前消息类型相符的兴趣发现，同时带上本人人格、电脑那边的近况、「纯招呼」标志、关系式由头与已经介绍过什么");
   assert.match(app, /isFirstProactiveOfLifeDay\(state\.lastSentAt, now\)/, "首条联系按四点生活日计算");
   assert.match(app, /const morningFirst = firstOfLifeDay && isMorningPart\(now\)/, "晨间开口只由生活日首条且实际时段决定");
   assert.ok(app.includes("&& !followup?.read && !wakeEcho && !greetingOnly"), "只有纯招呼才跳过兴趣素材");
-  assert.match(app, /const greetingOnly = morningFirst\s+&& !todoHere\s+&& !wakeEcho\s+&& !followup\s+&& !farewellSend\s+&& !seed\s+&& !discovery\s+&& !gate\.exception/u, "有待办、回声、等回音或兴趣素材时不走纯招呼抽签");
+  assert.match(app, /const greetingOnly = morningFirst\s+&& !todoHere\s+&& !wakeEcho\s+&& !followup\s+&& !farewellSend\s+&& !seed\s+&& !discovery\s+&& !video\s+&& !videoLoginNotice\s+&& !gate\.exception/u, "有待办、回声、等回音、视频或兴趣素材时不走纯招呼抽签");
   assert.ok(app.includes('if (!exception && kind === "proactive" && !String(todoNudge ?? "").trim() && isNighttimeSleepQuestion(text, now))'), "只拦普通闲聊主动消息，不丢到点提醒或晚安/夜间例外");
   // 锚点门（2026-10-06）：内容型开口先看她那边有没有真凭据，免得又出一条她插不进嘴的自说自话
   assert.match(app, /const anchor = proactiveAnchor\(\{/, "内容型开口要过锚点门");
   // 关系式由头（2026-10-12）：多一条不用兴趣也能开口的路，但频率、护栏、老规矩一样不动
   assert.match(app, /const reasonEligible = !todoHere\s+&& !farewellSend\s+&& !wakeEcho\s+&& !followup\s+&& !gate\.exception/u, "待办、回声、未回复跟进、晚安、夜间例外优先，关系式由头一个都不抢");
-  assert.match(app, /const reasonPick = reasonEligible\s+\? pickReason\(\{[\s\S]{0,320}?interestAvailable: Boolean\(anchor\.ok && \(seed \|\| discovery\)\)[\s\S]{0,160}?hasContext: Boolean\(sceneEcho\) \|\| workActivity\.active === true/u, "兴趣那一份仍过锚点门；共同经历和吐槽只认真凭据");
+  assert.match(app, /const reasonPick = \(?[\s\S]{0,400}?reasonEligible\s+\? pickReason\(\{[\s\S]{0,320}?interestAvailable: Boolean\(anchor\.ok && \(seed \|\| discovery \|\| video\)\)[\s\S]{0,160}?hasContext: Boolean\(sceneEcho\) \|\| workActivity\.active === true/u, "兴趣那一份仍过锚点门；共同经历和吐槽只认真凭据");
   assert.match(app, /const reasonForSend = greetingOnly \? null : reason/, "纯招呼占住这一轮时不叠关系式由头");
   assert.match(app, /: reasonForSend\s+\? "word"\s+: decideForm\(/u, "挑到关系式由头就走文字出口，不再退回去要话题");
-  assert.match(app, /&& !\(reasonAllowed && reason && reason\.kind !== "interest"\);/, "非兴趣那几种由头不带兴趣素材，也不消耗种子和发现");
+  assert.match(app, /&& !\(reasonAllowed && reason && reason\.kind !== "interest"\)/, "非兴趣那几种由头不带兴趣素材，也不消耗种子和发现");
   assert.match(app, /const reasonAllowed = kind === "proactive"\s+&& !exception\s+&& !String\(todoNudge \?\? ""\)\.trim\(\)\s+&& !followup\s+&& !wakeEcho\s+&& !greetingOnly/u, "待办、跟进、回声、夜间例外这一轮不启用由头，低信号放行也不会跟着误开");
   assert.match(app, /const introducedText = introducedTextFrom\(threadRows\)/, "已经介绍过什么只认实际送出的正文");
   assert.match(app, /const reasonResolved = enrichReasonContext\(reasonAllowed \? reason : null, \{ sceneEcho, workfeedText, sentTexts: recentAsks \}\)/, "由头凭据在出站那一步才拼全，且只在真正用得上的那一轮拼");
@@ -967,8 +971,8 @@ test("起跑线：自动量那边的痕迹，也能自己定从哪儿算，只�
   assert.match(app, /const starved = live\.filter\(/, "还有方向空仓就继续补货，后备库才叫充足");
   assert.match(app, /const candidateDiscovery = followup\?\.read \|\| candidateSeed[\s\S]{0,90}?nextDiscovery\(state\.interestLearning, now\)/, "种子在手时不再另找时效发现");
   assert.match(app, /discoveryForProactiveMessage\(candidateDiscovery, \{ exception: gate\.exception \}\)/, "夜间例外不得绑定或消耗兴趣发现");
-  assert.match(app, /const interestContent = !exception && kind === "proactive"/, "夜间例外不使用兴趣素材");
-  assert.match(app, /const shareableDiscovery = interestContent \? discoveryForProactiveMessage\(discovery, \{ exception \}\) : null/, "问候、回声、提醒与例外都不消耗候选发现");
+  assert.match(app, /const interestContent = \(?[\s\S]{0,400}?!videoLoginNotice && !exception && kind === "proactive"/, "夜间例外与登录提醒不使用兴趣素材");
+  assert.match(app, /const shareableDiscovery = interestContent(?: && !shareableVideo)? \? discoveryForProactiveMessage\(discovery, \{ exception \}\) : null/, "问候、回声、提醒与例外都不消耗候选发现");
   assert.match(app, /if \(shareableDiscovery\) \{[\s\S]{0,250}?markDiscoveryShared\(current\.interestLearning, shareableDiscovery\.id/, "只在实际采用兴趣分享消息后消耗发现");
   assert.match(app, /主动联系不能等用户先说话才有兴趣/);
   assert.match(app, /const personaText = renderPersona\(persona/);
@@ -1147,7 +1151,12 @@ test("醒来还是睡着都是ta自己的事，不看她打不打开窗口", () 
     "递出去不演的那些（手机不在手）才只记一个时刻；skip 那套已经删了",
   );
   assert.doesNotMatch(app, /plan\.skip/, "不再有「掷骰子决定理不理」这回事");
-  assert.match(app, /function deliverScheduledReply\(agentId(?:, generation[^)]*)?\)[\s\S]{0,4200}?announceArrival/, "到点落库后要喊她一声");
+  // 不再量「几千字符以内」：函数一变长就误报。改用函数边界，只要在同一个函数里喊人就算数。
+  const deliverAt = app.indexOf("async function deliverScheduledReply");
+  const deliverNext = app.indexOf("\n  async function ", deliverAt + 10);
+  const deliverFn = app.slice(deliverAt, deliverNext > deliverAt ? deliverNext : deliverAt + 20000);
+  assert.ok(deliverAt > 0, "deliverScheduledReply 得在");
+  assert.match(deliverFn, /announceArrival/, "到点落库后要喊她一声");
   assert.match(app, /if \(plan\.mode === "hand"\) \{/, "已读延迟只有醒着那条还按老节奏算");
   assert.doesNotMatch(
     app,
@@ -1422,7 +1431,7 @@ test("等回音也过主动硬门并在真实发送后记配额，暂存意图�
   assert.match(app, /const candidateSeed = followup\?\.read[\s\S]{0,220}?pickSeed\(seedBook, \{[\s\S]{0,220}?mutedIds: mutedMotifIds\(moodBook\)/, "临门先端手上的种子，种子也就那一份");
   assert.match(app, /const candidateDiscovery = followup\?\.read \|\| candidateSeed[\s\S]{0,90}?nextDiscovery\(state\.interestLearning, now\)/, "临门只剩种子或时效发现二选一");
   assert.match(app, /discoveryForProactiveMessage\(candidateDiscovery, \{ exception: gate\.exception \}\)/, "夜间例外不得消耗兴趣发现");
-  assert.match(app, /const shareableDiscovery = interestContent \? discoveryForProactiveMessage\(discovery, \{ exception \}\) : null/, "发送阶段只使用实际需要的兴趣素材");
+  assert.match(app, /const shareableDiscovery = interestContent(?: && !shareableVideo)? \? discoveryForProactiveMessage\(discovery, \{ exception \}\) : null/, "发送阶段只使用实际需要的兴趣素材");
   assert.match(app, /if \(shareableDiscovery\) \{[\s\S]{0,250}?markDiscoveryShared\(current\.interestLearning, shareableDiscovery\.id/, "例外和未采用发现都不落已分享状态");
   assert.doesNotMatch(app, /sent\.gateBlocked && readyTopic/, "用户旧话题不能再从暂存旁路进入主动话题");
 });
@@ -1583,7 +1592,7 @@ test("伙伴每轮都能按性格安静收尾，且异步排期不把这个结�
   assert.match(app, /store\.setPendingReply\(agentId, \{[\s\S]{0,180}?dueAt: new Date\(merged\)\.toISOString\(\),[\s\S]{0,80}?mode/, "待回复的到点要落盘");
   assert.match(app, /store\.setPendingReply\(agentId, \{[\s\S]{0,160}?mode: `live-\$\{plan\.mode\}`[\s\S]{0,160}?messageId: stored\.id/, "实时生成启动前也要落恢复凭证");
   assert.match(app, /async function recoverPendingReplies\(\)/, "重启后要恢复挂起的回复");
-  assert.match(app, /const tail = messages\.slice\(lastAssistant \+ 1\)\.filter\(\(row\) => row\?\.role === "user"\)/, "旧排期只看伙伴最近一次回复后的尾部消息");
+  assert.match(app, /const tail = messages\.slice\(lastAssistant \+ 1\)\.filter\(\(row\) => row\?\.role === "user" && isSpeechMessage\(row\)\)/, "旧排期只看伙伴最近一次回复后真说话的尾部消息");
   // 候选条件后来多了一道「挂着不可用提示的不算」（防每五分钟重试刷屏），
   // 这里守的还是原意：unreadResetAt（删除后恢复未读）必须被排除在外。
   assert.match(app, /tail\.find\(\(row\) => !row\.readAt && !row\.unreadResetAt && !row\.recalled[^)]*\)/, "删除后明确恢复未读的原话不能被旧账恢复流程自动重回");

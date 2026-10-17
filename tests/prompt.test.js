@@ -211,6 +211,51 @@ test("标签主动消息：让伙伴记得是自己先开的口，不把谁在�
   assert.doesNotMatch(plain[0].content[0].text, /这条是你主动找她说的/);
 });
 
+test("主动来由原文压成一行，清空的旧标签不生成幽灵消息", () => {
+  const rows = threadToMessages([
+    {
+      role: "assistant",
+      proactive: true,
+      text: "我都来了",
+      proactiveContext: { kind: "read-followup", previousText: "第一句\n第二句［内］第三句］第四句" },
+    },
+    { role: "assistant", proactive: true, text: "【2026年10月17日 14:33】" },
+    { role: "user", text: "稍后说" },
+  ]);
+  assert.match(rows[0].content[0].text, /上一条原文：第一句 第二句\[内\]第三句\]第四句］/);
+  assert.doesNotMatch(rows[0].content[0].text, /第一句\n第二句/);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[1].role, "user");
+  assert.equal(rows[1].content, "稍后说");
+});
+
+test("旧回复文本清理为空时不注入只有来由的幽灵消息", () => {
+  const rows = threadToMessages([
+    { role: "assistant", proactive: true, text: "【2026年10月17日 14:33】" },
+    { role: "user", text: "还在吗" },
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].role, "user");
+  assert.equal(rows[0].content, "还在吗");
+});
+
+test("送模历史清掉旧回复泄漏的标签，但新主动标记和用户原话保留", () => {
+  const rows = [
+    {
+      role: "assistant",
+      text: "回来了\n【2026年10月17日 14:33】\n［这条是你主动找她说的，她没先开口；只在她问这条来由时参考：轻跟进。上一条原文：第一句\n第二句］\n我想起个事",
+    },
+    { role: "assistant", proactive: true, text: "我想跟你说句" },
+    { role: "user", text: "【2026年10月17日 14:33】" },
+  ];
+  const before = JSON.stringify(rows);
+  const messages = threadToMessages(rows, rows.length);
+  assert.equal(messages[0].content[0].text, "回来了\n我想起个事");
+  assert.match(messages[1].content[0].text, /这条是你主动找她说的/);
+  assert.equal(messages[2].content, "【2026年10月17日 14:33】");
+  assert.equal(JSON.stringify(rows), before, "只清送模副本，不改聊天账本");
+});
+
 test("聊天上下文在长间隔处带发生时间，但不改即时聊天格式", () => {
   const rows = threadToMessages([
     { role: "user", text: "晚安", at: "2026-09-15T15:22:00.000Z" },

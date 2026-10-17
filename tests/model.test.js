@@ -138,7 +138,7 @@ test("utility：主入口统一传诊断，仅延长后台任务，前台搜索�
   }
   assert.equal((await ask("", "", 400)).timeoutMs, 120000);
   assert.match(source, /raw = await askCheap\(spec\.systemPrompt, spec\.userText, 420, \{ timeoutMs: 60_000 \}\)/);
-  assert.match(source, /rawPlan = await askCheap\(spec\.systemPrompt, spec\.userText, 180, \{ timeoutMs: 60_000 \}\)/);
+  assert.match(source, /rawPlan = await askCheap\(spec\.systemPrompt, spec\.userText, videoEnabled \? 1000 : 180, \{ timeoutMs: 60_000 \}\)/);
   assert.match(source, /ask: \(prompt, text\) => askCheap\(prompt, text, 180, \{ timeoutMs: 10_000 \}\)/);
 });
 

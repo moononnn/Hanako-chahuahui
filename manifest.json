@@ -2,9 +2,9 @@
   "manifestVersion": 2,
   "id": "chahuahui",
   "name": "茶话会",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "entry": "index.js",
-  "description": "像聊天软件一样和 AI 伙伴唠嗑，ta 也会根据自己的兴趣爱好主动找你聊天搭话。搭配「表情包」可以互相斗图，搭配「拾光记」不仅可以感知天气、提醒待办，还能在使用「专注」功能时，陪你沉浸式专注。",
+  "description": "像聊天软件一样和 Hana 里的伙伴唠嗑，ta 也会根据自己的兴趣爱好主动找你聊天搭话。搭配「表情包」可以互相斗图，搭配「拾光记」不仅可以感知天气、提醒待办，还能在使用「专注」功能时，陪你沉浸式专注。ta 现在还会自己去刷 B 站，碰上感兴趣的视频就分享给你。",
   "icon": "assets/icon.png",
   "minAppVersion": "0.1020.0",
   "capabilities": [
@@ -14,10 +14,15 @@
     "app/services.provide",
     "app/services.call",
     "app/public-data.read",
-    "app/events.emit"
+    "app/events.emit",
+    "app/ui.open-external"
   ],
   "network": {
     "allowedHosts": [
+      "api.bilibili.com",
+      "passport.bilibili.com",
+      "passport.biligame.com",
+      "aisubtitle.hdslb.com",
       "www.bing.com",
       "top.baidu.com",
       "www.toutiao.com",
@@ -30,7 +35,7 @@
       "POST"
     ],
     "defaultTimeoutMs": 8000,
-    "maxResponseBytes": 1048576
+    "maxResponseBytes": 2097152
   },
   "contributes": {
     "cards": [

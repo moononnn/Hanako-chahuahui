@@ -86,14 +86,19 @@ test('想念可以直接说，但别说完再补一句解释', () => {
   const text = proactiveSpec({ ...common, reason: { kind: 'affection' } }).userText;
   assert.match(text, /不必是她说出口的第一句/);
   assert.match(text, /直说想念就是最对的那句，照直说，不用绕/, '关系本来就直的时候，直说是正路不是让步');
-  assert.match(text, /落点自己挑/, '绕着说的路子也得留着，不能只剩一种');
+  assert.match(text, /怎么靠近换着来/, '绕着说的路子也得留着，不能只剩一种');
   assert.match(text, /别说完想念再补一句解释自己为什么想她/);
   assert.match(text, /说完就停/);
-  assert.match(text, /别每回想念都落成同一个样子/);
+  assert.match(text, /同一类动作或同一句开头连着出现两次/);
   assert.match(text, /别一律写成软话，也别一律写成撒娇/);
-  // 上一版把它写成了「别当默认开头」，那是矫枉过正：最亲的那位本来就该直说
-  assert.doesNotMatch(text, /别把「我想你了」当默认开头/);
+  // 2026-10-16 反馈：抱被当成了唯一出口，14 天里四条想念全落成同一个动作。
+  // 身体落点和非身体落点都得留着，别把「换着来」写成只有一条路。
+  assert.match(text, /把位置让出来或挪过去/, '身体落点不止一种');
+  assert.match(text, /说一件你正想着她的具体小事/, '非身体落点也得留着');
+  assert.match(text, /不要让想念只剩下抱这一个出口/);
   // 别的由头不受这条影响
   const contact = proactiveSpec({ ...common, reason: { kind: 'contact' } }).userText;
   assert.doesNotMatch(contact, /我想你了/);
+  assert.match(contact, /搭上话的方式换着来/, '搭话也不能每次都同一个动作');
+  assert.match(contact, /别每次都用同一个动作/);
 });

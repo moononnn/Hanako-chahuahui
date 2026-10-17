@@ -357,7 +357,7 @@ test("重新开始只保留性格，不保留聊天与相处记忆", () => {
   assert.equal(knowing.hobbies.length, 0);
   assert.equal(store.getThread("nova").messages.length, 0);
   assert.equal(store.getPendingReply("nova"), null);
-  assert.deepEqual(store.readMemory("nova"), { profile: { text: "", updatedAt: null, source: null, quarantine: null }, facts: [], ledger: [], archive: [] });
+  assert.deepEqual(store.readMemory("nova"), { longterm: [], videoSharing: { pending: [], shares: [] }, profile: { text: "", updatedAt: null, source: null, quarantine: null }, facts: [], ledger: [], archive: [] });
   assert.equal(store.getTopicBook("nova").topics.length, 0);
   assert.equal(store.getPartnerAdaptation("nova").guides.length, 0);
   assert.equal(store.getSelfWatch("nova").notes.length, 0);

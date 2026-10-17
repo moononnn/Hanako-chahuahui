@@ -47,7 +47,7 @@ import {
 } from "./lib/model.js";
 import { createStore, createDiagnostics } from "./lib/store.js";
 import { createFocusCompanion, focusReminderSpec, focusChatText } from "./lib/focus-companion.js";
-import { composeWithSupersedeRetry, hasNewerUserMessage } from "./lib/turn-window.js";
+import { composeWithSupersedeRetry, hasNewerUserMessage, isSpeechMessage } from "./lib/turn-window.js";
 import { createThreadRebuildScheduler } from "./lib/rebuild-queue.js";
 import { protectKey, isProtectedKey, encryptionStatus } from "./lib/crypto.js";
 import { listBackgrounds, readBackgroundBytes, writeBackground, removeBackgroundFile, normalizeOpacity, normalizeTone, isBackgroundFile, fileTypeOf } from "./lib/background.js";
@@ -55,6 +55,7 @@ import { pruneStickerUsage, recordStickerUsage } from "./lib/sticker-usage.js";
 import {
   DEFAULT_CONTEXT,
   buildMemoryBlock,
+  recallMemoryEntries,
   conversationMessages,
   dropUnansweredProactive,
   isConversationMessage,
@@ -76,7 +77,8 @@ import {
   noteFeed,
   pickFeedAsset,
 } from "./lib/partner-feed.js";
-import { buildFactSpec, parseFactsResult } from "./lib/facts.js";
+import { parseFactsResult } from "./lib/facts.js";
+import { buildLongtermSpec, parseLongtermResult, memoryFeedbackPrompt, extractMemoryFeedback, longtermBlock } from "./lib/longterm.js";
 import { migrateLegacyFacts } from "./lib/fact-migration.js";
 import { applyAdaptationCorrection, buildAdaptationCorrectionSpec, listAdaptationForUser, parseAdaptationCorrection, revokeAdaptationGuide } from "./lib/adaptation-correction.js";
 import { inferObservedGuide } from "./lib/observed.js";
@@ -124,7 +126,12 @@ import {
   validateNativeHobbies,
 } from "./lib/growth.js";
 import { cleanVoice, farewellSpec, hasOpenHook, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNighttimeSleepQuestion, isNoReply, isUsableVoice, nightSpec, proactiveSpec, stirredSpec } from "./lib/compose.js";
-import { formatSearchContext, searchTimelyTopic } from "./lib/topic-search.js";
+import { formatSearchContext, searchTimelyTopic, isSafeSearchQuery } from "./lib/topic-search.js";
+import { searchVideos, collectVideoMaterials, readVideoCredential, writeVideoCredential, clearVideoCredential } from "./lib/video-source.js";
+import { createVideoLogin } from "./lib/video-login.js";
+import { normalizeVideoBook, makeVideoCandidate, addVideoCandidate, nextVideoCandidate, offerVideoCandidate, recordVideoShare,
+  selectVideoShares, videoRecallText, videoCognitions, applyVideoFeedback, videoShareLimit, videoQuotaAvailable, noteVideoSent, matchVideoStop,
+  hasVideoShareLink } from "./lib/video-sharing.js";
 import { findPreviousSearchContext, isChatSearchCandidate, searchForChat } from "./lib/chat-search.js";
 import {
   addDiscovery,
@@ -415,9 +422,45 @@ const DEV_TOOLS = true;
 compactReplyPilotId = DEV_TOOLS ? "hanako" : "";
 // __CHAHUAHUI_DEV_ONLY_END__
 
+export function videoLoginNoticeDue(login, noted, now = new Date()) {
+  if (login?.status !== "expired") return false;
+  if (noted?.episodeId !== (login.episodeId || "expired")) return true;
+  if (noted.day === dayKey(now) && noted.sentAt) return false;
+  return !noted.offeredAt || now.getTime() - Date.parse(noted.offeredAt) >= 6 * 3600000;
+}
+
 export function apply(ctx) {
   const diagnostics = createDiagnostics(ctx.dataDir);
   const store = createStore(ctx.dataDir);
+  // 凭据仅供B站内部请求，公开状态不带凭据，且不进入设置、诊断或模型上下文。
+  // 扫码登录只保存经nav验证的SESSDATA；现有读写函数使用Windows DPAPI，网络未知时保留。
+  const videoLoginManager = createVideoLogin({
+    onDiagnostic: diagnostics,
+    fetcher: (url, options) => ctx.network?.fetch
+      ? ctx.network.fetch(url, options) : Promise.reject(new Error("network-unavailable")),
+    loadCredential: () => readVideoCredential(ctx.dataDir),
+    saveCredential: (cookie) => {
+      const match = /^SESSDATA=([^;]+)$/u.exec(cookie);
+      return writeVideoCredential(ctx.dataDir, { sessdata: match?.[1] ?? "" });
+    },
+    clearCredential: () => clearVideoCredential(ctx.dataDir),
+  });
+  async function videoLogin(options) {
+    const state = await videoLoginManager.status(options);
+    return { ...state, ok: state.status === "loggedIn", cookie: await videoLoginManager.getCookie() };
+  }
+  function videoPartnerEnabled(agentId) {
+    return isValidPartnerId(agentId) && store.getPartnerSettings(agentId).videoSharingEnabled === true
+      && videoShareLimit(store.getGlobalSettings().videoShareMaxPerDay) > 0;
+  }
+  // 同一登录失效事件全局每天最多提醒一次，伙伴拒绝开口后安静六小时。
+  function videoNoticeDue(login, now = new Date()) {
+    return videoLoginNoticeDue(login, store.getGlobalRuntime().videoLoginNotice, now);
+  }
+  function videoQuota(now = new Date()) {
+    return videoQuotaAvailable(store.getGlobalRuntime().videoShares,
+      videoShareLimit(store.getGlobalSettings().videoShareMaxPerDay), dayKey(now));
+  }
   // App service 注册是入口登记，不在装载期请求宿主数据或调用模型；能力未授权时茶话会本体仍照常加载。
   try {
     registerTavernImportService(ctx, store, diagnostics);
@@ -540,9 +583,9 @@ export function apply(ctx) {
   const GLOBAL_SETTING_KEYS = new Set([
     "model", "recognitionModel", "vision", "userNameOverride", "daybookEnabled", "workfeedEnabled",
     "globalGate", "quiet", "actionStyle", "messageAvatars", "messageRefine", "myActionTail",
-    "rhythmEnabled", "rhythmStyleEnabled", "rhythmProactiveEnabled", "rhythmResetAt", "voiceEnabled", "voiceDelivery", "voiceProfiles", "voiceProfile",
+    "rhythmEnabled", "rhythmStyleEnabled", "rhythmProactiveEnabled", "rhythmResetAt", "voiceEnabled", "voiceDelivery", "voiceProfiles", "voiceProfile", "videoShareMaxPerDay",
   ]);
-  const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "vision", "voice", "partnerFeedEnabled"]);
+  const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "vision", "voice", "partnerFeedEnabled", "videoSharingEnabled"]);
 
   function pickSettingsPatch(input, allowed, label) {
     const body = input && typeof input === "object" && !Array.isArray(input) ? input : {};
@@ -581,6 +624,11 @@ export function apply(ctx) {
     if (Object.prototype.hasOwnProperty.call(patch, "workfeedEnabled")) {
       patch.workfeedEnabled = patch.workfeedEnabled === true;
     }
+    if (Object.prototype.hasOwnProperty.call(patch, "videoShareMaxPerDay")) {
+      if (!Number.isInteger(patch.videoShareMaxPerDay) || patch.videoShareMaxPerDay < 0 || patch.videoShareMaxPerDay > 5) {
+        throw new Error("视频分享每日上限请选择关闭或1到5条");
+      }
+    }
     // 安静时间：两个 "HH:MM"；开始与结束填成同一个时刻表示整段关掉（不是填错时间）。
     // 形状不对就当没改，别把坏值吃进去。
     if (Object.prototype.hasOwnProperty.call(patch, "quiet")) {
@@ -618,6 +666,9 @@ export function apply(ctx) {
   /** 伙伴设置里只挑形状对的模型透进去，别把脏东西写进账本。 */
   function normalizePartnerSettingsPatch(body) {
     const patch = pickSettingsPatch(body, PARTNER_SETTING_KEYS, "伙伴设置");
+    if (Object.prototype.hasOwnProperty.call(patch, "videoSharingEnabled") && typeof patch.videoSharingEnabled !== "boolean") {
+      throw new Error("浏览B站并分享视频请选择开启或关闭");
+    }
     if (Object.prototype.hasOwnProperty.call(patch, "model")) {
       patch.model = normalizeModelRef(patch.model);
     }
@@ -1862,21 +1913,45 @@ export function apply(ctx) {
     const conversational = conversationMessages(pending);
     const plan = planRollup(conversational, { ...DEFAULT_CONTEXT, ...(store.getPref(agentId).context ?? {}) });
     if (!plan.need) return { rolled: false, pending: pending.length };
-    const result = await runSummary(askCheap, segmentSpec(plan.batch, USER_NAME));
+    // 用完整线程判定主动消息有没有被接，再取本批；不能在截断批次边界误判。
+    const eligible = new Set(dropUnansweredProactive(conversationMessages(store.getThread(agentId).messages))
+      .filter((row) => !row.recalled).map((row) => row.id));
+    const material = plan.batch.filter((row) => eligible.has(row.id));
+    const batchCurrent = () => {
+      const live = new Map(store.getThread(agentId).messages.map((row) => [row.id, row]));
+      const currentEligible = new Set(dropUnansweredProactive(conversationMessages([...live.values()]))
+        .filter((row) => !row.recalled).map((row) => row.id));
+      return plan.batch.every((row) => {
+        const current = live.get(row.id);
+        return current && !current.recalled && current.text === row.text && current.role === row.role
+          && eligible.has(row.id) === currentEligible.has(row.id);
+      });
+    };
+    if (!material.length) {
+      store.markRolledThrough(agentId, plan.batch.at(-1).id);
+      return { rolled: true, count: 0 };
+    }
+    const result = await runSummary(askCheap, segmentSpec(material, USER_NAME));
     if (!result.ok) {
       diagnostics({ event: "memory.rollup.failed", agentId, reason: result.reason, error: result.error ?? null });
       return { rolled: false, reason: result.reason };
     }
-    store.appendArchive(agentId, makeArchiveEntry(result.text, plan.batch));
     const partners = await listPartners();
     const partnerName = partners.find((row) => row.id === agentId)?.name ?? agentId;
     try {
-      const factSpec = buildFactSpec(plan.batch, USER_NAME, partnerName);
-      const factRaw = await askCheap(factSpec.systemPrompt, factSpec.userText, 500);
-      const parsedFacts = parseFactsResult(factRaw, plan.batch);
-      if (!parsedFacts.ok) throw new Error("facts.parse-failed");
-      if (parsedFacts.facts.length) store.appendFacts(agentId, parsedFacts.facts);
-      diagnostics({ event: "memory.facts.ok", agentId, count: parsedFacts.facts.length });
+      const factSpec = buildLongtermSpec(material, { userName: USER_NAME, partnerName, eligibleIds: eligible });
+      // 复用原事实整理这一次调用；结构化结果留足正文空间，不增加每轮后台调用。
+      const factRaw = await askCheap(factSpec.systemPrompt, factSpec.userText, 2000);
+      const parsedEntries = parseLongtermResult(factRaw, material, new Date(), { eligibleIds: eligible });
+      const parsedFacts = parseFactsResult(factRaw, material);
+      if (!parsedEntries.ok || !parsedFacts.ok) throw new Error("facts.parse-failed");
+      if (parsedFacts.facts.length) throw new Error("facts.missing-evidence-schema");
+      // 模型等待期间撤回或删除的原文不得再被写回，也不推进整理水位。
+      if (!batchCurrent()) return { rolled: false, reason: "source-changed" };
+      store.appendLongterm(agentId, parsedEntries.entries);
+      // 新写入统一走有逐字证据的条目。旧数组/事实字段仅认格式，不把无证据候选再写进旧事实账。
+      store.appendArchive(agentId, makeArchiveEntry(result.text, material));
+      diagnostics({ event: "memory.facts.ok", agentId, count: 0, ignoredLegacyFacts: parsedFacts.facts.length, longtermCount: parsedEntries.entries.length });
     } catch (error) {
       diagnostics({ event: "memory.facts.failed", agentId, error: describeError(error) });
       return { rolled: false, reason: "facts-failed" };
@@ -1899,7 +1974,8 @@ export function apply(ctx) {
     if (recent.length === 0 && !facts.trim()) return { updated: false, reason: "no-material" };
     const partner = (await listPartners()).find((row) => row.id === agentId);
     const partnerName = partner?.name ?? agentId;
-    const result = await runSummary(askCheap, profileSpec(memory.profile.text, recent, USER_NAME, facts, partnerName));
+    const judgmentText = longtermBlock(recallMemoryEntries(memory, recent.slice(-8).map((row) => row.text ?? "").join(" ")));
+    const result = await runSummary(askCheap, profileSpec(memory.profile.text, recent, USER_NAME, facts, partnerName, judgmentText));
     if (!result.ok) {
       diagnostics({ event: "memory.profile.failed", agentId, reason: result.reason, error: result.error ?? null });
       return { updated: false, reason: result.reason };
@@ -1977,9 +2053,12 @@ export function apply(ctx) {
   }
 
   /** 把一条主动消息送进她那个窗（她不在也照发，显示未读）。 */
-  async function deliverProactive(agentId, { partnerName, topic, hobby, discovery, seed, reason = null, reasonCandidates = [], exception, followup, wakeEcho, sceneEcho, kind = "proactive", activity = null, sleepStart = "", greetingOnly = false, todoNudge = "" }) {
+  async function deliverProactive(agentId, { partnerName, topic, hobby, discovery, seed, video = null, videoLoginNotice = null, reason = null, reasonCandidates = [], exception, followup, wakeEcho, sceneEcho, kind = "proactive", activity = null, sleepStart = "", greetingOnly = false, todoNudge = "" }) {
+    const videoStamp = video || videoLoginNotice ? threadStamp(agentId) : null;
     await loadUserName();
-    const memoryText = buildMemoryBlock(store.readMemory(agentId));
+    const memoryQuery = [reason?.kind === "interest" ? topic : "", reason?.text, hobby?.name, discovery?.text, seed?.title, video?.video?.title, followup?.text, sceneEcho?.text]
+      .filter((value) => typeof value === "string").join(" ");
+    const memoryText = buildMemoryBlock(store.readMemory(agentId), { query: memoryQuery });
     // 主动开口也得是「ta 本人」在说话：跟面对面回复用同一份人格来源。
     // 以前这条路只有名字加通用口语规矩，谁开口都是同一个路人腔（实机：不同人设的
     // 伙伴发出同一句「你人嘞，溜哪儿去了嘛」）。nameFallback 与聊天那头一致：
@@ -1997,14 +2076,27 @@ export function apply(ctx) {
     // 问候、回声和提醒没有使用兴趣素材：不注入、不核查，也不消耗候选库存。
     // 关系式由头（非兴趣那几种）同样不用兴趣素材：给 seed/discovery 当由头等于拿话题冒充「想找她」，
     // 所以连核查和消耗都一并关掉——兴趣那一份的种子和发现留在账上等下次。
-    const interestContent = !exception && kind === "proactive" && !String(todoNudge ?? "").trim()
+    const interestContent = (
+      // __CHAHUAHUI_DEV_ONLY__
+      devForceInterest === agentId ? true :
+      // __CHAHUAHUI_DEV_ONLY_END__
+      !videoLoginNotice && !exception && kind === "proactive" && !String(todoNudge ?? "").trim()
       && !followup?.read && !wakeEcho && !greetingOnly
-      && !(reasonAllowed && reason && reason.kind !== "interest");
-    const shareableDiscovery = interestContent ? discoveryForProactiveMessage(discovery, { exception }) : null;
-    const shareableSeed = interestContent ? seed ?? null : null;
+      && !(reasonAllowed && reason && reason.kind !== "interest")
+    );
+    if ((video || videoLoginNotice) && !videoPartnerEnabled(agentId)) return { ok: false, reason: "video-partner-off" };
+    if (videoLoginNotice) {
+      const currentLogin = await videoLoginManager.status();
+      if (currentLogin.episodeId !== videoLoginNotice.episodeId || !videoNoticeDue(currentLogin) || !videoPartnerEnabled(agentId)) {
+        return { ok: false, reason: "video-login-notice-stale" };
+      }
+    }
+    const shareableVideo = interestContent && video && videoPartnerEnabled(agentId) && videoQuota() ? video : null;
+    const shareableDiscovery = interestContent && !shareableVideo ? discoveryForProactiveMessage(discovery, { exception }) : null;
+    const shareableSeed = interestContent && !shareableVideo ? seed ?? null : null;
     const shareableHobby = shareableSeed
       ? hobby ?? { id: shareableSeed.motifId, name: shareableSeed.motifName }
-      : shareableDiscovery ? hobby : null;
+      : shareableDiscovery || shareableVideo ? hobby : null;
     const searchContext = shareableDiscovery ? formatSearchContext(shareableDiscovery.results) : "";
     const now = new Date();
     const currentTimeText = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日，${spokenClock(now)}（时间戳：${zonedTimestamp(now)}）`;
@@ -2126,13 +2218,29 @@ export function apply(ctx) {
               sleepStart,
               stickerText,
             })
-          : proactiveSpec({ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, askBudgetSpent: askSpent, reason: sendReason, introducedText });
+          : proactiveSpec({ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, video: shareableVideo, videoLoginNotice, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, askBudgetSpent: askSpent, reason: sendReason, introducedText });
 
     let raw = "";
     try {
       // 主动来找这一路同样得报出当前佩戴结果：ta 得知道「自己现在是什么状态」才谈得上换。
       const badgeHint = badgeGuide({ current: store.getPartnerSettings(agentId).badge });
-      raw = await askVoice(withNamePlate(`${spec.systemPrompt}\n\n${badgeHint}`, partnerName), spec.userText, 300, agentId, "proactive");
+      if (shareableVideo || videoLoginNotice) {
+        // 分享与登录提醒由当前伙伴选定的模型判断，不借全局整理模型替ta开口。
+        const catalog = await ctx.models.list();
+        const choice = resolveModelChoice(catalog, { partnerRef: store.getPartnerSettings(agentId).model,
+          globalRef: store.getGlobalSettings().model, agentRef: await agentDefaultModel(agentId) });
+        if (!videoPartnerEnabled(agentId) || threadStamp(agentId) !== videoStamp || focusCompanion.active()
+          || (shareableVideo && !videoQuota())) return { ok: false, reason: "video-stale" };
+        const generated = await generateReply(ctx, {
+          systemPrompt: withNamePlate(`${spec.systemPrompt}\n\n${badgeHint}`, partnerName),
+          messages: [{ role: "user", content: spec.userText }], diagnostics, maxTokens: 1800,
+          modelRef: choice ? { provider: choice.provider, model: choice.model } : null, catalog,
+          allowUtilityFallback: false,
+        });
+        raw = generated.text;
+      } else {
+        raw = await askVoice(withNamePlate(`${spec.systemPrompt}\n\n${badgeHint}`, partnerName), spec.userText, 300, agentId, "proactive");
+      }
     } catch (error) {
       diagnostics({ event: "proactive.failed", agentId, error: describeError(error) });
       return { ok: false, reason: "threw" };
@@ -2155,6 +2263,19 @@ export function apply(ctx) {
       ? [marker.before, marker.after].filter(Boolean).join("\n")
       : badgeLessRaw;
     const text = cleanVoice(markerlessRaw, "voice");
+    if (videoLoginNotice && isNoReply(text)) {
+      const currentLogin = await videoLoginManager.status();
+      if (currentLogin.episodeId !== videoLoginNotice.episodeId || !videoNoticeDue(currentLogin) || !videoPartnerEnabled(agentId)) {
+        return { ok: false, reason: "video-login-notice-stale" };
+      }
+      store.setGlobalRuntime({ videoLoginNotice: { episodeId: videoLoginNotice.episodeId || "expired", offeredAt: new Date().toISOString() } });
+      return { ok: false, reason: "video-login-notice-silent" };
+    }
+    if (shareableVideo && isNoReply(text)) {
+      // 明确不想分享才冷却；生成失败或旧稿被门禁作废不消耗这次候选。
+      store.saveVideoBook(agentId, offerVideoCandidate(store.getVideoBook(agentId), shareableVideo.id));
+      return { ok: false, reason: "video-not-shared" };
+    }
     if (!exception && kind === "proactive" && !String(todoNudge ?? "").trim() && isNighttimeSleepQuestion(text, now)) {
       diagnostics({ event: "proactive.sleep-check-skipped", agentId });
       return { ok: false, reason: "nighttime-sleep-check" };
@@ -2210,8 +2331,23 @@ export function apply(ctx) {
       maxBubbles: 4,
       history: store.getThread(agentId).messages,
     });
-    const bubbles = composed.bubbles;
+    let bubbles = composed.bubbles;
     if (bubbles.length === 0) return { ok: false, reason: marker.keyword ? "sticker-unavailable" : "no-bubbles" };
+    if (shareableVideo) {
+      // 分享这一段由系统给：真人点 B 站「分享」拿到的就是「【标题-哔哩哔哩】 短链」，
+      // 让模型自己写只会写成一条裸链接（而且它没能力生成短链，也不该编）。
+      // 模型如果还是把链接写进了气泡，先拿掉，免得到时候一条长、一条短重复。
+      const video = shareableVideo.video;
+      const escaped = String(video.link).replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+      const kept = bubbles
+        .map((line) => String(line).replace(new RegExp(escaped, "gu"), "").replace(/[ \t]+$/u, "").trim())
+        .filter((line) => line.length > 0);
+      bubbles = [...kept, video.shareText];
+      diagnostics({ event: "video.share.card", agentId, videoId: shareableVideo.id, droppedBubbles: composed.bubbles.length - kept.length });
+    }
+    if (shareableVideo && !hasVideoShareLink(visibleTextOf(bubbles), shareableVideo.video)) {
+      return { ok: false, reason: "video-link-lost" };
+    }
 
     let preparedVoice = await prepareVoice(agentId, text, { kind: "proactive" });
     if (preparedVoice.reason === "cancelled") {
@@ -2221,6 +2357,18 @@ export function apply(ctx) {
     if (preparedVoice.reason === "stale") {
       diagnostics({ event: "voice.stale-fallback", agentId, kind: "proactive" });
       preparedVoice = null;
+    }
+    // 先完成可能等待网络的登录复核，再同步核门禁并落消息，避免await后放出旧稿。
+    const finalVideoLogin = videoLoginNotice ? await videoLoginManager.status() : null;
+    if ((shareableVideo || videoLoginNotice) && (!videoPartnerEnabled(agentId)
+      || (shareableVideo && !videoQuota()) || store.getGlobalSettings().rhythmProactiveEnabled !== true
+      || store.getPartnerSettings(agentId).proactiveEnabled === false || !autonomousGateNow(agentId, "proactive").ok
+      || focusCompanion.active() || threadStamp(agentId) !== videoStamp || hasReplyInFlight(agentId)
+      || (shareableVideo && !store.getVideoBook(agentId).pending.some((row) => row.id === shareableVideo.id && row.context === shareableVideo.context))
+      || (videoLoginNotice && (finalVideoLogin.episodeId !== videoLoginNotice.episodeId || !videoNoticeDue(finalVideoLogin))))) {
+      releaseVoiceGeneration(preparedVoice);
+      diagnostics({ event: "video.share.stale", agentId, videoId: shareableVideo?.id ?? null });
+      return { ok: false, reason: "video-stale" };
     }
     // 这条是拿哪条由头开的口：落在已有的 proactiveContext 里，不另立一套 schema。
     // 有跟进语境时照旧用 proactiveContextFor 的那份，只多挂一个 reason；
@@ -2250,11 +2398,20 @@ export function apply(ctx) {
       topicId: topic?.id ?? null,
       discoveryId: shareableDiscovery?.id ?? null,
       seedId: shareableSeed?.id ?? null,
+      ...(shareableVideo ? { videoId: shareableVideo.id, videoLink: shareableVideo.video.link } : {}),
+      ...(videoLoginNotice ? { videoLoginNotice: true } : {}),
       interestId: shareableHobby?.id ?? shareableDiscovery?.interestId ?? null,
       interestName: shareableHobby?.name ?? shareableDiscovery?.interestName ?? null,
       interestObject: shareableHobby?.object ?? null,
     }, preparedVoice);
     if (!stored) return { ok: false, reason: "message-missing" };
+    if (shareableVideo) {
+      store.saveVideoBook(agentId, recordVideoShare(store.getVideoBook(agentId), shareableVideo, stored));
+      store.setGlobalRuntime({ videoShares: noteVideoSent(store.getGlobalRuntime().videoShares, dayKey(new Date(stored.at))) });
+    }
+    if (videoLoginNotice) {
+      store.setGlobalRuntime({ videoLoginNotice: { episodeId: videoLoginNotice.episodeId || "expired", day: dayKey(new Date(stored.at)), sentAt: stored.at, messageId: stored.id, agentId } });
+    }
     recordPartnerStickerUsage(agentId, bubbles, stored.at);
     // 生理期这一段真的送出去了，这一轮就算已经关心过：没送出去（空正文、重复措辞、
     // 清楚度复核拦下）就别记账，下一轮还有机会。
@@ -2783,6 +2940,12 @@ export function apply(ctx) {
   }
 
   let proactiveTickPromise = null;
+  // __CHAHUAHUI_DEV_ONLY__
+  // 内测：强制某一轮走「兴趣」由头，用来直接验证视频分享那条路。
+  // 抽由头是随机的，靠碰运气验一条分支不现实；发布前连同 /probe 一起剥掉。
+  let devForceInterest = null;
+  // __CHAHUAHUI_DEV_ONLY_END__
+
   async function runProactiveTick(options = {}) {
     await ensureLegacyFactsMigration();
     if (proactiveTickPromise) return proactiveTickPromise;
@@ -2950,7 +3113,14 @@ export function apply(ctx) {
           diagnostics({ event: "knowing.offers", agentId, promoted, demoted });
         }
       }
-      const candidateSeed = followup?.read
+      const videoLoginState = videoPartnerEnabled(agentId) ? await videoLoginManager.status() : null;
+      const candidateVideo = (
+        // __CHAHUAHUI_DEV_ONLY__
+        devForceInterest === agentId ? null :
+        // __CHAHUAHUI_DEV_ONLY_END__
+        followup
+      ) || !videoPartnerEnabled(agentId) || !videoQuota(now) ? null : nextVideoCandidate(store.getVideoBook(agentId), now);
+      const candidateSeed = followup?.read || candidateVideo
         ? null
         : pickSeed(seedBook, {
             now,
@@ -2958,7 +3128,7 @@ export function apply(ctx) {
             mutedIds: mutedMotifIds(moodBook),
             perMotifCooldown: cooldownByMotif(moodBook),
           });
-      const candidateDiscovery = followup?.read || candidateSeed
+      const candidateDiscovery = followup?.read || candidateSeed || candidateVideo
         ? null
         : nextDiscovery(state.interestLearning, now);
       const topic = null;
@@ -2994,6 +3164,8 @@ export function apply(ctx) {
       const sceneEcho = gate.ok && !gate.exception && !followup?.read && !wakeEcho
         ? recentSceneFor(thread.messages, { now: now.getTime() })
         : null;
+      const videoLoginNotice = gate.ok && !gate.exception && !todoHere && !followup && !wakeEcho && !farewellSend
+        && videoPartnerEnabled(agentId) && videoNoticeDue(videoLoginState, now) ? videoLoginState : null;
 
       // 锚点门（2026-10-06）：内容型开口得先有一件跟她有关的真凭据——到点的待办、
       // 刚聊过的一轮、她这几小时说过话、电脑那边刚动过。一件都没有时，宁可不发内容，
@@ -3014,7 +3186,10 @@ export function apply(ctx) {
         ? null
         : discoveryForProactiveMessage(candidateDiscovery, { exception: gate.exception });
       const seed = gate.exception || !anchor.ok ? null : candidateSeed;
-      const hobby = seed
+      const video = gate.exception || !anchor.ok ? null : candidateVideo;
+      const hobby = video
+        ? knowing.hobbies.find((row) => row.id === video.interestId) ?? { id: video.interestId, name: video.interestName }
+        : seed
         ? knowing.hobbies.find((row) => row.id === seed.motifId) ?? { id: seed.motifId, name: seed.motifName }
         : discovery
           ? knowing.hobbies.find((row) => row.id === discovery.interestId) ?? { id: discovery.interestId, name: discovery.interestName }
@@ -3063,17 +3238,25 @@ export function apply(ctx) {
         && !farewellSend
         && !wakeEcho
         && !followup
-        && !gate.exception;
-      const reasonPick = reasonEligible
-        ? pickReason({
-            relationship: effectiveRelationship(knowing),
-            personality: knowing.personality,
-            // 兴趣那一份仍然得过锚点门：这层不改内容型开口的老规矩
-            interestAvailable: Boolean(anchor.ok && (seed || discovery)),
-            // 共同经历和吐槽的真凭据：同一位伙伴有效的最近一轮对话，或者电脑那边确有动静
-            hasContext: Boolean(sceneEcho) || workActivity.active === true,
-          })
-        : { reason: null, candidates: [], basis: null, temperament: null };
+        && !gate.exception
+        && !videoLoginNotice;
+      const reasonPick = (
+        // __CHAHUAHUI_DEV_ONLY__
+        devForceInterest === agentId
+          ? { reason: { kind: "interest" }, candidates: [], basis: null, temperament: null }
+          :
+        // __CHAHUAHUI_DEV_ONLY_END__
+        reasonEligible
+          ? pickReason({
+              relationship: effectiveRelationship(knowing),
+              personality: knowing.personality,
+              // 兴趣那一份仍然得过锚点门：这层不改内容型开口的老规矩
+              interestAvailable: Boolean(anchor.ok && (seed || discovery || video)),
+              // 共同经历和吐槽的真凭据：同一位伙伴有效的最近一轮对话，或者电脑那边确有动静
+              hasContext: Boolean(sceneEcho) || workActivity.active === true,
+            })
+          : { reason: null, candidates: [], basis: null, temperament: null }
+      );
       const reason = reasonPick.reason;
       if (reason && reason.kind !== "interest") {
         diagnostics({
@@ -3095,15 +3278,17 @@ export function apply(ctx) {
         && !farewellSend
         && !seed
         && !discovery
+        && !video
+        && !videoLoginNotice
         && !gate.exception
         && morningOpening({ tier: settings.tier, workActive: workActivity.active });
       // 纯招呼已经占住这一轮时就不叠关系式由头：两条由头一起给反而互相削弱。
       const reasonForSend = greetingOnly ? null : reason;
-      const form = todoHere
+      const form = todoHere || videoLoginNotice
         ? "word"
         : wakeEcho || followup?.read || farewellSend
         ? "word"
-        : seed || discovery
+        : seed || discovery || video
           ? "word"
           : greetingOnly
             ? "word"
@@ -3169,6 +3354,8 @@ export function apply(ctx) {
           hobby,
           discovery,
           seed,
+          video,
+          videoLoginNotice,
           reason: reasonForSend,
           reasonCandidates: reasonPick.candidates,
           exception: Boolean(finalGate.exception),
@@ -3821,6 +4008,7 @@ export function apply(ctx) {
 
   /** 有好奇心时才沿着长期兴趣找一个新角度；搜索结果只短期留存，供主动分享使用。 */
   async function maybeExploreInterest(agentId, partnerName, now = new Date()) {
+    const explorationStamp = threadStamp(agentId);
     let state = store.getProactiveState(agentId);
     let learning = readInterestLearning(state.interestLearning, now);
     if (!learning.curiosity.startedAt) {
@@ -3829,7 +4017,8 @@ export function apply(ctx) {
       return { explored: false, reason: "curiosity-started" };
     }
     if (!explorationDue(learning, now)) return { explored: false, reason: "not-curious-yet" };
-    if (nextDiscovery(learning, now)) {
+    const videoEnabled = videoPartnerEnabled(agentId);
+    if (videoEnabled ? nextVideoCandidate(store.getVideoBook(agentId), now) : nextDiscovery(learning, now)) {
       learning = scheduleExploration(learning, now);
       store.setProactiveState(agentId, { interestLearning: learning });
       return { explored: false, reason: "discovery-waiting" };
@@ -3853,10 +4042,45 @@ export function apply(ctx) {
         book: learning,
         now,
       });
-      const rawPlan = await askCheap(spec.systemPrompt, spec.userText, 180, { timeoutMs: 60_000 });
+      const login = videoEnabled ? await videoLogin() : null;
+      if (videoEnabled && !login?.ok) return retryLater("video-login-required");
+      if (videoEnabled && !videoPartnerEnabled(agentId)) return retryLater("video-partner-off");
+      const rawPlan = await askCheap(spec.systemPrompt, spec.userText, videoEnabled ? 1000 : 180, { timeoutMs: 60_000 });
       const plan = parseExplorationPlan(rawPlan);
       if (!plan) return retryLater("no-new-angle");
       const fetcher = typeof ctx.network?.fetch === "function" ? ctx.network.fetch.bind(ctx.network) : null;
+      if (videoEnabled) {
+        if (!videoPartnerEnabled(agentId) || !videoQuota()) return retryLater("video-daily-limit");
+        if (!isSafeSearchQuery(plan.searchQuery, [USER_NAME, partnerName])) return retryLater("unsafe-query");
+        const canContinue = () => videoPartnerEnabled(agentId) && videoQuota() && !focusCompanion.active() && threadStamp(agentId) === explorationStamp;
+        if (!canContinue()) return retryLater("video-exploration-stale");
+        const search = await searchVideos(fetcher, plan.searchQuery, { cookie: login.cookie, order: "totalrank" });
+        if (!canContinue()) return retryLater("video-exploration-stale");
+        if (!search.ok) return retryLater("video-search-unavailable");
+        const previous = normalizeVideoBook(store.getVideoBook(agentId), now);
+        const seen = new Set([...previous.pending, ...previous.shares].map((row) => row.id));
+        const fresh = (search.results ?? []).filter((row) => !seen.has(`${row.bvid}:1`)).slice(0, 3);
+        // 没拿到可用字幕时只留下安全原因，不让下次又不知道卡在哪一步。
+        diagnostics({ event: "video.exploration.search", agentId, query: String(plan.searchQuery ?? "").slice(0, 60),
+          results: (search.results ?? []).length, fresh: fresh.length });
+        for (const result of fresh) {
+          if (!canContinue()) return retryLater("video-exploration-stale");
+          const materials = await collectVideoMaterials(fetcher, result.bvid, { cookie: login.cookie, requireSubtitle: true });
+          if (!canContinue()) return retryLater("video-exploration-stale");
+          if (!materials.ok || materials.readKind !== "subtitle" || !materials.subtitle?.length) {
+            diagnostics({ event: "video.exploration.unusable", agentId, bvid: result.bvid,
+              reason: String(materials.reason ?? "").slice(0, 120) || null, readKind: materials.readKind ?? null });
+            continue;
+          }
+          const candidate = makeVideoCandidate(materials, { interest: hobby, plan }, new Date());
+          if (!candidate) continue;
+          store.saveVideoBook(agentId, addVideoCandidate(store.getVideoBook(agentId), candidate));
+          store.setProactiveState(agentId, { interestLearning: scheduleExploration(store.getProactiveState(agentId).interestLearning, new Date()) });
+          diagnostics({ event: "video.exploration.ready", agentId, bvid: materials.video.bvid, page: materials.video.page ?? 1 });
+          return { explored: true, source: "bilibili" };
+        }
+        return retryLater("video-no-readable-subtitle");
+      }
       const search = await searchTimelyTopic(fetcher, { title: plan.focus, searchQuery: plan.searchQuery }, {
         privateTerms: [USER_NAME, partnerName],
       });
@@ -4045,13 +4269,18 @@ export function apply(ctx) {
     const pending = store.pendingMessages(agentId).filter((row) => row?.id !== excludeMessageId);
     const windowed = splitForContext(pending).recent;
     // 回复目标必须是这轮实际看进去的最后一条用户消息；否则连发时会把已经覆盖的话误判成漏回。
-    const replyTargetId = [...windowed].reverse().find((row) => row?.role === "user" && !row.recalled)?.id ?? repliedTo;
+    const replyTargetId = [...windowed].reverse().find((row) => row?.role === "user" && !row.recalled && isSpeechMessage(row))?.id ?? repliedTo;
     // 这就是本轮真正的目标上界。外面靠它盖章已读，所以得把捕获到的目标报上去。
     if (replyTargetId) onCapture?.(replyTargetId);
     // 这轮捕获之后又落进来新的她的话：旧稿不能再原样送出去。返回 superseded 让外层
     // 在同一条回合里顺序重来（不新开第二个生成）。
+    const targetStillLive = () => !replyTargetId || store.getThread(agentId).messages.some((row) => row.id === replyTargetId && row.role === "user" && !row.recalled);
     const superseded = () => (replyTargetId ? hasNewerUserMessage(store.getThread(agentId).messages, replyTargetId) : null);
     const supersededResult = (stage) => {
+      if (!targetStillLive()) {
+        diagnostics({ event: "reply.stale", agentId, stage, reason: "target-gone" });
+        return { ok: false, reason: "stale", generationMs: Date.now() - startedAt };
+      }
       const check = superseded();
       if (!check?.superseded) return null;
       diagnostics({ event: "reply.superseded", agentId, stage, supersededBy: check.newerMessageId });
@@ -4070,7 +4299,17 @@ export function apply(ctx) {
     await maybeCloseDay(agentId);
     const [partners, persona] = await Promise.all([listPartners(), getPersona(agentId)]);
     const partner = partners.find((row) => row.id === agentId);
-    const memoryText = buildMemoryBlock(store.readMemory(agentId));
+    const memory = store.readMemory(agentId);
+    const memoryQuery = windowed.filter((row) => !row.recalled).slice(-4).map((row) => row.text ?? "").join(" ");
+    const recalledEntries = recallMemoryEntries(memory, memoryQuery);
+    const recalledVideos = selectVideoShares(memory.videoSharing, memoryQuery, {
+      recentMessageIds: windowed.slice(-4).filter((row) => row.role === "assistant" && !row.recalled).map((row) => row.id),
+    });
+    const feedbackEntries = [...recalledEntries, ...videoCognitions(recalledVideos)];
+    const memoryText = [buildMemoryBlock(memory, { query: memoryQuery }), videoRecallText(recalledVideos)].filter(Boolean).join("\n\n");
+    const feedbackStart = windowed.findLastIndex((row) => row.role === "assistant");
+    const feedbackMessages = windowed.slice(feedbackStart + 1).filter((row) => row.role === "user" && !row.recalled).slice(-3);
+    const feedbackPrompt = memoryFeedbackPrompt(feedbackEntries, feedbackMessages);
     const knowing = store.getKnowing(agentId);
     const rhythmSettings = store.getGlobalSettings();
     const rhythmText = rhythmSettings.rhythmEnabled
@@ -4107,7 +4346,7 @@ export function apply(ctx) {
     // 拾光记的日子账本：只借不给。没装、快照坏了都当今天没什么可说的。
     // 这是她选的沉浸感（设置页「拾光记今日情境」），没打开就读都不读。
     // 日子按天说一遍就够（跨天或内容变了才重新露），不每轮把节日念叨一次。
-    const latestUser = [...windowed].reverse().find((row) => row?.role === "user" && !row.recalled);
+    const latestUser = [...windowed].reverse().find((row) => row?.role === "user" && !row.recalled && isSpeechMessage(row));
     const threadMessages = store.getThread(agentId).messages;
     const latestUserIndex = latestUser ? threadMessages.findIndex((row) => row?.id === latestUser.id) : -1;
     const previousAssistant = latestUserIndex > 0
@@ -4284,10 +4523,10 @@ export function apply(ctx) {
         ...(focusText ? { focusSessionId: focusActive.id, targetAt: focusActive.targetAt } : {}) });
       try {
         return await generateReply(ctx, {
-          systemPrompt: [system, focusText].filter(Boolean).join('\n\n'),
+          systemPrompt: [system, focusText, feedbackPrompt].filter(Boolean).join('\n\n'),
           messages,
           diagnostics,
-          maxTokens: 900,
+          maxTokens: feedbackPrompt ? 1800 : 900,
           modelRef: choice ? { provider: choice.provider, model: choice.model } : null,
           catalog: modelCatalog,
         });
@@ -4310,16 +4549,21 @@ export function apply(ctx) {
     if (generated.unavailable) {
       return { ok: false, reason: "unavailable", kind: generated.kind, generationMs: Date.now() - startedAt };
     }
-    const voiceRisk = inspectVoice(generated.text);
+    let memoryFeedback = extractMemoryFeedback(generated.text, feedbackEntries, feedbackMessages);
+    const voiceRisk = inspectVoice(memoryFeedback.text);
     if (voiceRisk.level === "retry") {
       diagnostics({ event: "chat.output.retry", agentId, reason: voiceRisk.reason, tail: voiceRisk.tail });
       const retried = await callModel(`${systemPrompt}\n\n刚才的输出末尾疑似混入了无关字符。请只重新输出要说给对方的自然正文，不要解释格式。`);
       if (retried.unavailable) {
         return { ok: false, reason: "unavailable", kind: retried.kind, generationMs: Date.now() - startedAt };
       }
-      const retryRisk = inspectVoice(retried.text);
+      const retryFeedback = extractMemoryFeedback(retried.text, feedbackEntries, feedbackMessages);
+      const retryRisk = inspectVoice(retryFeedback.text);
       diagnostics({ event: "chat.output.retry.result", agentId, level: retryRisk.level, reason: retryRisk.reason });
-      if (retryRisk.level !== "retry") generated = retried;
+      if (retryRisk.level !== "retry") {
+        generated = retried;
+        memoryFeedback = retryFeedback;
+      }
     }
     if (choice) {
       diagnostics({ event: "model.choice", agentId, source: choice.source, provider: choice.provider, model: choice.model });
@@ -4332,7 +4576,8 @@ export function apply(ctx) {
 
     // ta决定这回安静收尾：看到了（已读已经盖过），但不发伙伴消息。
     // 这是正常的回应结果，不是生成失败，也不能触发五分钟重试。
-    const rawGeneratedText = String(generated.text ?? "");
+    // 协议必须先于徽章、表情、正文清洗和语音处理剥离；坏回包不提交判断。
+    const rawGeneratedText = String(memoryFeedback.text ?? "");
     const badgeMarker = parseBadgeMarker(rawGeneratedText);
     if (badgeMarker.badge) store.setPartnerSettings(agentId, { badge: badgeMarker.badge });
     const badgeLessRaw = badgeMarker.found
@@ -4421,6 +4666,10 @@ export function apply(ctx) {
     }
     // 语音合成的这几秒里她也可能又说话了。语音和表情都是跟这份旧稿绑的，
     // 不能跟着旧稿外显：放掉，再让外层按新上下文重来。
+    if (!targetStillLive()) {
+      releaseVoiceGeneration(preparedVoice);
+      return { ok: false, reason: "stale", generationMs };
+    }
     const staleBeforeSave = superseded();
     if (staleBeforeSave?.superseded) {
       releaseVoiceGeneration(preparedVoice);
@@ -4438,6 +4687,13 @@ export function apply(ctx) {
     };
     const stored = appendPartnerMessage(agentId, reply, preparedVoice, replaceMessageId);
     if (!stored) return { ok: false, reason: "message-missing", generationMs };
+    if (memoryFeedback.updates.length) {
+      store.commitMemoryFeedback(agentId, memoryFeedback.updates, stored.id);
+      store.saveVideoBook(agentId, applyVideoFeedback(store.getVideoBook(agentId), memoryFeedback.updates, {
+        messages: store.getThread(agentId).messages, resultMessageId: stored.id, now: new Date(stored.at),
+      }));
+      diagnostics({ event: "memory.feedback.processed", agentId, count: memoryFeedback.updates.length });
+    }
     recordPartnerStickerUsage(agentId, bubbles, stored.at);
     if (composed.stickerException) {
       const evidence = adaptationEvidence(agentId, composed.stickerException.guideIds);
@@ -4726,6 +4982,11 @@ export function apply(ctx) {
   }
 
   function scheduleReplyAt(agentId, dueAt, mode = "scheduled", messageId = null, wakeDecision = null, wakeMeta = null) {
+    // 最后一道闸：动作不是话，拿它当回复目标排期等于让 ta 对着一句模型看不见的话开口。
+    if (messageId && !isSpeechMessage(store.getThread(agentId).messages.find((row) => row?.id === messageId))) {
+      diagnostics({ event: "reply.schedule.skipped-action", agentId, messageId });
+      return { scheduled: false, reason: "action-target" };
+    }
     const existing = pendingReplies.get(agentId);
     const merged = mergeDueAt(existing?.dueAt, dueAt);
     if (existing && merged === existing.dueAt) {
@@ -4789,7 +5050,7 @@ export function apply(ctx) {
     if (targetIndex < 0) return false;
     const replyIndex = messages.findIndex((row, index) => index > targetIndex && row?.role === "assistant" && row?.repliedTo === repliedTo);
     const boundary = replyIndex < 0 ? messages.length : replyIndex;
-    const queued = messages.slice(targetIndex + 1, boundary).filter((row) => row?.role === "user" && !row.recalled);
+    const queued = messages.slice(targetIndex + 1, boundary).filter((row) => row?.role === "user" && !row.recalled && isSpeechMessage(row));
     if (!queued.length || pendingReplies.has(agentId) || deliveringReplies.has(agentId)) return false;
     const active = [...turns.values()].some((turn) => turn.agentId === agentId && ["pending", "generating"].includes(turn.status));
     if (active) return false;
@@ -4807,9 +5068,9 @@ export function apply(ctx) {
     }
     for (const partner of partners) {
       if (pendingReplies.has(partner.id) || deliveringReplies.has(partner.id)) continue;
-      const pending = store.getPendingReply(partner.id);
+      let pending = store.getPendingReply(partner.id);
       const messages = store.getThread(partner.id).messages;
-      const targetMessageId = pending?.messageId ?? null;
+      let targetMessageId = pending?.messageId ?? null;
       // 关机可能发生在回复已落盘、待办还没清掉的窄窗口；这种情况只收账，不再生成第二条。
       const delivered = targetMessageId
         ? messages.find((row) => row?.role === "assistant" && row.repliedTo === targetMessageId && !row.recalled)
@@ -4839,8 +5100,17 @@ export function apply(ctx) {
         diagnostics({ event: "reply.recovered.unread-reset", agentId: partner.id, messageId: targetMessageId });
         continue;
       }
-      const lastAssistant = messages.findLastIndex((row) => row?.role === "assistant");
-      const tail = messages.slice(lastAssistant + 1).filter((row) => row?.role === "user");
+      // 旧待办指的是戳一戳这类动作：动作只配动作回应，不生成文字，也不该拿它排一轮回复。
+      // 清掉再走下面的判定，免得它一直挂在账上把真文字遮住。
+      if (targetMessageId && !isSpeechMessage(messages.find((row) => row?.id === targetMessageId))) {
+        const pendingTargetId = targetMessageId;
+        store.clearPendingReplyIf(partner.id, pendingTargetId);
+        pending = null;
+        targetMessageId = null;
+        diagnostics({ event: "reply.recovered.action-target", agentId: partner.id, messageId: pendingTargetId });
+      }
+      const lastAssistant = messages.findLastIndex((row) => row?.role === "assistant" && isSpeechMessage(row));
+      const tail = messages.slice(lastAssistant + 1).filter((row) => row?.role === "user" && isSpeechMessage(row));
       let dueAt = Date.parse(pending?.dueAt ?? "");
       let mode = pending?.mode ?? "recovered";
       // 兼容修复前已经挂住的消息：旧账本没有 pendingReply，只能认末尾未读的用户话。
@@ -4918,6 +5188,14 @@ export function apply(ctx) {
     }
     // 手机拿起来了、也点开了：这条（连同她之前连着发的那几条）就算看到过了。
     // 只盖到这轮排期真正覆盖的那条为止：后面新落的话 ta 还没看见，不能先签收。
+    //
+    // 但待办指的是戳一戳这类动作时，到这里之前就得停：那不是话，盖了已读是假收据，
+    // 生成出来也是对着模型看不见的话开口。待办清掉，真文字由恢复轮重新认。
+    if (pending?.messageId && !isSpeechMessage(store.getThread(agentId).messages.find((row) => row?.id === pending.messageId))) {
+      store.clearPendingReplyIf(agentId, pending.messageId);
+      diagnostics({ event: "reply.skipped.action-target", agentId, messageId: pending.messageId });
+      return { ok: false, reason: "action-target" };
+    }
     const touched = store.markUserMessagesRead(agentId, new Date().toISOString(), { throughId: pending?.messageId ?? null });
     diagnostics({ event: "reply.read", agentId, touched: touched.length });
     commitWakeAtRead(agentId, {
@@ -6452,10 +6730,10 @@ export function apply(ctx) {
         const index = thread.messages.findIndex((row) => row.id === messageId);
         const message = index >= 0 ? thread.messages[index] : null;
         const lastAssistant = thread.messages.findLast((row) => row.role === "assistant" && !row.recalled);
-        if (!message || message.role !== "assistant" || lastAssistant?.id !== messageId) {
+        if (!message || message.role !== "assistant" || !isSpeechMessage(message) || lastAssistant?.id !== messageId) {
           return c.json({ ok: false, error: { message: "只能重新生成最后一条伙伴回复" } }, 409);
         }
-        const repliedTo = thread.messages.slice(0, index).findLast((row) => row.role === "user" && !row.recalled)?.id ?? null;
+        const repliedTo = thread.messages.slice(0, index).findLast((row) => row.role === "user" && !row.recalled && isSpeechMessage(row))?.id ?? null;
         // 生成期间她可能又发了新消息（或者清了聊天），那这次重做的结果就不该再往上贴。
         const gen = threadGeneration(agentId);
         const made = await composeReply(agentId, {
@@ -6786,6 +7064,11 @@ export function apply(ctx) {
           ...(attachment ? { attachment: { id: attachment.id, name: attachment.name, mimeType: attachment.mimeType, size: attachment.size }, visionNote, ...(visionVia ? { visionVia } : {}) } : {}),
           ...(visionNotice ? { notice: visionNotice } : {}),
         });
+        if (matchVideoStop(messageText)) {
+          store.setGlobalSettings({ videoShareMaxPerDay: 0 });
+          // 只记明确关闭的来源，不另设门禁；恢复仍由设置开关决定。
+          store.setGlobalRuntime({ videoStop: { reason: "explicit-user-stop", agentId, messageId: stored.id, at: stored.at } });
+        }
         const duringFocus = focusCompanion.active() ? await focusCompanion.userSpoke({ agentId, messageId: stored.id }) : false;
         // 明确偏好先只做本地候选预筛：普通聊天不额外叫模型，候选也必须绑定已落盘的用户消息 id。
         const adaptationHint = adaptationCandidate(messageText);
@@ -7016,6 +7299,45 @@ export function apply(ctx) {
         }
       });
 
+      app.get("/video/status", async (c) => {
+        const state = await videoLoginManager.status({ force: c.req.query("refresh") === "1" });
+        return c.json({ ok: true, status: state.status, hasLogin: state.hasLogin, storage: state.storage,
+          ...(state.episodeId ? { episodeId: state.episodeId } : {}) });
+      });
+      app.post("/video/qrcode/start", async (c) => {
+        try {
+          const result = await videoLoginManager.start();
+          return c.json(result.ok ? result : { ok: false, error: { message: result.reason } }, result.ok ? 200 : 400);
+        } catch {
+          return c.json({ ok: false, error: { message: "暂时取不到B站登录二维码，请稍后重试" } }, 400);
+        }
+      });
+      app.post("/video/qrcode/poll", async (c) => {
+        try {
+          const body = await c.req.json();
+          if (typeof body?.id !== "string" || body.id.length > 100) throw new Error("invalid-qrcode-id");
+          const result = await videoLoginManager.poll(body.id);
+          return c.json(result.ok ? result : { ok: false, error: { message: result.reason } }, result.ok ? 200 : 400);
+        } catch {
+          return c.json({ ok: false, error: { message: "暂时无法确认扫码状态，请刷新二维码重试" } }, 400);
+        }
+      });
+
+      app.post("/video/login", async (c) => {
+        // 临时兼容入口：仅改本次运行内存，不覆盖或清除持久扫码凭据；不把异常中的URL/凭据回显。
+        try {
+          const body = await c.req.json();
+          const token = typeof body?.sessdata === "string" ? body.sessdata.trim() : "";
+          if (body?.persist !== false || token.length < 6 || token.length > 4096 || /[^\x21-\x7E]|;/u.test(token)) {
+            return c.json({ ok: false, error: { message: "请填写SESSDATA值，仅用于本次运行" } }, 400);
+          }
+          const result = await videoLoginManager.loginToken(token);
+          return c.json(result.ok ? result : { ok: false, error: { message: result.reason } }, result.ok ? 200 : 400);
+        } catch {
+          return c.json({ ok: false, error: { message: "暂时无法验证B站登录，请稍后重试" } }, 400);
+        }
+      });
+
       app.post("/partner-order", async (c) => {
         let body;
         try { body = await c.req.json(); } catch { return c.json({ ok: false, error: { message: "排序数据读不出来" } }, 400); }
@@ -7073,6 +7395,17 @@ export function apply(ctx) {
         return c.json({ ok: result.ok, vision, error: result.ok ? null : result.error });
       });
 
+      app.put("/settings/video-sharing", async (c) => {
+        try {
+          const patch = pickSettingsPatch(await c.req.json(), new Set(["maxPerDay", "partnerIds"]), "B站分享设置");
+          const visible = (await listAllPartners()).filter((row) => !store.isPartnerHidden(row.id));
+          const saved = store.setVideoSharingSettings(patch, visible.map((row) => row.id));
+          return c.json({ ok: true, global: globalSettingsView(), partners: saved.partners });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 400);
+        }
+      });
+
       app.put("/settings/global", async (c) => {
         try {
           const body = await c.req.json();
@@ -7084,9 +7417,10 @@ export function apply(ctx) {
               if (profile.config?.apiKey && profile.config.apiKey !== "********") profile.config.apiKey = await protectKey(profile.config.apiKey);
               else profile.config.apiKey = currentProfiles[id]?.config?.apiKey || "";
             }
+            // 系统锁用不上时退回本机锁：Key 仍然是密文，只是保护范围限于这台机器。
             const enc = encryptionStatus();
-            if (!enc.ok && globalPatch.voiceProfiles) {
-              diagnostics({ event: "voice.key.plain", reason: enc.reason });
+            if (enc.storage === "local" && globalPatch.voiceProfiles) {
+              diagnostics({ event: "voice.key.local", reason: enc.reason });
             }
           }
           store.setGlobalSettings(globalPatch);
@@ -7252,12 +7586,72 @@ export function apply(ctx) {
       });
 
       // __CHAHUAHUI_DEV_ONLY__
-      // 内测用的手动催一次主动巡检（跳过“到没到点”这道门，静默与日上限照管）。
+      // 内测：手动跑一次主动巡检（跳过“到没到点”这道门，静默与日上限照管）。
       // 发布前连同 /probe 一起剥掉。
       if (DEV_TOOLS) app.post("/proactive/tick", async (c) => {
         try {
           return c.json({ ok: true, result: await runProactiveTick({ force: true }) });
         } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 500);
+        }
+      });
+
+      // 内测：立刻跑一次兴趣探索，不必等 18～36 小时的节拍。
+      // 走 store 自己的写入口把好奇心时间推前，不去改磁盘账本（改了也会被运行中的实例覆盖）。
+      // 发布前连同 /probe 一起剥掉。
+      if (DEV_TOOLS) app.post("/probe/explore", async (c) => {
+        try {
+          const body = await c.req.json().catch(() => ({}));
+          const partners = await listPartners();
+          const target = partners.find((row) => row.id === body?.agentId) ?? partners[0];
+          if (!target) return c.json({ ok: false, error: "没有可用伙伴" }, 400);
+          const now = new Date();
+          const learning = readInterestLearning(store.getProactiveState(target.id).interestLearning, now);
+          store.setProactiveState(target.id, {
+            interestLearning: scheduleExploration(learning, new Date(now.getTime() - 36 * 3600 * 1000)),
+          });
+          const result = await maybeExploreInterest(target.id, target.name, now);
+          return c.json({ ok: true, agentId: target.id, result });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 500);
+        }
+      });
+
+      // 内测：把当天的主动额度清零，便于反复验证主动链（发布前连同 /probe 一起剥掉）。
+      // 只清计数，不改档位、不改她自己的设置。
+      if (DEV_TOOLS) app.post("/probe/reset-quota", async (c) => {
+        try {
+          const body = await c.req.json().catch(() => ({}));
+          const partners = await listPartners();
+          const target = partners.find((row) => row.id === body?.agentId) ?? partners[0];
+          if (!target) return c.json({ ok: false, error: "没有可用伙伴" }, 400);
+          const day = dayKey(new Date());
+          store.setProactiveState(target.id, { sentToday: { day, count: 0 } });
+          store.setGlobalRuntime({ sentToday: { day, count: 0 } });
+          return c.json({ ok: true, agentId: target.id, day });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 500);
+        }
+      });
+
+      // 内测：直接让她分享一条待分享的视频（强制走兴趣由头，不靠抽签）。发布前剥掉。
+      if (DEV_TOOLS) app.post("/probe/share-video", async (c) => {
+        try {
+          const body = await c.req.json().catch(() => ({}));
+          const partners = await listPartners();
+          const target = partners.find((row) => row.id === body?.agentId) ?? partners[0];
+          if (!target) return c.json({ ok: false, error: "没有可用伙伴" }, 400);
+          const pending = store.getVideoBook(target.id).pending.length;
+          if (!pending) return c.json({ ok: false, error: "没有待分享的视频，先跑 /probe/explore" }, 400);
+          devForceInterest = target.id;
+          try {
+            const result = await runProactiveTick({ force: true });
+            return c.json({ ok: true, agentId: target.id, pendingBefore: pending, result });
+          } finally {
+            devForceInterest = null;
+          }
+        } catch (error) {
+          devForceInterest = null;
           return c.json({ ok: false, error: describeError(error) }, 500);
         }
       });
