@@ -9,6 +9,10 @@ import { makeVideoCandidate, addVideoCandidate, recordVideoShare } from "../lib/
 import { createVideoLogin } from "../lib/video-login.js";
 import { readVideoCredential, writeVideoCredential } from "../lib/video-source.js";
 
+// 有一批用例靠内测路由 /proactive/tick 驱动主动联系；发布副本整块剥掉哨兵后那条路由不存在，
+// 这种形态下只跑不依赖它的用例，依赖的如实跳过（与 focus-routes / proactive-reasons 同一口径）。
+const SKIP_DEV = fs.readFileSync(new URL("../index.js", import.meta.url), "utf8").includes("// __CHAHUAHUI_DEV_ONLY_END__")
+  ? false : "发布副本已剥掉内测巡检路由";
 const AGENT = "nova";
 const LINK = "https://www.bilibili.com/video/BV1bXt9z9ESP?p=2";
 const now = () => new Date().toISOString();
@@ -96,7 +100,7 @@ test('集中保存拒绝非法名单及不完整数据，不部分更新；范�
   assert.equal(disk(app).getPartnerSettings(AGENT).videoSharingEnabled, true);
 });
 
-test("视频设置默认关闭、六档合法回显、拒绝非法值", async (t) => {
+test("视频设置默认关闭、六档合法回显、拒绝非法值", { skip: SKIP_DEV }, async (t) => {
   const app = await boot(t, () => {});
   assert.equal((await app.request("GET", "/settings")).body.global.videoShareMaxPerDay, 0);
   for (const value of [0, 1, 2, 3, 4, 5]) {
@@ -108,7 +112,7 @@ test("视频设置默认关闭、六档合法回显、拒绝非法值", async (t
 });
 
 for (const loggedIn of [false, true]) {
-  test(`真实探索接线：${loggedIn ? "已登录只搜索B站并保存字幕候选" : "未登录不请求B站"}`, async (t) => {
+  test(`真实探索接线：${loggedIn ? "已登录只搜索B站并保存字幕候选" : "未登录不请求B站"}`, { skip: SKIP_DEV }, async (t) => {
     const app = await boot(t, (store) => {
       seed(store);
       store.saveVideoBook(AGENT, { pending: [], shares: [] });
@@ -145,7 +149,7 @@ for (const loggedIn of [false, true]) {
   });
 }
 
-test("探索计划等待期间线程变化，搜索前门禁挡住B站请求", async (t) => {
+test("探索计划等待期间线程变化，搜索前门禁挡住B站请求", { skip: SKIP_DEV }, async (t) => {
   const app = await boot(t, (store) => {
     seed(store);
     store.saveVideoBook(AGENT, { pending: [], shares: [] });
@@ -179,7 +183,7 @@ test("探索计划等待期间线程变化，搜索前门禁挡住B站请求", a
   assert.equal(disk(app).getVideoBook(AGENT).pending.length, 0);
 });
 
-test("伙伴级浏览开关保留明确选择、严格布尔、持久化且不影响全局和其他伙伴", async (t) => {
+test("伙伴级浏览开关保留明确选择、严格布尔、持久化且不影响全局和其他伙伴", { skip: SKIP_DEV }, async (t) => {
   const app = await boot(t);
   assert.equal(disk(app).getPartnerSettings(AGENT).videoSharingEnabled, true);
   assert.equal((await app.request("PUT", `/settings/partner/${AGENT}`, { json: { videoSharingEnabled: "false" } })).status, 400);
@@ -247,7 +251,7 @@ test("主接线读取DPAPI保护凭据并nav验证，拒绝明文旧文件", asy
   assert.equal(JSON.stringify(rejected).includes("LEGACY_PLAINTEXT_TEST_MARKER"), false);
 });
 
-test("实际主动链选择视频、伙伴模型发出链接、成功后才落条目和两层额度", async (t) => {
+test("实际主动链选择视频、伙伴模型发出链接、成功后才落条目和两层额度", { skip: SKIP_DEV }, async (t) => {
   const app = await boot(t);
   const response = await sendVideo(app, `这个半岛铁盒的石膏模具我想试一哈。${LINK}`);
   assert.equal(response.status, 200);
@@ -270,7 +274,7 @@ test("实际主动链选择视频、伙伴模型发出链接、成功后才落�
   assert.equal(app.net.calls.length, 0);
 });
 
-test("伙伴不想分享时不发消息、不扣额度，保留候选并冷却", async (t) => {
+test("伙伴不想分享时不发消息、不扣额度，保留候选并冷却", { skip: SKIP_DEV }, async (t) => {
   const app = await boot(t);
   await sendVideo(app, "[不回]");
   assert.equal(reopenThread(app.dataDir, AGENT).filter((m) => m.videoId).length, 0);
@@ -280,7 +284,7 @@ test("伙伴不想分享时不发消息、不扣额度，保留候选并冷却",
   assert.ok(store.getVideoBook(AGENT).pending[0].offeredAt);
 });
 
-test("分享生成期间关闭功能时旧稿不送出、不扣额度", async (t) => {
+test("分享生成期间关闭功能时旧稿不送出、不扣额度", { skip: SKIP_DEV }, async (t) => {
   const app = await boot(t);
   await sendVideo(app, `这份半岛铁盒的教程我看着有意思。${LINK}`, async () => {
     await app.request("PUT", "/settings/global", { json: { videoShareMaxPerDay: 0 } });
@@ -291,7 +295,7 @@ test("分享生成期间关闭功能时旧稿不送出、不扣额度", async (t
 });
 
 for (const change of ["global-off", "partner-off", "video-partner-off", "total-limit"])  {
-  test(`生成期间门禁变化也挡住旧稿：${change}`, async (t) => {
+  test(`生成期间门禁变化也挡住旧稿：${change}`, { skip: SKIP_DEV }, async (t) => {
     const app = await boot(t, (store) => {
       seed(store);
       if (change === "total-limit") store.setGlobalRuntime({ sentToday: { day: dayKey(new Date()), count: 12 } });
@@ -307,7 +311,7 @@ for (const change of ["global-off", "partner-off", "video-partner-off", "total-l
   });
 }
 
-test("模型没写链接也由系统补上分享文案，仍算分享成功", async (t) => {
+test("模型没写链接也由系统补上分享文案，仍算分享成功", { skip: SKIP_DEV }, async (t) => {
   const app = await boot(t);
   await sendVideo(app, "这个半岛铁盒做得真有意思。");
   const shared = reopenThread(app.dataDir, AGENT).filter((m) => m.videoId);
@@ -443,7 +447,7 @@ async function setExpiredLogin(app) {
   return status.body;
 }
 
-test("提醒人格等待期间线程变化，旧提醒不落库也不记主动额", async (t) => {
+test("提醒人格等待期间线程变化，旧提醒不落库也不记主动额", { skip: SKIP_DEV }, async (t) => {
   const app = await boot(t);
   app.store.saveVideoBook(AGENT, { pending: [], shares: [] });
   await setExpiredLogin(app);
@@ -482,7 +486,7 @@ test("提醒人格等待期间线程变化，旧提醒不落库也不记主动�
   }
 });
 
-test("登录过期走当前伙伴模型的主动提醒、不混视频、不扣视频额但计主动额", async (t) => {
+test("登录过期走当前伙伴模型的主动提醒、不混视频、不扣视频额但计主动额", { skip: SKIP_DEV }, async (t) => {
   const app = await boot(t);
   await setExpiredLogin(app);
   await sendVideo(app, "我这边B站登录掉了，想继续逛得去茶话会设置扫个码。" );
@@ -499,7 +503,7 @@ test("登录过期走当前伙伴模型的主动提醒、不混视频、不扣�
   assert.equal(app.models.calls[0].request.model, "test-model");
 });
 
-test("提醒生成期间重新登录时旧的过期提醒不发", async (t) => {
+test("提醒生成期间重新登录时旧的过期提醒不发", { skip: SKIP_DEV }, async (t) => {
   const app = await boot(t);
   await setExpiredLogin(app);
   await sendVideo(app, "B站登录掉了，再去设置扫码哈。", async () => {
