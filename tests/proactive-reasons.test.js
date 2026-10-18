@@ -97,6 +97,23 @@ test("共同经历和吐槽的真凭据：只有实质来源算数，旧消息�
   assert.equal(real.dropped, false);
 });
 
+// 同一个场景走真实链路（由头那边先把凭据拼好，再交给拼装层）：
+// 只盖住「电脑那边」那一段不够，凭据正文会原样写进提示词，搭话和想念照样看得见整段开发对话。
+test("搭话和想念不接工作台账：凭据正文里也不许出现电脑那边", () => {
+  const feed = "【电脑那边最近发生的事 · 工作对话背景】\n小林：把这版风铃改好\n小花：改完了";
+  for (const kind of ["contact", "affection"]) {
+    const { reason } = enrichReasonContext({ kind }, { workfeedText: feed });
+    assert.equal(reason.kind, kind);
+    assert.doesNotMatch(reason.contextText, /工作对话背景/, `${kind} 不该接台账`);
+    assert.doesNotMatch(reason.contextText, /风铃/, `${kind} 不该带开发原文`);
+  }
+  // 共同经历和吐槽的凭据本来就取自这段，甩了就当场作废。
+  for (const kind of ["shared", "tease"]) {
+    const { reason } = enrichReasonContext({ kind }, { workfeedText: feed });
+    assert.match(reason.contextText, /风铃/, `${kind} 仍然要拿得到凭据`);
+  }
+});
+
 test("吐槽不因为一个标签就整条关掉：混合标签保留俏皮那一面", () => {
   const mixed = withTags("安静", "俏皮");
   const quiet = withTags("安静", "有分寸");

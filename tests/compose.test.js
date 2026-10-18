@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { enrichReasonContext } from "../lib/proactive-reasons.js";
 import { cleanVoice, farewellSpec, hasOpenHook, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNighttimeSleepQuestion, isNoReply, LINKUP_DISCIPLINE, looksLikeAdTail, nightSpec, proactiveSpec, readFollowupStage, stirredSpec } from "../lib/compose.js";
 
 test('quote残片窄清洗：去格式保留正文，不误吞字面符号和安静出口', () => {
@@ -624,6 +625,27 @@ test("关系式由头不摊工作台账：搭话和想念只谈关系，不拿�
   // 纯招呼、睡前收尾这些没挨到关系式由头的，照旧带着。
   const greeting = proactiveSpec({ partnerName: "小花", userName: "小林", personaText: "我是小花。", workfeedText: feed, greetingOnly: true });
   assert.match(greeting.userText, /电脑那边（Hana）最近的工作对话/);
+});
+
+// 同一个场景走真实链路（由头那边先把凭据拼好，再交给拼装层）：
+// 只盖住「电脑那边」那一段不够，凭据正文会原样写进提示词，搭话和想念照样看得见整段开发对话。
+test("真实链路也不漏：由头凭据拼好之后再拼提示词，搭话和想念仍看不到工作台账", () => {
+  const feed = "【电脑那边最近发生的事 · 工作对话背景】\n小林：把这版风铃改好\n小花：改完了";
+  for (const kind of ["contact", "affection"]) {
+    const { reason } = enrichReasonContext({ kind }, { workfeedText: feed });
+    const spec = proactiveSpec({
+      partnerName: "小花",
+      userName: "小林",
+      personaText: "我是小花。",
+      workfeedText: feed,
+      reason,
+    });
+    assert.doesNotMatch(spec.userText, /工作对话背景/, `${kind} 的由头凭据不该带台账`);
+    assert.doesNotMatch(spec.userText, /风铃/, `${kind} 的提示词里不该出现开发原文`);
+  }
+  const { reason: shared } = enrichReasonContext({ kind: "shared" }, { workfeedText: feed });
+  const withShared = proactiveSpec({ partnerName: "小花", userName: "小林", personaText: "我是小花。", workfeedText: feed, reason: shared });
+  assert.match(withShared.userText, /风铃/, "共同经历照样拿得到凭据");
 });
 
 test("睡前收尾允许没由头，并且分得清她还在忙还是已经收工", () => {
