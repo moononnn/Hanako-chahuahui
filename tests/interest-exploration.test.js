@@ -18,6 +18,7 @@ import {
   pickInterestForExploration,
   readInterestLearning,
   scheduleExploration,
+  videoTopUpDue,
 } from "../lib/interest-exploration.js";
 
 const at = new Date("2026-09-25T00:00:00.000Z");
@@ -171,4 +172,24 @@ test("手里那份东西写成能直接用的语气，不是一块结构化数�
   assert.match(text, /别当定论/u);
   assert.match(text, /不可信数据/u, "外部材料的注入防护不能丢");
   assert.equal(heldDiscoveryText(null), "");
+});
+
+// ── 视频补货（2026-10-18）──
+// 实机：探索节拍 18~36 小时一次，一批最多三个候选；发完之后大半天到一整天视频由头整天缺席。
+test("当天还有配额、手上却没候选时不等探索节拍，直接补一批", () => {
+  const now = new Date("2026-10-18T20:30:00.000Z");
+  const base = { videoEnabled: true, quotaLeft: true, hasCandidate: false };
+  // 上次探索在 29 小时前，节拍还没到（31.9 小时），但池子空着就该补
+  assert.equal(videoTopUpDue({ ...base, lastExploreAt: "2026-10-17T15:10:46.144Z" }, { now }), true);
+  // 刚补过、还在间隔里就别连着出门
+  assert.equal(videoTopUpDue({ ...base, lastExploreAt: "2026-10-18T18:30:00.000Z" }, { now }), false);
+  assert.equal(videoTopUpDue(base, { now }), true, "从没探索过就补");
+});
+
+test("补货只在真缺的时候发生：没开视频、配额用完、手上有候选都不动", () => {
+  const now = new Date("2026-10-18T20:30:00.000Z");
+  const stale = { lastExploreAt: "2026-10-15T00:00:00.000Z" };
+  assert.equal(videoTopUpDue({ ...stale, videoEnabled: false, quotaLeft: true, hasCandidate: false }, { now }), false, "伙伴没开视频分享");
+  assert.equal(videoTopUpDue({ ...stale, videoEnabled: true, quotaLeft: false, hasCandidate: false }, { now }), false, "当天配额已经用完");
+  assert.equal(videoTopUpDue({ ...stale, videoEnabled: true, quotaLeft: true, hasCandidate: true }, { now }), false, "手上还有候选");
 });

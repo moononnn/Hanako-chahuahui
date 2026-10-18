@@ -595,6 +595,37 @@ test("电脑那边的近况接成自己的经历，不是接成一份记录", ()
   assert.doesNotMatch(withoutFeed.systemPrompt, /那边就是空的/, "没有近况就不提这茬");
 });
 
+test("关系式由头不摊工作台账：搭话和想念只谈关系，不拿开发近况凑内容", () => {
+  const feed = "【电脑那边最近发生的事 · 工作对话背景】\n小林：把这版风铃改好\n小花：改完了";
+  for (const kind of ["contact", "affection"]) {
+    const spec = proactiveSpec({
+      partnerName: "小花",
+      userName: "小林",
+      personaText: "我是小花。",
+      workfeedText: feed,
+      reason: { kind, contextText: "" },
+    });
+    assert.doesNotMatch(spec.userText, /电脑那边（Hana）最近的工作对话/, `${kind} 不该看见工作台账`);
+    assert.doesNotMatch(spec.userText, /把这版风铃改好/, `${kind} 不该把开发原文摊在眼前`);
+    assert.doesNotMatch(spec.systemPrompt, /同一个人的两条线/, `${kind} 没有近况就不该带联动口径`);
+    assert.match(spec.userText, /这次联系的由头/, `${kind} 仍然要有自己的由头段`);
+  }
+  // 共同经历和吐槽的凭据本来就从这段里出，掐了就当场作废，必须留着。
+  for (const kind of ["shared", "tease"]) {
+    const spec = proactiveSpec({
+      partnerName: "小花",
+      userName: "小林",
+      personaText: "我是小花。",
+      workfeedText: feed,
+      reason: { kind, contextText: "她今天在电脑那边陪你弄风铃" },
+    });
+    assert.match(spec.userText, /电脑那边（Hana）最近的工作对话/, `${kind} 仍然要有近况`);
+  }
+  // 纯招呼、睡前收尾这些没挨到关系式由头的，照旧带着。
+  const greeting = proactiveSpec({ partnerName: "小花", userName: "小林", personaText: "我是小花。", workfeedText: feed, greetingOnly: true });
+  assert.match(greeting.userText, /电脑那边（Hana）最近的工作对话/);
+});
+
 test("睡前收尾允许没由头，并且分得清她还在忙还是已经收工", () => {
   const done = farewellSpec({ partnerName: "小花", userName: "小林", personaText: "我是小花。", busy: false, sleepStart: "23:30", currentTimeText: "晚上 11 点 15 分" });
   assert.match(done.systemPrompt, /去睡了本身就是理由/);

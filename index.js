@@ -143,6 +143,7 @@ import {
   mentionsDiscovery,
   nextDiscovery,
   offerableDiscovery,
+  videoTopUpDue,
   discoveryForProactiveMessage,
   parseExplorationPlan,
   pickInterestForExploration,
@@ -3044,7 +3045,16 @@ export function apply(ctx) {
       }
 
       const learning = readInterestLearning(state.interestLearning, now);
-      if (!learning.curiosity.startedAt || (!exploredThisTick && explorationDue(learning, now))) {
+      // 视频补货也是进探索的一条路（2026-10-18）：光看好奇心节拍的话，一批候选发完之后
+      // 剩下的半天到一天里视频由头整天缺席。这里跟 maybeExploreInterest 里用同一把尺，
+      // 只是先把「值得去」这件事大略挡在门外，免每轮都进去跑一趟。
+      const videoTopUpNow = !exploredThisTick && videoTopUpDue({
+        videoEnabled: videoPartnerEnabled(agentId),
+        quotaLeft: videoQuota(),
+        hasCandidate: videoPartnerEnabled(agentId) && Boolean(nextVideoCandidate(store.getVideoBook(agentId), now)),
+        lastExploreAt: learning.lastExploreAt,
+      }, { now });
+      if (!learning.curiosity.startedAt || videoTopUpNow || (!exploredThisTick && explorationDue(learning, now))) {
         if (learning.curiosity.startedAt) exploredThisTick = true;
         await maybeExploreInterest(agentId, partner.name, now).catch((error) => {
           diagnostics({ event: "interest.exploration.failed", agentId, error: describeError(error) });
@@ -4011,13 +4021,25 @@ export function apply(ctx) {
     const explorationStamp = threadStamp(agentId);
     let state = store.getProactiveState(agentId);
     let learning = readInterestLearning(state.interestLearning, now);
-    if (!learning.curiosity.startedAt) {
-      learning = scheduleExploration(learning, now);
-      store.setProactiveState(agentId, { interestLearning: learning });
-      return { explored: false, reason: "curiosity-started" };
-    }
-    if (!explorationDue(learning, now)) return { explored: false, reason: "not-curious-yet" };
     const videoEnabled = videoPartnerEnabled(agentId);
+    // 视频补货（2026-10-18）：一批候选全发完之后，剩下的半天到一天里视频由头整天缺席，
+    // 只因为探索节拍还没到。当天还有配额、候选池空着时不等节拍，直接补一趟。
+    const videoTopUp = videoTopUpDue({
+      videoEnabled,
+      quotaLeft: videoQuota(),
+      hasCandidate: videoEnabled && Boolean(nextVideoCandidate(store.getVideoBook(agentId), now)),
+      lastExploreAt: learning.lastExploreAt,
+    }, { now });
+    if (videoTopUp) {
+      diagnostics({ event: "video.exploration.topup", agentId, lastExploreAt: learning.lastExploreAt ?? null });
+    } else {
+      if (!learning.curiosity.startedAt) {
+        learning = scheduleExploration(learning, now);
+        store.setProactiveState(agentId, { interestLearning: learning });
+        return { explored: false, reason: "curiosity-started" };
+      }
+      if (!explorationDue(learning, now)) return { explored: false, reason: "not-curious-yet" };
+    }
     if (videoEnabled ? nextVideoCandidate(store.getVideoBook(agentId), now) : nextDiscovery(learning, now)) {
       learning = scheduleExploration(learning, now);
       store.setProactiveState(agentId, { interestLearning: learning });
