@@ -1,5 +1,15 @@
 # TESTING · 茶话会
 
+## 专属节日回应引导（2026-10-18）
+
+- 基线：重载前App Manager运行清单显示0.8.0、磁盘manifest为0.9.0。正式reload后运行清单为`app:chahuahui on / 0.9.0`。没有保存的实际茶话会生成请求，不能把提示词测试当作模型已自然说出口。
+- 改动：普通节日背景不再一概要求“别主动报”。仅拾光记现有带专属引导的12个节日添加轻回应提示；个人纪念日、普通事件和未配置专属引导的节日不升级。节日提示独立于日常背景的按天去重，避免本日首次注入被记账后，后续回合没有回应机会；同一聊天已祝福时要求不重复。
+- 语法：`node --check lib/daybook.js index.js tests/daybook.test.js tests/daybook-app.test.js`，4份通过。
+- 定向测试：`node --test --test-concurrency=1 tests/daybook.test.js tests/daybook-app.test.js`，**34/34通过，0失败/取消/跳过**。覆盖节日响应文案、动态称呼、事件/个人纪念日不升级、未配置节日不触发，以及独立于日常去重的注入接线。
+- 全量发布验证：`release.ps1 -Phase verify`，97 个测试文件，**1816/1816 通过，0 失败 / 取消 / 跳过**，约 36.4 秒；`TZ=Asia/Shanghai`，HANA_HOME、HOME、USERPROFILE 使用隔离临时目录，TEMP/TMP 使用系统默认临时目录。日志：`_test_runs/chahuahui_release_v0.10.0_20261018/release-verify-system-temp.log`。
+- 环境异常记录：首次把 TEMP/TMP 指到工作台临时目录时，`store.test.js` 的原子 JSON 替换报 `EPERM`；检查后源码树、版本与测试目标文件均完整。切回系统临时目录后，同一边界用例 1/1 通过，全量发布验证也通过。没有看到安全软件告警；根因未能进一步证实，不将它归为应用逻辑缺陷，后续测试继续让 TEMP/TMP 使用系统默认临时目录。
+- 未调用真实/付费模型；节日回应在自然对话中的表现仍未验证，不把提示词和自动化测试通过等同于实机聊天验收。
+
 ## 内部时间/主动来由标记泄漏（2026-10-17）
 
 - 修复前样本：两条普通回复中的时间标题与主动来由说明已落入 assistant `text`/`bubbles`。第一轮与交叉复核补漏前各留了一份修复前快照（10 份、9 份文件），均逐份 SHA-256 核对一致。

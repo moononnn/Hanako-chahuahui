@@ -31,7 +31,7 @@ import { hasPalette, isPaletteDone, normalizePalette, paletteToText } from "./li
 import { createAvatarReader, looksLikeImage, toBytes } from "./lib/avatar.js";
 import { registerTavernImportService, renderImportedPersona } from "./lib/character-import.js";
 import { buildSystemPrompt, buildTeaseText, identityBlock, replyChoiceBlock, shouldQuietClose, threadToMessages } from "./lib/prompt.js";
-import { buildAmbientContextText, buildDaybookText, daybookAvailable, daybookEntry, daybookHash, daybookQueryTopics, periodNoteDecision, previousAssistantBeforeUser, readDaybook, readDaybookVerbose, shouldUseDaybook } from "./lib/daybook.js";
+import { buildAmbientContextText, buildDaybookText, buildFestivalResponseText, daybookAvailable, daybookEntry, daybookHash, daybookQueryTopics, periodNoteDecision, previousAssistantBeforeUser, readDaybook, readDaybookVerbose, shouldUseDaybook } from "./lib/daybook.js";
 import { dueTodosFromSnapshot, nudgeKey, nudgeSeen, pickTodoNudger, todoNudgeText } from "./lib/todo-nudge.js";
 import { hasProposal, confirmProposal, makeProposal, proposalAskText, proposeFromMessage } from "./lib/todo-propose.js";
 import { isMorningPart, spokenClock, timeBlock, zonedTimestamp } from "./lib/clock.js";
@@ -4355,6 +4355,7 @@ export function apply(ctx) {
     const followupGap = Date.parse(latestUser?.at ?? "") - Date.parse(previousAssistant?.at ?? "");
     const previousAssistantText = followupGap >= 0 && followupGap <= 10 * 60_000 ? previousAssistant?.text : "";
     let daybookText = "";
+    let festivalText = "";
     const daybookTopics = daybookOn()
       ? daybookQueryTopics(latestUser?.text, { previousAssistantText })
       : [];
@@ -4364,6 +4365,7 @@ export function apply(ctx) {
     if (daybookOn()) {
       const read = await readDaybookVerbose(ctx);
       daybookSnapshot = read.snapshot;
+      festivalText = buildFestivalResponseText(daybookSnapshot, { userName: USER_NAME });
       // 读不到时把原因记下来：静默 null 会让人对着一个没反应的待办猜半天。
       if (!daybookSnapshot) diagnostics?.({ event: "daybook.read.unavailable", agentId, reason: read.reason });
     }
@@ -4401,6 +4403,8 @@ export function apply(ctx) {
     } catch (error) {
       diagnostics({ event: "daybook.failed", agentId, error: describeError(error) });
     }
+    // 普通日子情境按天去重；节日回应独立于这笔记账，直到当前聊天已经自然提过。
+    daybookText = [daybookText, festivalText].filter(Boolean).join("\n\n");
     const workfeedText = workfeedOn()
       ? buildWorkfeedText(store.readWorkfeed(), agentId, { lifeDay: dayKey(new Date()), userName: USER_NAME })
       : "";

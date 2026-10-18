@@ -14,6 +14,7 @@ import {
   DAYBOOK_SCHEMA_VERSION,
   buildAmbientContextText,
   buildDaybookText,
+  buildFestivalResponseText,
   daybookEntry,
   daybookHash,
   daybookQueryTopics,
@@ -169,7 +170,21 @@ test("今天这一段：节日、纪念日、调休、待办、身体不适、�
   assert.ok(text.includes("身体不太舒服"));
   assert.ok(text.includes("窗外阴着，风不大"));
   assert.ok(text.includes("24°C"));
-  assert.ok(text.includes("别主动报出来"), "要有收口，免得ta每轮念叨");
+  assert.ok(text.includes("有【节日回应】时按那条轻轻回应一次"), "节日和日常背景要分开处理");
+});
+
+test("专属节日有轻回应引导，个人纪念日和无专属引导节日不被升格", () => {
+  const text = buildFestivalResponseText(SNAPSHOT, { userName: "阿舟" });
+  assert.match(text, /【节日回应】今天是中秋节/);
+  assert.match(text, /先回应阿舟眼前的话/);
+  assert.match(text, /只.*一次|提过一次就算完成/);
+  assert.match(text, /不预设团聚、节日食物或眼前景象/);
+  assert.match(text, /如果这段茶话会聊天里还没有/);
+
+  const withoutFestival = { ...SNAPSHOT, today: { ...SNAPSHOT.today, festivals: [], events: ["在一起第 500 天"] } };
+  assert.equal(buildFestivalResponseText(withoutFestival), "");
+  const unsupported = { ...SNAPSHOT, today: { ...SNAPSHOT.today, festivals: ["光棍节"] } };
+  assert.equal(buildFestivalResponseText(unsupported), "");
 });
 
 test("做册那一段：带日期、带底子说明、并且明说不是她刚说的话", () => {
