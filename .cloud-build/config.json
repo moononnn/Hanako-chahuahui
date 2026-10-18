@@ -128,14 +128,14 @@
     "pin": {
       "channel": "beta",
       "channelManifest": "https://dl.openhanako.com/channels/beta.json",
-      "version": "1.1.7-beta",
+      "version": "1.1.24-beta",
       "platform": "win32-x64",
-      "file": "server-1.1.7-beta-win32-x64.tar.gz",
-      "sha256": "4460b4c2a6bae210c19b93bb95a9f08cd1cf94dc7cf1cb2f21cc2e9c2df9182b",
-      "size": 241464173,
+      "file": "server-1.1.24-beta-win32-x64.tar.gz",
+      "sha256": "421f6bcbc5dfce7fa2d85416848cb75d8828820342a6d44d51e52e0ec23a5b2c",
+      "size": 253302845,
       "mirrors": [
         "https://dl.openhanako.com",
-        "https://github.com/liliMozi/openhanako/releases/download/train-beta-38"
+        "https://github.com/liliMozi/openhanako/releases/download/train-beta-39"
       ]
     }
   }
