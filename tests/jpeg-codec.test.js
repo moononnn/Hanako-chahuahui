@@ -75,3 +75,24 @@ test("段被截断时老实返回 null，不往外抛", () => {
   lying.writeUInt16BE(4, dqtAt + 2); // 声明长度 4，实际要 67
   assert.equal(decodeJpeg(lying), null, "段长不够就得当场说解不了");
 });
+
+test("SOS 扫描头不够长时也不读出去", () => {
+  const whole = makeBaselineJpeg();
+  const sosAt = whole.indexOf(Buffer.from([0xff, 0xda]));
+  assert.ok(sosAt > 0, "夹具里应该有 SOS 段");
+
+  // 把 SOS 的段长改成只放得下 Ns + Ss/Se/AhAl，放不下分量选择子。
+  // 旧代码不看段尾，会把 dataStart 算到段外，熵解码拿到的全是空数据。
+  const lying = Buffer.from(whole);
+  lying.writeUInt16BE(5, sosAt + 2); // 声明长度 5：Ns(1) + 3，够不到每分量的 2 字节
+  assert.equal(decodeJpeg(lying), null, "分量选择子放不下就得当场说解不了");
+
+  // 段长连 Ns 都放不下
+  const empty = Buffer.from(whole);
+  empty.writeUInt16BE(2, sosAt + 2);
+  assert.doesNotThrow(() => decodeJpeg(empty));
+  assert.equal(decodeJpeg(empty), null);
+
+  // 合法素材照旧能解，不能因为加了守卫就误杀
+  assert.ok(decodeJpeg(whole), "正常 JPEG 必须还能解开");
+});
