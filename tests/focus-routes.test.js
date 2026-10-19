@@ -41,7 +41,12 @@ test('真apply联动：选中伙伴人格、暂停普通主动、向另一伙伴
   assert.ok(partners.partners.some(row => row.id === 'nova'));
   assert.ok(partners.partners.some(row => row.id === peer.id));
   await handlers['focus/sync'].fn({}, caller);
-  const start = await app.models.waitForCall(0);
+  // 专注侧只该出这四种场景话本；按场景标记数，不数总调用数——
+  // 「另一个伙伴」那边因慢响应重来一轮时，不该把专注协作的断言一起拖下水。
+  const focusScenes = () => app.models.calls.filter((entry) => /目标和时长是背景|主动招呼对方回到专注|按实际结束情况简短收尾|先接住对方实际说的这句话/.test(String(entry.request.systemPrompt))).length;
+  const startRule = app.models.answer(
+    (req) => /目标和时长是背景/.test(String(req.systemPrompt)), '书翻开，我先不找你聊。');
+  const start = await app.models.waitForCallWhere(startRule.match, '专注开场');
   assert.match(start.request.systemPrompt, /俏皮|爱损/);
   assert.match(JSON.stringify(start.request.messages), /读书/);
   assert.equal(start.request.messages.length, 1, '开场只给场景背景，不带上一轮的聊天正文');
@@ -50,14 +55,16 @@ test('真apply联动：选中伙伴人格、暂停普通主动、向另一伙伴
   assert.ok(start.request.messages.slice(1).every(row => row.content.length < 400), '每条原文<=300字，额外只允许时间标记');
   assert.match(start.request.systemPrompt, /目标和时长是背景/);
   assert.doesNotMatch(JSON.stringify(start.request.messages), /接下约定|提醒开始/);
-  app.models.release(0, '书翻开，我先不找你聊。');
   await waitUntil(() => reopenThread(app.dataDir, 'nova').some(row => row.focusReminder?.kind === 'start'));
   const tick = await app.request('POST', '/proactive/tick', { json: {} });
   assert.equal(tick.body.result?.reason, 'focus');
   assert.equal(app.models.calls.length, 1);
   const message = await app.request('POST', '/turns', { json: { agentId: peer.id, text: '私聊机密关键词测试', watching: true, clientMessageId: 'focus_peer_msg_01' } });
   assert.equal(message.body.ok, true);
-  const peerReply = await app.models.waitForCall(1);
+  const peerRule = app.models.answer(
+    (req) => JSON.stringify(req.messages).includes('私聊机密关键词测试') && req.messages.length === 1,
+    '[quote]来啦[/quote]\n[/quote]\n先回去读一页 再来摆。');
+  const peerReply = await app.models.waitForCallWhere(peerRule.match, '另一个伙伴的首次回复');
   assert.match(peerReply.request.systemPrompt, /此刻的专注状态/);
   assert.match(peerReply.request.systemPrompt, /读书/);
   assert.match(peerReply.request.systemPrompt, /克制|俏皮/);
@@ -65,38 +72,41 @@ test('真apply联动：选中伙伴人格、暂停普通主动、向另一伙伴
   assert.match(peerReply.request.systemPrompt, /状态要实际参与回应/);
   assert.doesNotMatch(peerReply.request.systemPrompt, /小花/);
   assert.match(JSON.stringify(peerReply.request.messages), /私聊机密关键词测试/);
-  app.models.release(1, '[quote]来啦[/quote]\n[/quote]\n先回去读一页 再来摆。');
   await waitUntil(() => reopenThread(app.dataDir, peer.id).some(row => row.role === 'assistant'));
   assert.doesNotMatch(JSON.stringify(reopenThread(app.dataDir, peer.id).filter(row => row.role === 'assistant')), /\[\/?quote\]/);
-  const reminder = await app.models.waitForCall(2);
+  const reminderRule = app.models.answer(
+    (req) => /主动招呼对方回到专注/.test(String(req.systemPrompt)), '才读几分钟，先回去读这一页。');
+  const reminder = await app.models.waitForCallWhere(reminderRule.match, '走神提醒');
   assert.doesNotMatch(JSON.stringify(reminder.request), /私聊机密关键词测试|另一个伙伴/);
   assert.match(JSON.stringify(reminder.request.messages), /主动招呼/);
   // 走神提醒只给场面话，不带上一轮自己的正文（它的场景话本就声明“不知道聊天内容”）。
   assert.equal(reminder.request.messages.length, 1, '走神提醒只有一条场景背景');
-  app.models.release(2, '才读几分钟，先回去读这一页。');
   await waitUntil(() => reopenThread(app.dataDir, 'nova').some(row => row.focusReminder?.kind === 'distracted'));
   const self = await app.request('POST', '/turns', { json: { agentId: 'nova', text: '嘿嘿，好好读书！', watching: true, clientMessageId: 'focus_self_msg_01' } });
   assert.equal(self.body.mode, 'focus');
-  const ownReply = await app.models.waitForCall(3);
+  const ownRule = app.models.answer(
+    (req) => /先接住对方实际说的这句话/.test(String(req.systemPrompt)), '跟到读嘛，我也不闹你咯。');
+  const ownReply = await app.models.waitForCallWhere(ownRule.match, '陪读回应');
   assert.match(ownReply.request.systemPrompt, /先接住对方实际说的这句话/);
   assert.match(ownReply.request.messages.at(-1).content, /嘿嘿，好好读书！/);
   assert.doesNotMatch(JSON.stringify(ownReply.request), /私聊机密关键词测试|另一个伙伴|attachment-metadata-secret|quote-metadata-secret/);
-  app.models.release(3, '跟到读嘛，我也不闹你咯。');
   await waitUntil(() => reopenThread(app.dataDir, 'nova').some(row => row.focusReminder?.kind === 'reply' && row.repliedTo === self.body.messageId));
   assert.ok(reopenThread(app.dataDir, 'nova').find(row => row.id === self.body.messageId).readAt, '成功回应才标记自己的话已读');
-  assert.equal(app.models.calls.length, 4, '冷却内自己的确认仍接住，只发一条陪读回应、不另生成普通闲聊');
+  assert.equal(focusScenes(), 3, '冷却内自己的确认仍接住，只发一条陪读回应、不另生成普通闲聊');
   active = null;
   const stopped = await handlers['focus/sync'].fn({}, caller);
   assert.equal(stopped.running, false);
-  await app.models.waitForCall(4);
-  app.models.release(4, '这一段先收起来，之后再继续。');
+  const endRule = app.models.answer(
+    (req) => /按实际结束情况简短收尾/.test(String(req.systemPrompt)), '这一段先收起来，之后再继续。');
+  const endCall = await app.models.waitForCallWhere(endRule.match, '收尾提醒');
   await waitUntil(() => reopenThread(app.dataDir, 'nova').some(row => row.focusReminder?.kind === 'end'));
-  assert.equal(app.models.calls.length, 5);
+  assert.equal(focusScenes(), 4, '结束后专注侧仍是四条，不多出一条自己找的闲聊');
   const normal = await app.request('POST', '/turns', { json: { agentId: peer.id, text: '现在来聊聊你吧', watching: true, clientMessageId: 'focus_peer_msg_02' } });
   assert.equal(normal.body.ok, true);
-  const normalReply = await app.models.waitForCall(5);
+  const normalRule = app.models.answer(
+    (req) => JSON.stringify(req.messages).includes('现在来聊聊你吧'), '要聊啥嘛');
+  const normalReply = await app.models.waitForCallWhere(normalRule.match, '结束后的普通回复');
   assert.doesNotMatch(normalReply.request.systemPrompt, /【此刻的专注状态】/);
-  app.models.release(5, '要聊啥嘛');
   await waitUntil(() => reopenThread(app.dataDir, peer.id).some(row => row.repliedTo === normal.body.messageId));
 });
 

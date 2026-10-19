@@ -112,10 +112,15 @@ function createModelStub() {
   const pending = [];
   const calls = [];
   const cancelled = [];
+  const rules = [];
+  const safeMatch = (match, request) => {
+    try { return Boolean(match(request)); } catch { return false; }
+  };
   const stub = {
     calls,
     pending,
     cancelled,
+    rules,
     /** 等到第 n 次（从0起）stream 请求挂起为止。 */
     async waitForCall(index = 0, timeoutMs = 4000) {
       const deadline = Date.now() + timeoutMs;
@@ -125,27 +130,61 @@ function createModelStub() {
       }
       return stub.calls[index];
     },
-    release(index, text) {
-      const entry = stub.calls[index];
-      if (!entry) throw new Error(`没有第 ${index} 次模型调用`);
+    /**
+     * 注册「这类请求一到就用这段文字回答」的规则。
+     * 慢响应下同一轮可能被重来一次，靠一次性 release 会让重来的那条永远挂着，
+     * 同伙伴的下一轮生成就排不进来——这里让同类请求自动拿到同一个答案。
+     */
+    answer(match, text) {
+      const rule = { match, text };
+      rules.push(rule);
+      for (const entry of calls) {
+        if (entry.settled) continue;
+        if (safeMatch(match, entry.request)) entry.resolve({ ndjson: text });
+      }
+      return rule;
+    },
+    /**
+     * 等第一条满足条件的 stream 请求挂起为止。
+     * 用例里有定时器（走神提醒、发言防抖）时会插在中间，靠「第几次」定位会整体错位一格，
+     * 这里改成按请求内容认领，谁先谁后都不影响。
+     */
+    async waitForCallWhere(match, what = "目标", timeoutMs = 4000) {
+      const deadline = Date.now() + timeoutMs;
+      while (true) {
+        const hit = stub.calls.find((entry) => safeMatch(match, entry.request));
+        if (hit) return hit;
+        if (Date.now() > deadline) throw new Error(`等待${what}的模型调用超时（实际 ${stub.calls.length} 次）`);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    },
+    release(target, text) {
+      const entry = typeof target === "number" ? stub.calls[target] : target;
+      if (!entry) throw new Error(`没有第 ${target} 次模型调用`);
       entry.resolve({ ndjson: text });
     },
     /** 回一个带错的空包：走「模型接不上」那条判定。 */
-    releaseError(index, code = "APP_MODEL_QUOTA_EXCEEDED", message = "quota exceeded") {
-      const entry = stub.calls[index];
-      if (!entry) throw new Error(`没有第 ${index} 次模型调用`);
+    releaseError(target, code = "APP_MODEL_QUOTA_EXCEEDED", message = "quota exceeded") {
+      const entry = typeof target === "number" ? stub.calls[target] : target;
+      if (!entry) throw new Error(`没有第 ${target} 次模型调用`);
       entry.resolve({ ndjson: JSON.stringify({ type: "error", code, message }), asEvent: true });
     },
     list: async () => ({ models: [{ provider: "test-provider", model: "test-model" }] }),
     stream(request) {
       const index = stub.calls.length;
-      const entry = { index, request, resolve: null };
+      const entry = { index, request, resolve: null, settled: false };
       stub.calls.push(entry);
       return new Promise((resolve) => {
-        entry.resolve = (payload) => resolve({
-          text: async () => (payload.asEvent ? payload.ndjson : JSON.stringify({ type: "text-delta", delta: payload.ndjson }) + "\n"),
-          json: async () => ({}),
-        });
+        entry.resolve = (payload) => {
+          if (entry.settled) return;
+          entry.settled = true;
+          resolve({
+            text: async () => (payload.asEvent ? payload.ndjson : JSON.stringify({ type: "text-delta", delta: payload.ndjson }) + "\n"),
+            json: async () => ({}),
+          });
+        };
+        const hit = rules.find((rule) => safeMatch(rule.match, request));
+        if (hit) entry.resolve({ ndjson: hit.text });
       });
     },
     utility: async () => ({ requestId: "utility-test", text: "" }),
