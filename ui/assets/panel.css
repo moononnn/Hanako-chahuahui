@@ -1336,6 +1336,9 @@ body.slot-embedded .chat.has-bg .composer::before {
 .sticker-pick { display: block; width: 100%; height: 100%; padding: 0; border: 0; border-radius: var(--r-xs); background: transparent; cursor: pointer; }
 .sticker-choice.managing .sticker-pick { cursor: default; }
 .sticker-pick img { display: block; width: 100%; height: 100%; object-fit: contain; border-radius: var(--r-xs); }
+/* 图还在路上的时候先占个位：空格子比一堆破图图标干净，
+   她也一眼分得出「在加载」和「这张真的坏了」。 */
+.sticker-pick img, .sticker-source-choice img { background: var(--paper-alt, rgba(74, 70, 64, .05)); }
 /* 管理态角上那把叉：先变成「再点」，第二下才真删 */
 /* 角上那把叉：格子小下来之后它比图还抢眼，缩一号、压暗，鼠标停到格子上才亮起来 */
 .sticker-kill { position: absolute; top: -1px; right: -1px; min-width: 17px; height: 17px; padding: 0 4px; border: 0; border-radius: 999px; background: rgba(74, 70, 64, .5); color: #fff; font: inherit; font-size: 9.5px; line-height: 17px; cursor: pointer; opacity: .7; transition: opacity .15s ease, background .15s ease; }

@@ -195,11 +195,14 @@ import {
   importStickerBytes,
   listStickerLibrary,
   readOwnSticker,
+  readStickerBytesOf,
   readStickerLibrary,
+  readStickerRow,
   removeSticker,
   removeStickerGroup,
   renameStickerGroup,
 } from "./lib/sticker-library.js";
+import { ensureStickerThumb, startThumbWarmup } from "./lib/sticker-thumb.js";
 import { canAnswerPoke } from "./lib/poke.js";
 import { badgeGuide, badgeText, fallbackBadge, normalizeBadge, parseBadgeMarker } from "./lib/badges.js";
 import {
@@ -8017,7 +8020,11 @@ export function apply(ctx) {
 
       // 茶话会自己的图库：外部表情包数据源只负责提供导入来源，日常展示与发送都读这里。
       app.get("/library/stickers", (c) => {
-        return c.json({ ok: true, ...listStickerLibrary(ctx.dataDir) });
+        const library = listStickerLibrary(ctx.dataDir);
+        // 图库大了以后网格靠缩略图转；这里顺手在后台把缺的缩略图补齐，
+        // 补完就再也不占事。补不出来的（认不出的格式）会被反复跳过，所以只跑一次。
+        void startThumbWarmup(ctx.dataDir, library.stickers, (row) => readStickerBytesOf(ctx.dataDir, row));
+        return c.json({ ok: true, ...library });
       });
 
       // 只有表情包数据源存在且公开快照可读时，才提供「添加表情包」来源。
@@ -8029,6 +8036,8 @@ export function apply(ctx) {
           if (!index) return c.json({ ok: true, available: false, reason, stickers: [], hiddenUntagged: 0 });
           const rows = Array.isArray(index.stickers) ? index.stickers : [];
           const usable = rows.filter((row) => hasUsableTags(row));
+          // 进货页的网格也是几百张图，同样走缩略图；缺的提前在后台补。
+          void startThumbWarmup(ctx.dataDir, usable, (row) => readStickerBytes(ctx, row.file, guessedHanaHome), { idleMs: 200, scope: "source" });
           return c.json({
             ok: true,
             available: true,
@@ -8156,6 +8165,64 @@ export function apply(ctx) {
           const catalog = index ? buildCatalog(index, agentId) : null;
           const row = catalog?.byId.get(id);
           if (!row?.file) return c.json({ ok: false, error: { message: "没有这张图" } }, 404);
+          const found = await readStickerBytes(ctx, row.file, guessedHanaHome);
+          if (!found) return c.json({ ok: false, error: { message: "读不到这张图" } }, 404);
+          return c.body(found.bytes, 200, { "Content-Type": found.contentType, "Cache-Control": "private, max-age=3600" });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 500);
+        }
+      });
+
+      /*
+       * 缩略图：格子只有五十来像素，悬浮大预览也只有 168，
+       * 没必要为了看一眼去驮一兆多的原图。这里先缩到 256 再发，
+       * 图库两百多张铺满一屏，从几百 MB 降到几 MB，网格才转得起来。
+       * 缩不出来的（认不出的格式）就地退回原图，宁可慢也不能给空白。
+       */
+      app.get("/sticker-thumb/:agentId/:id", async (c) => {
+        const agentId = String(c.req.param("agentId") ?? "").trim();
+        const id = String(c.req.param("id") ?? "").trim();
+        if (!isValidPartnerId(agentId) || !/^[A-Za-z0-9_-]{1,120}$/.test(id)) {
+          return c.json({ ok: false, error: { message: "表情包编号不合法" } }, 400);
+        }
+        try {
+          const ownRow = readStickerRow(ctx.dataDir, id);
+          if (ownRow) {
+            const thumb = await ensureStickerThumb(ctx.dataDir, ownRow, () => readStickerBytesOf(ctx.dataDir, ownRow));
+            if (thumb) return c.body(thumb, 200, { "Content-Type": "image/png", "Cache-Control": "private, max-age=86400" });
+            /*
+             * 缩不出来就把这张自己的原图发过去。
+             * 这里以前直接掉下去查来源快照，而自己图库里的图在快照里根本没有——
+             * 结果就是 404，格子上永远一个破图。宁可慢一点，也不能给空白。
+             */
+            const own = readStickerBytesOf(ctx.dataDir, ownRow);
+            if (own) return c.body(own.bytes, 200, { "Content-Type": own.contentType, "Cache-Control": "private, max-age=3600" });
+            return c.json({ ok: false, error: { message: "读不到这张图" } }, 404);
+          }
+          const index = await readCatalog(ctx);
+          const row = index ? buildCatalog(index, agentId)?.byId.get(id) : null;
+          if (!row?.file) return c.json({ ok: false, error: { message: "没有这张图" } }, 404);
+          const thumb = await ensureStickerThumb(ctx.dataDir, row, () => readStickerBytes(ctx, row.file, guessedHanaHome));
+          if (thumb) return c.body(thumb, 200, { "Content-Type": "image/png", "Cache-Control": "private, max-age=86400" });
+          const found = await readStickerBytes(ctx, row.file, guessedHanaHome);
+          if (!found) return c.json({ ok: false, error: { message: "读不到这张图" } }, 404);
+          return c.body(found.bytes, 200, { "Content-Type": found.contentType, "Cache-Control": "private, max-age=3600" });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 500);
+        }
+      });
+
+      app.get("/source-sticker-thumb/:id", async (c) => {
+        const id = String(c.req.param("id") ?? "").trim();
+        if (!/^[A-Za-z0-9_-]{1,120}$/.test(id)) {
+          return c.json({ ok: false, error: { message: "表情包编号不合法" } }, 400);
+        }
+        try {
+          const index = await readCatalog(ctx);
+          const row = sourceRowById(index, id);
+          if (!row?.file) return c.json({ ok: false, error: { message: "没有这张图" } }, 404);
+          const thumb = await ensureStickerThumb(ctx.dataDir, row, () => readStickerBytes(ctx, row.file, guessedHanaHome));
+          if (thumb) return c.body(thumb, 200, { "Content-Type": "image/png", "Cache-Control": "private, max-age=86400" });
           const found = await readStickerBytes(ctx, row.file, guessedHanaHome);
           if (!found) return c.json({ ok: false, error: { message: "读不到这张图" } }, 404);
           return c.body(found.bytes, 200, { "Content-Type": found.contentType, "Cache-Control": "private, max-age=3600" });

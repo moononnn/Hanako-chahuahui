@@ -352,6 +352,11 @@ function openHarness() {
   const h = panelHarness(["openPartner"]); h.context.current = null;
   h.context.partners = [{ id: "partner-a", name: "A" }, { id: "partner-b", name: "B" }];
   h.context.renderFriends = () => {}; h.context.renderAll = (list) => { h.context.painted = list; };
+  // 打开聊天时会在后台预热表情包图库（等她点笑脸时已经是现成的）。
+  // 这两个是后端请求，给不会真发的替身就行；但必须返回 promise——
+  // openPartner 后面接的是 .catch()，返回 undefined 会当场炸掉整个打开流程。
+  h.context.ensureStickerLibrary = () => Promise.resolve();
+  h.context.loadStickerSource = () => Promise.resolve();
   return h;
 }
 test("opening chat prewarms the user avatar without delaying thread loading", async () => {
@@ -381,6 +386,23 @@ test("unrelated friend list failure does not turn an opened chat into an error",
   await flush();
   assert.deepEqual(h.statuses, statuses);
   assert.equal(h.context.painted[0].id, "a-message");
+});
+
+// 顺序是后端 listStickerLibrary 定好的（新入库在最前），前端只筛不排。
+// 她建的自定义分组也得是这个顺序，所以这条不能靠“看着对”，得有回归。
+test("每个自定义分组里的图也都是新到旧，不只是「全部」那一页", () => {
+  const h = panelHarness(["rowsForGroup"]);
+  h.context.stickerRows = [
+    { id: "new", groupIds: ["g1", "g2"] },
+    { id: "mid", groupIds: ["g2"] },
+    { id: "old", groupIds: ["g1"] },
+  ];
+  h.context.activeStickerGroup = "g1";
+  assert.deepEqual(h.context.rowsForGroup().map((row) => row.id), ["new", "old"], "分组一");
+  h.context.activeStickerGroup = "g2";
+  assert.deepEqual(h.context.rowsForGroup().map((row) => row.id), ["new", "mid"], "分组二");
+  h.context.activeStickerGroup = "__all";
+  assert.deepEqual(h.context.rowsForGroup().map((row) => row.id), ["new", "mid", "old"], "全部");
 });
 
 test("rapid A-B switch and removed current partner reject stale thread responses", async () => {

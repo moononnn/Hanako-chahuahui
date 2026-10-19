@@ -1710,6 +1710,31 @@ test("表情包悬浮预览：节点挂在 body 上，才躲得开滚动容器�
   assert.match(panel, /grid\.addEventListener\("scroll", hideStickerPreview/);
 });
 
+// 网格里曾经为了显示五十像素的格子去驮一兆多的原图，两百多张铺满一屏就是几百 MB，
+// 她那边看到的是「等半天 + 一堆空格子」。现在：后端缩到 256 再发，屏幕外的等露脸才取。
+test("表情包网格只取缩略图，屏幕外的等露脸再取", () => {
+  assert.match(app, /app\.get\("\/sticker-thumb\/:agentId\/:id"/, "缩略图要走自己的路由");
+  assert.match(app, /app\.get\("\/source-sticker-thumb\/:id"/);
+  // 自己图库里的图在来源快照里根本没有：缩不出来时必须退回自己的原图，
+  // 不然就掉下去查快照、拿到 404，格子上永远一个破图。
+  assert.match(
+    app,
+    /const ownRow = readStickerRow\(ctx\.dataDir, id\);[\s\S]{0,700}?const own = readStickerBytesOf\(ctx\.dataDir, ownRow\);\s*if \(own\) return c\.body\(own\.bytes/,
+    "缩略图缩不出来时要发这张自己的原图",
+  );
+  assert.match(panel, /const IMAGE_CONCURRENCY = 6;/);
+  assert.match(panel, /queueStickerImage\(img, row\.id, \{ thumb: true, root: el\.stickerGrid \}\)/, "图库网格走缩略图");
+  assert.match(panel, /queueStickerImage\(img, row\.id, \{ source: true, thumb: true, root: el\.stickerSourceGrid \}\)/, "进货网格也走缩略图");
+  assert.match(panel, /const url = await loadSticker\(stickerId\);/, "真发出去的那一张仍然取原图");
+  // 排队取图得排在挂进文档之后，不然量不出位置
+  assert.match(panel, /el\.stickerGrid\.appendChild\(cell\);\s*\/\/[^\n]*\n\s*queueStickerImage\(/);
+  assert.match(panel, /rootMargin: "240px 0px"/, "留一屏左右的提前量，滚上去不用等");
+  assert.match(panel, /function dropLazyImages\(\)/);
+  assert.match(panel, /el\.stickerGrid\.innerHTML = "";\s*imageJobs\.length = 0;\s*dropLazyImages\(\);/, "重画之前先把等着的那批扔掉");
+  // 一次抖动就记成永久没有的话，那个格子以后永远空着
+  assert.match(panel, /if \(url\) stickerCache\.set\(key, url\);/);
+});
+
 test("表情包抽屉：头尾不许被挤扁，中间那块自己滚（flex + min-height:0）", () => {
   assert.match(panelCss, /\.emoji-tabs, \.sticker-picker-head, \.sticker-tools, \.sticker-note, \.sticker-import-foot \{ flex: none; \}/);
   assert.match(panelCss, /\.emoji-grid, \.sticker-grid, \.sticker-source-grid \{ flex: 1 1 auto; min-height: 0; \}/);
@@ -1784,10 +1809,24 @@ test("表情包图库：进这一页必须先拉一次，不能拿初始值当�
   assert.match(panel, /function openEmojiDrawer\(page = "emoji"\) \{[\s\S]{0,260}?void loadStickerLibrary\(\);/, "打开抽屉就得拉：那排 tab 里装着她建的分组，等点了 tab 才拉就晚了");
   assert.match(panel, /function renderStickerRows\(\) \{[\s\S]{0,220}?if \(el\.emojiDrawer\.hidden \|\| el\.stickerPicker\.hidden\) return;/, "图库页没露脸别画，不然会顺带把整库的图都拉一遍");
   assert.match(panel, /stickerLoadedFor = agentId;/);
-  assert.match(panel, /await ensureStickerLibrary\(\);\s*if \(!sourceAvailable\)/, "添加页要先拉再判");
+  assert.match(panel, /await Promise\.all\(\[ensureStickerLibrary\(\), loadStickerSource\(current\)\]\);\s*if \(!sourceAvailable\)/, "添加页要两边都等齐再判");
   assert.match(panel, /void ensureStickerLibrary\(\);/, "点分组 tab 也把图库拉起来");
   assert.match(panel, /stickerLoadedFor = null;\n\s*manageMode = false;/, "换伙伴要重拉");
   assert.match(panel, /if \(!sourceReason\) return "表情包图库没读到/, "没拿到原因不能糊成一句笼统话");
+});
+
+// 踩过的坑（第二轮）：图库和来源用 Promise.all 绑在一起等。
+// 分组 tab 和网格只靠图库，却要陪着等那份三百多张的来源清单——
+// 她看到的现象是「刚打开一片空白，自定义分组也不出来，过一会儿才齐」。
+test("表情包图库：不等来源就先画自己的，别拿一个假空库糊住她", () => {
+  assert.match(panel, /async function loadStickerLibrary\(\) \{\s*const agentId = current;\s*loadStickerSource\(agentId\);/, "来源单独拉，不挡图库");
+  assert.doesNotMatch(panel, /await Promise\.all\(\[\s*api\("GET", "library\/stickers"\),\s*api\("GET", "sticker-source"\),?\s*\]\)/, "两个请求不能再绑成一个");
+  assert.match(panel, /if \(sourceTask\) return sourceTask;/, "连点别打两次来源请求");
+  assert.match(panel, /void ensureStickerLibrary\(\)\.catch/, "打开聊天时就在后台拉，等她点笑脸时已经是现成的");
+  assert.match(panel, /"正在读图库…"/, "还没拉到要说正在读，别摆「图库还空着」");
+  assert.match(panel, /el\.stickerAddEmpty\.hidden = loading;/, "读的时候别摆「去挑几张你喜欢的」");
+  assert.match(panel, /sourceReady = false;[\s\S]{0,260}?"正在读来源图库…"/, "添加页现读现用，先说正在读");
+  assert.match(panel, /el\.stickerSourceGrid\.innerHTML = ""; \/\/ 把那句「正在读」收掉/, "读不出来时别把两句话挤在一块");
 });
 
 test("表情包来源：导入页看全库，不受伙伴白名单影响；没标签的不给选", () => {

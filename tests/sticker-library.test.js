@@ -55,6 +55,23 @@ test("茶话会图库：同一图片重复导入只补分组，不复制文件",
 
 // 她说得很清楚：不喜欢就直接删；但以前发出去的那条消息得还在。
 // 所以删的只是图库里的那一条，图片文件留在盘上。
+// 她加完图第一件事就是想看一眼刚加的那几张：列表按新到旧摆。
+test("茶话会图库：新入库的排最前", () => {
+  const dir = tempDir();
+  const first = importStickerBytes(dir, { id: "s1", contentType: "image/png" }, Buffer.from("a"), []);
+  const second = importStickerBytes(dir, { id: "s2", contentType: "image/png" }, Buffer.from("b"), []);
+  const third = importStickerBytes(dir, { id: "s3", contentType: "image/png" }, Buffer.from("c"), []);
+
+  const listed = listStickerLibrary(dir).stickers.map((row) => row.id);
+  assert.deepEqual(listed, [third.sticker.id, second.sticker.id, first.sticker.id], "最新的在最前");
+  // 盘上存的还是导入顺序，别把存储顺序也翻了
+  assert.deepEqual(
+    readStickerLibrary(dir).stickers.map((row) => row.id),
+    [first.sticker.id, second.sticker.id, third.sticker.id],
+    "存储顺序不动，只有给界面看的那份反过来",
+  );
+});
+
 test("茶话会图库：删图只拿掉图库里的记录，图片文件留着（老消息还看得见）", () => {
   const dir = tempDir();
   const imported = importStickerBytes(dir, { id: "s1", contentType: "image/png" }, Buffer.from("keep-me"), []);

@@ -597,16 +597,22 @@
      * 取一张图。图库里的图跟「来源图库」的图走两条路：
      * 图库走 /sticker/:agentId/:id（自己复制的，跟伙伴无关），
      * 来源走 /source-sticker/:id（导入页要看全库，不能被伙伴白名单筛）。
+     *
+     * thumb=true 要的是缩略图：后端先把图缩到 256 再发。
+     * 网格里只管缩略图——原图动辄一两兆、动图能到六兆，
+     * 一次铺两百张就是几百 MB，卡的是宿主，她那边看到的是一堆空格子。
+     * 真正要发出去的那一张（待发送预览、聊天气泡）才走原图。
      */
-    async function loadStickerImage(stickerId, { source = false, agentId = current } = {}) {
+    async function loadStickerImage(stickerId, { source = false, agentId = current, thumb = false } = {}) {
       const imageId = String(stickerId || "");
       if (!imageId) return null;
       if (!source && !agentId) return null;
-      const key = source ? `src\u0000${imageId}` : `own\u0000${String(agentId)}\u0000${imageId}`;
+      const key = `${thumb ? "t" : "f"}\u0000${source ? "src" : "own"}\u0000${String(agentId)}\u0000${imageId}`;
       if (stickerCache.has(key)) return stickerCache.get(key);
-      const path = source
-        ? `source-sticker/${encodeURIComponent(imageId)}`
-        : `sticker/${encodeURIComponent(agentId)}/${encodeURIComponent(imageId)}`;
+      const encoded = encodeURIComponent(imageId);
+      const path = thumb
+        ? (source ? `source-sticker-thumb/${encoded}` : `sticker-thumb/${encodeURIComponent(agentId)}/${encoded}`)
+        : (source ? `source-sticker/${encoded}` : `sticker/${encodeURIComponent(agentId)}/${encoded}`);
       let url = null;
       try {
         const res = await hana.api.fetch(path, { method: "GET" });
@@ -615,7 +621,9 @@
           if (blob.size > 0) url = URL.createObjectURL(blob);
         }
       } catch { /* 读不到就当没这张图，这一条不显示 */ }
-      stickerCache.set(key, url);
+      // 只记成功的：一次抖动就把这一张记成永久没有的话，
+      // 那个格子以后永远空着，还看不出是哪一步坏了。
+      if (url) stickerCache.set(key, url);
       return url;
     }
 
@@ -626,13 +634,58 @@
 
     /**
      * 图多得吓人（三百多张），一次全发请求会把宿主顶住。
-     * 排个队，最多四张同时在路上，画完自动补下一张。
+     * 排个队，最多几张同时在路上，画完自动补下一张。
+     * 而且等到快露脸才去取：图库两百多张，屏幕外那半也在里面，
+     * 先把它们拉一遍只是白等。
      */
     const imageJobs = [];
     let imageRunning = 0;
-    const IMAGE_CONCURRENCY = 4;
+    const IMAGE_CONCURRENCY = 6;
+    /** 等着露脸再取图的格子。 */
+    const lazyJobs = new Map();
+    /** 每个滚动容器一个观察器（两个网格各滑各的）。 */
+    const lazyWatchers = new Map();
+
+    function lazyWatcherFor(root) {
+      let watcher = lazyWatchers.get(root);
+      if (!watcher) {
+        watcher = new IntersectionObserver((entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            const job = lazyJobs.get(entry.target);
+            watcher.unobserve(entry.target);
+            lazyJobs.delete(entry.target);
+            if (job) startStickerImage(entry.target, job.stickerId, job.options);
+          }
+          // 重画过的格子早就不在文档里了，顺手扔掉，别把这两个容器撑大。
+          for (const [img] of lazyJobs) {
+            if (!img.isConnected) lazyJobs.delete(img);
+          }
+        }, { root, rootMargin: "240px 0px" });
+        lazyWatchers.set(root, watcher);
+      }
+      return watcher;
+    }
 
     function queueStickerImage(img, stickerId, options = {}) {
+      const root = options.root || el.stickerGrid;
+      // 格子得先挂进文档才能量出位置，所以这一句必须走在 appendChild 之后。
+      if (typeof IntersectionObserver === "function" && img.isConnected) {
+        lazyJobs.set(img, { stickerId, options });
+        lazyWatcherFor(root).observe(img);
+        return;
+      }
+      startStickerImage(img, stickerId, options);
+    }
+
+    function dropLazyImages() {
+      for (const img of lazyJobs.keys()) {
+        for (const watcher of lazyWatchers.values()) watcher.unobserve(img);
+      }
+      lazyJobs.clear();
+    }
+
+    function startStickerImage(img, stickerId, options = {}) {
       imageJobs.push({ img, stickerId, options });
       pumpStickerImages();
     }
@@ -723,6 +776,10 @@
     let sourceAvailable = false;
     let sourceReason = "";
     let sourceHiddenUntagged = 0;
+    /** 来源拉到没有：分开拉之后，得靠它区分「读不出来」和「还没读」 */
+    let sourceReady = false;
+    /** 来源那次请求本身：已经在路上就复用，别连点打两次 */
+    let sourceTask = null;
     /** 图库是为哪个伙伴拉的；没拉过或换了人就得重拉 */
     let stickerLoadedFor = null;
     /** 正在添加图库：锁住那个按钮，挡住连点造成的重复提交 */
@@ -793,6 +850,9 @@
       clearSourceSentinel();
       hideStickerPreview();
       renderStickerTabs();
+      // 只在离开表情包页时扔掉等着的那批。留在这一页还扔的话，
+      // 关抽屉再打开，屏幕外那些没轮到取的格子就永远排不上了。
+      if (!stickers) dropLazyImages();
     }
 
     /**
@@ -870,6 +930,13 @@
       }
     }
 
+    /**
+     * 当前分组（和搜索词）筛出哪些图。
+     *
+     * 这里只筛不排：新到旧的顺序是后端 listStickerLibrary 定好的，
+     * 在筛之前就在了。分组 tab 走的是同一条路，所以自定义分组里的图
+     * 同样是新入库在最前——别在这儿为了“看起来整齐”再排一次。
+     */
     function rowsForGroup() {
       const query = String(el.stickerSearch.value || "").trim().toLowerCase();
       return stickerRows.filter((row) => {
@@ -891,6 +958,7 @@
       const rows = rowsForGroup();
       el.stickerGrid.innerHTML = "";
       imageJobs.length = 0;
+      dropLazyImages();
       for (const row of rows) {
         const cell = document.createElement("div");
         const armed = armedStickerId === row.id;
@@ -904,7 +972,6 @@
         button.appendChild(img);
         button.addEventListener("click", () => { if (!manageMode) selectSticker(row); });
         cell.appendChild(button);
-        queueStickerImage(img, row.id);
         if (manageMode) {
           const kill = document.createElement("button");
           kill.type = "button";
@@ -915,6 +982,8 @@
           cell.appendChild(kill);
         }
         el.stickerGrid.appendChild(cell);
+        // 缩略图，而且等快露脸才取：图库两百多张，原图加起来三百多 MB。
+        queueStickerImage(img, row.id, { thumb: true, root: el.stickerGrid });
       }
       el.stickerEmpty.hidden = rows.length > 0;
       // 图少的时候不摆这一行：一屏能看完，就没什么好找的。
@@ -922,47 +991,75 @@
       const wantSearch = stickerRows.length > SEARCH_FROM;
       el.stickerSearchRow.hidden = !wantSearch;
       if (!wantSearch && el.stickerSearch.value) el.stickerSearch.value = "";
+      /*
+       * 还没拉到图库的时候说「正在读」，别摆「图库还空着，去挑几张你喜欢的」——
+       * 那不是空库，是还没到。她刚点开就看到这句，只会觉得自己的分类不见了。
+       */
+      const loading = stickerLoadedFor !== current;
       if (!rows.length) {
-        el.stickerEmptyText.textContent = stickerRows.length
-          ? "这个分组里还没有图"
-          : (sourceAvailable ? "图库还空着，去挑几张你喜欢的" : "图库还空着；表情包图库这会儿也读不出来");
+        el.stickerEmptyText.textContent = loading
+          ? "正在读图库…"
+          : (stickerRows.length
+            ? "这个分组里还没有图"
+            : (sourceAvailable ? "图库还空着，去挑几张你喜欢的" : "图库还空着；表情包图库这会儿也读不出来"));
       }
+      el.stickerAddEmpty.hidden = loading;
     }
 
+    /**
+     * 图库和来源是两份不相干的数据：分组 tab 和网格只靠图库，
+     * 来源只有「添加」那页才用得到。绑在一起等就是让最常看的东西，
+     * 去等一个三百多张的清单——所以拆开，各管各的。
+     */
     async function loadStickerLibrary() {
       const agentId = current;
+      loadStickerSource(agentId);
       try {
-        const [library, source] = await Promise.all([
-          api("GET", "library/stickers"),
-          api("GET", "sticker-source"),
-        ]);
+        const library = await api("GET", "library/stickers");
         if (current !== agentId) return;
         stickerRows = library.stickers || [];
         stickerGroups = library.groups || [];
-        sourceRows = source.stickers || [];
-        sourceAvailable = source.available === true;
-        sourceReason = String(source.reason || "");
-        sourceHiddenUntagged = Number(source.hiddenUntagged || 0);
         if (activeStickerGroup !== "__all" && !stickerGroups.some((group) => group.id === activeStickerGroup)) {
           activeStickerGroup = "__all";
         }
         stickerLoadedFor = agentId;
-        // 来源读不到时「添加」不藏起来：点进去讲明白为什么，还带重试。
-        // 藏起来只会让她以为功能没了。
         renderStickerTabs();
         renderStickerRows();
       } catch (error) {
         if (current !== agentId) return;
         stickerRows = [];
         stickerGroups = [];
-        sourceRows = [];
-        sourceAvailable = false;
-        sourceReason = "request-failed";
         stickerLoadedFor = null;
         renderStickerTabs();
         renderStickerRows();
         setStatus(`表情包读不出来：${error.message}`);
       }
+    }
+
+    /** 来源（进货用的全库）单独拉：拉不到只影响「添加」那页，不该连累图库。 */
+    function loadStickerSource(agentId = current) {
+      if (sourceTask) return sourceTask;
+      if (sourceReady) return Promise.resolve();
+      sourceTask = (async () => {
+        try {
+          const source = await api("GET", "sticker-source");
+          if (current !== agentId) return;
+          sourceRows = source.stickers || [];
+          sourceAvailable = source.available === true;
+          sourceReason = String(source.reason || "");
+          sourceHiddenUntagged = Number(source.hiddenUntagged || 0);
+          sourceReady = true;
+          // 来源只在添加页用；这会儿那张页开着才需要重画。
+          if (!el.stickerImport.hidden) renderSourceRows();
+        } catch {
+          if (current !== agentId) return;
+          sourceRows = [];
+          sourceAvailable = false;
+          sourceReason = "request-failed";
+          sourceReady = true;
+        }
+      })().finally(() => { sourceTask = null; });
+      return sourceTask;
     }
 
     /** 来源没读到的时候要说人话，别拿一句“请确认插件已启动”冤枉人。 */
@@ -991,9 +1088,19 @@
       el.stickerImportNote.hidden = true;
       el.stickerSourceGrid.innerHTML = "";
       el.stickerSelectedCount.textContent = "已选 0 张";
-      // 先把图库拉起一次再判断，不然「还没拉」会被当成「拉不到」。
-      await ensureStickerLibrary();
+      // 来源清单进添加页就重读一遍：她在另一个应用里新加的图，这一页得看得到
+      sourceReady = false;
+      const reading = document.createElement("div");
+      reading.className = "sticker-source-msg";
+      reading.textContent = "正在读来源图库…";
+      el.stickerSourceGrid.appendChild(reading);
+      /*
+       * 图库和来源都等到再判断，不然「还没拉」会被当成「拉不到」：
+       * 拆开两个请求之后，必须自己把两边都等齐。
+       */
+      await Promise.all([ensureStickerLibrary(), loadStickerSource(current)]);
       if (!sourceAvailable) {
+        el.stickerSourceGrid.innerHTML = ""; // 把那句「正在读」收掉，别跟解释挤在一块
         const note = document.createElement("div");
         note.className = "sticker-source-msg";
         note.textContent = sourceProblemText();
@@ -1018,6 +1125,7 @@
       clearSourceSentinel();
       el.stickerSourceGrid.innerHTML = "";
       imageJobs.length = 0;
+      dropLazyImages();
       appendSourceBatch(SOURCE_BATCH);
       el.stickerImportNote.hidden = sourceHiddenUntagged <= 0;
       if (sourceHiddenUntagged > 0) {
@@ -1043,7 +1151,7 @@
           el.stickerSelectedCount.textContent = `已选 ${selectedSourceIds.size} 张`;
         });
         el.stickerSourceGrid.appendChild(button);
-        queueStickerImage(img, row.id, { source: true });
+        queueStickerImage(img, row.id, { source: true, thumb: true, root: el.stickerSourceGrid });
       }
       el.stickerSelectedCount.textContent = `已选 ${selectedSourceIds.size} 张`;
       renderSourceMore();
@@ -3838,6 +3946,8 @@
       sourceAvailable = false;
       sourceReason = "";
       sourceHiddenUntagged = 0;
+      sourceReady = false;
+      sourceTask = null;
       stickerLoadedFor = null;
       manageMode = false;
       armedStickerId = "";
@@ -3862,6 +3972,12 @@
           autosizeInput();
           setStatus("刚才那条没送出去，已经替你留着了");
         }
+        /*
+         * 表情包图库先在后台读起来：等她点那个笑脸才去拉的话，
+         * 点开的头一秒就是一片空白加一个假的「图库还空着」。
+         * 来源清单不进这里——它跟伙伴无关，交给「添加」那页现读。
+         */
+        void ensureStickerLibrary().catch(() => {});
         // 这间房的背景：拿这会儿的数据先铺一次，不等轮询那一轮
         void syncChatBackground(agentId, data.pref?.background ?? null);
         // 她真的看着这个窗：这一刻画到哪儿就算读到哪儿（不再拿「拉过一次」当看过）
