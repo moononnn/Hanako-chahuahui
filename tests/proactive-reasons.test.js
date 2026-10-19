@@ -84,9 +84,11 @@ test("想念要熟悉度和亲密度一起顶，两道门槛都得过", () => {
 
 test("共同经历和吐槽的真凭据：只有实质来源算数，旧消息不算", () => {
   assert.equal(substantiveContext({ sentTexts: ["旧消息"] }).length > 0, false, "去重段不是凭据");
-  assert.ok(substantiveContext({ sceneEcho: { userText: "那个摊子" } }).includes("那个摊子"));
+  assert.ok(substantiveContext({ sceneEcho: { userText: "那个摊子" } }).length > 0, "最近聊过就算");
   assert.ok(substantiveContext({ workfeedText: "下午改了个配色" }).includes("下午改了个配色"));
-  assert.equal(substantiveContext({ sceneEcho: { userText: " " } }), "");
+  assert.equal(substantiveContext({ sceneEcho: { userText: " " } }).length > 0, false, "空白对象不能冒充最近确实聊过");
+  assert.equal(substantiveContext({ sceneEcho: {} }), "", "空对象同样不是凭据");
+  assert.equal(substantiveContext({ sceneEcho: null, sentTexts: ["x"] }), "");
 
   const onlyOld = enrichReasonContext({ kind: "shared" }, { sentTexts: ["昨天说过的那句"] });
   assert.equal(onlyOld.reason, null, "拿旧消息冒充共同经历不行");
@@ -195,12 +197,13 @@ test("凭据每一样都标清出处，去重段单独标", () => {
     workfeedText: "14:02 讨论了落点",
     sentTexts: ["昨天说过那盆土换过"],
   });
-  assert.match(text, /【最近一轮真聊过的（就发生在这条对话里）】/);
-  assert.match(text, /她说过：你那个花盆到底挪哪了/);
+  assert.match(text, /【你们最近确实在这条对话里聊过/);
+  assert.doesNotMatch(text, /你那个花盆到底挪哪了/, "不再摘上一轮原话");
+  assert.doesNotMatch(text, /挪到窗台了/, "不再摘上一轮原话");
   assert.match(text, /【电脑那边这位伙伴确实有过的动静/);
   assert.match(text, /【你已经实际说过的话/);
   assert.equal(buildReasonContext({}), "");
-  assert.equal(buildReasonContext({ sceneEcho: { userText: "  " } }), "", "空的近况不占位");
+  assert.equal(buildReasonContext({ sceneEcho: null, sentTexts: ["  "] }), "", "空的近况不占位");
 });
 
 test("想念和搭话没有凭据要求", () => {

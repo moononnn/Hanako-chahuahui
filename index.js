@@ -1590,9 +1590,12 @@ export function apply(ctx) {
     onSchedule: ({ agentId, delayMs, days }) => diagnostics({ event: "memory.rebuild.scheduled", agentId, delayMs, days }),
   });
 
+  // 旧调用方只给 systemPrompt/userText 时行为不变（不传 messages，askUtility 仍包一条 user）。
+  // 需要带真实聊天历史的那几路（主动开口、视频分享）在这里把 messages 转交下去。
   const askCheap = (systemPrompt, userText, maxTokens, options = {}) => askUtility(ctx, {
     systemPrompt,
     userText,
+    messages: options.messages ?? null,
     maxTokens,
     timeoutMs: options.timeoutMs ?? 120_000,
     diagnostics,
@@ -1899,13 +1902,18 @@ export function apply(ctx) {
     }
   }
 
-  async function askVoice(systemPrompt, userText, maxTokens, agentId, event = "voice") {
-    let raw = await askCheap(systemPrompt, userText, maxTokens);
+  /**
+   * 出声。末尾混进无关字符时的重试，同一段聊天历史照样带着——
+   * 重试的目的是重写这一条，不是让她失忆。
+   */
+  async function askVoice(systemPrompt, userText, maxTokens, agentId, event = "voice", options = {}) {
+    const pass = options.messages ? { messages: options.messages } : {};
+    let raw = await askCheap(systemPrompt, userText, maxTokens, pass);
     const risk = inspectVoice(raw);
     if (risk.level !== "retry") return raw;
     diagnostics({ event: `${event}.retry`, agentId, reason: risk.reason, tail: risk.tail });
     const retryPrompt = `${systemPrompt}\n\n刚才的输出末尾疑似混入了无关字符。请只重新输出要说给对方的自然正文，不要解释格式。`;
-    const retried = await askCheap(retryPrompt, userText, maxTokens);
+    const retried = await askCheap(retryPrompt, userText, maxTokens, pass);
     const retryRisk = inspectVoice(retried);
     diagnostics({ event: `${event}.retry.result`, agentId, level: retryRisk.level, reason: retryRisk.reason });
     return retryRisk.level === "retry" ? raw : retried;
@@ -2057,7 +2065,7 @@ export function apply(ctx) {
   }
 
   /** 把一条主动消息送进她那个窗（她不在也照发，显示未读）。 */
-  async function deliverProactive(agentId, { partnerName, topic, hobby, discovery, seed, video = null, videoLoginNotice = null, reason = null, reasonCandidates = [], exception, followup, wakeEcho, sceneEcho, kind = "proactive", activity = null, sleepStart = "", greetingOnly = false, todoNudge = "" }) {
+  async function deliverProactive(agentId, { partnerName, topic, hobby, discovery, seed, video = null, videoLoginNotice = null, reason = null, reasonCandidates = [], exception, followup, wakeEcho, sceneEcho, kind = "proactive", activity = null, sleepStart = "", greetingOnly = false, morningFirst = false, todoNudge = "" }) {
     const videoStamp = video || videoLoginNotice ? threadStamp(agentId) : null;
     await loadUserName();
     const memoryQuery = [reason?.kind === "interest" ? topic : "", reason?.text, hobby?.name, discovery?.text, seed?.title, video?.video?.title, followup?.text, sceneEcho?.text]
@@ -2143,10 +2151,14 @@ export function apply(ctx) {
       // 背景是「她此刻在什么日子里」，这件事是「你这次为什么来找她」，两者混在一起会脱口成捎带。
     }
     let stickerText = "";
+    let stickerCatalog = null;
     if (!exception) {
       try {
         const stickerIndex = await readCatalog(ctx);
-        if (stickerIndex) stickerText = buildStickerHint(buildCatalog(stickerIndex, agentId));
+        if (stickerIndex) {
+          stickerCatalog = buildCatalog(stickerIndex, agentId);
+          stickerText = buildStickerHint(stickerCatalog);
+        }
       } catch (error) {
         diagnostics({ event: "proactive.sticker-hint.failed", agentId, error: describeError(error) });
       }
@@ -2166,6 +2178,16 @@ export function apply(ctx) {
     }
     // 问句额度（2026-10-06）：连着几条都留了问句，这一条就别再追问，免得像采访。
     const threadRows = store.getThread(agentId).messages;
+    // 主动开口跟正常聊天一样，把最近这段真聊天直接送进模型请求（2026-10-19）。
+    // 跟面对面的 composeReply 用同一套：先滤掉不是话的行（动作、戳、酒馆初见、硬撤回），
+    // 再走同一份上下文预算（默认 24 条 / 4000 字），最后交给 threadToMessages 带上角色与时间。
+    // 不另造短摘要、不只取最后一问一答，也不再把上一轮那两行摘进提示词。
+    const historyWindow = splitForContext(conversationMessages(threadRows)).recent;
+    const stickerLabels = stickerLabelMap({ library: readStickerLibrary(ctx.dataDir), catalog: stickerCatalog });
+    const historyMessages = threadToMessages(historyWindow, historyWindow.length, {
+      userName: USER_NAME,
+      describeSticker: (id) => stickerLabels.get(id) ?? null,
+    });
     const recentAsks = threadRows
       .filter((row) => row.proactive && row.text)
       .slice(-3)
@@ -2182,6 +2204,9 @@ export function apply(ctx) {
       return { ok: false, reason: "reason-context-empty", preserveIntent: true };
     }
     const sendReason = reasonResolved.reason;
+    // 晨间首次联系在出站再核一次（2026-10-19）：调度那一步算的是那一刻，
+    // 这一趟真要发出去时可能已经有人先联系过她了；过期就当普通的一轮，不自称首次。
+    const morningFirstScene = morningFirst && isFirstProactiveOfLifeDay(store.getProactiveState(agentId).lastSentAt, now);
 
     const spec = exception
       ? nightSpec({
@@ -2222,7 +2247,7 @@ export function apply(ctx) {
               sleepStart,
               stickerText,
             })
-          : proactiveSpec({ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, video: shareableVideo, videoLoginNotice, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, askBudgetSpent: askSpent, reason: sendReason, introducedText });
+          : proactiveSpec({ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, video: shareableVideo, videoLoginNotice, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, morningFirst: morningFirstScene, askBudgetSpent: askSpent, reason: sendReason, introducedText });
 
     let raw = "";
     try {
@@ -2237,13 +2262,14 @@ export function apply(ctx) {
           || (shareableVideo && !videoQuota())) return { ok: false, reason: "video-stale" };
         const generated = await generateReply(ctx, {
           systemPrompt: withNamePlate(`${spec.systemPrompt}\n\n${badgeHint}`, partnerName),
-          messages: [{ role: "user", content: spec.userText }], diagnostics, maxTokens: 1800,
+          messages: [...historyMessages, { role: "user", content: spec.userText }], diagnostics, maxTokens: 1800,
           modelRef: choice ? { provider: choice.provider, model: choice.model } : null, catalog,
           allowUtilityFallback: false,
         });
         raw = generated.text;
       } else {
-        raw = await askVoice(withNamePlate(`${spec.systemPrompt}\n\n${badgeHint}`, partnerName), spec.userText, 300, agentId, "proactive");
+        raw = await askVoice(withNamePlate(`${spec.systemPrompt}\n\n${badgeHint}`, partnerName), spec.userText, 300, agentId, "proactive",
+          { messages: [...historyMessages, { role: "user", content: spec.userText }] });
       }
     } catch (error) {
       diagnostics({ event: "proactive.failed", agentId, error: describeError(error) });
@@ -3379,6 +3405,7 @@ export function apply(ctx) {
           activity: workActivity,
           sleepStart: sleepStartClock,
           greetingOnly,
+          morningFirst,
           todoNudge: carriedTodo ? todoNudge.text : "",
         });
         if (!delivered.ok) return delivered;

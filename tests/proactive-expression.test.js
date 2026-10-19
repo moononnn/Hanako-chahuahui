@@ -58,11 +58,13 @@ test('空跟进对象不压掉有效联系由头', () => {
   assert.doesNotMatch(spec.systemPrompt, /有具体内容的主动话题必须扎根/);
 });
 
-test('有效联系保留上一轮明确问题，不让新由头抹掉待接话', () => {
+test('有效联系不再摘上一轮那两行，原文走独立历史', () => {
   const spec = proactiveSpec({ ...common, reason: { kind: 'contact' }, sceneEcho: { userText: '你觉得鸳鸯锅咋样？', assistantText: '先看看' } });
-  assert.match(spec.userText, /你觉得鸳鸯锅咋样/);
-  assert.match(spec.userText, /她上一轮问了你一件具体的事/);
-  assert.match(spec.userText, /先接那个问题/);
+  assert.doesNotMatch(spec.userText, /你觉得鸳鸯锅咋样/);
+  assert.doesNotMatch(spec.userText, /她上一轮问了你一件具体的事/);
+  assert.match(spec.userText, /最近确实在这条对话里聊过/);
+  assert.match(spec.userText, /独立历史/);
+  assert.match(spec.userText, /先接那个问题/, '待接问题这层收口照旧在');
 });
 
 test('关系由头引用新对象时同样核对实际已介绍记录', () => {

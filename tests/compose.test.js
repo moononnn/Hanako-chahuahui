@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { enrichReasonContext } from "../lib/proactive-reasons.js";
-import { cleanVoice, farewellSpec, hasOpenHook, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNighttimeSleepQuestion, isNoReply, LINKUP_DISCIPLINE, looksLikeAdTail, nightSpec, proactiveSpec, readFollowupStage, stirredSpec } from "../lib/compose.js";
+import { cleanVoice, farewellSpec, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNighttimeSleepQuestion, isNoReply, LINKUP_DISCIPLINE, looksLikeAdTail, nightSpec, proactiveSpec, readFollowupStage, stirredSpec } from "../lib/compose.js";
 
 test('quote残片窄清洗：去格式保留正文，不误吞字面符号和安静出口', () => {
   assert.equal(cleanVoice('来了~\n[/quote]\n靠过来'), '来了~\n靠过来');
@@ -182,9 +182,10 @@ test("普通主动消息把最近场景当背景，不强制先承接", () => {
       assistantText: "那你先缓一哈，别马上接着忙",
     },
   });
-  assert.ok(spec.userText.includes("最近一轮聊天的背景"));
-  assert.ok(spec.userText.includes("我刚忙完，脑壳还有点昏"));
-  assert.ok(spec.userText.includes("普通闲聊、玩笑和已经收住的话题，默认直接说"));
+  assert.ok(spec.userText.includes("最近确实在这条对话里聊过"));
+  assert.doesNotMatch(spec.userText, /我刚忙完，脑壳还有点昏/, "上一轮原话不再摘进提示词");
+  assert.doesNotMatch(spec.userText, /那你先缓一哈/, "上一轮原话不再摘进提示词");
+  assert.ok(spec.userText.includes("不等于这次必须承接"));
   assert.doesNotMatch(spec.userText, /先用一小句接住上一轮情境/);
   assert.ok(spec.userText.includes("角色转身动作的帧数变化"));
 });
@@ -331,7 +332,7 @@ test("连续没回应两次后，提示词不再反复追问", () => {
   assert.match(spec.userText, /留空间/);
 });
 
-test("已读未回时给一库手法，打趣优先，不端新话题", () => {
+test("已读未回时给一库手法，不端新话题也不派以她没回为由头的活", () => {
   const spec = proactiveSpec({
     partnerName: "小花",
     userName: "阿舟",
@@ -340,17 +341,18 @@ test("已读未回时给一库手法，打趣优先，不端新话题", () => {
     followup: { count: 3, read: true, readAgeMs: 60 * 60 * 1000, previousText: "你咋不理我嘛" },
   });
   assert.match(spec.userText, /已经看过你上一条主动消息/);
-  assert.match(spec.userText, /你咋不理我嘛/);
-  assert.match(spec.userText, /找不到自然、具体的连接，就安静/);
+  assert.doesNotMatch(spec.userText, /你咋不理我嘛/, "上一条原文不再进提示词");
+  assert.doesNotMatch(spec.userText, /打趣找人|拿自己开涮|嘴硬收场/, "不再派以她没回为由头的活");
   assert.doesNotMatch(spec.userText, /第3条|第3次|连续第3/u, "计数只用于判断轻重，不写成聊天内容");
-  assert.match(spec.userText, /打趣比委屈好/);
   assert.match(spec.userText, /戳一下/);
+  assert.match(spec.userText, /直接搭话/);
   assert.match(spec.userText, /不许照抄/, "手法示例得写明不是台词");
   assert.doesNotMatch(spec.userText, /你人嘞|溜哪儿去了嘛/, "示例里的现成句子不能给，模型会原样抄下去");
   assert.match(spec.userText, /无语\.jpg/, "图库没合适的就手打一个图名");
   assert.match(spec.userText, /是不是讨厌我/, "红线要写明不许把沉默当成拒绝");
   assert.match(spec.userText, /不追问她为什么不回/);
-  assert.match(spec.userText, /不要继续展开共同话题或兴趣/);
+  assert.match(spec.userText, /读过多久只用来把握轻重/);
+  assert.doesNotMatch(spec.userText, /先把「她看了还没回」这件事接住/);
   assert.doesNotMatch(spec.userText, /具体落点：蓝灰胶带配米白页/);
 
   const longSource = proactiveSpec({
@@ -358,7 +360,7 @@ test("已读未回时给一库手法，打趣优先，不端新话题", () => {
     userName: "阿舟",
     followup: { count: 1, read: true, readAgeMs: 60 * 60 * 1000, previousText: "甲".repeat(500) },
   });
-  assert.doesNotMatch(longSource.userText, /甲{401}/, "原文锚点设上限，避免反复拉长上下文");
+  assert.doesNotMatch(longSource.userText, /甲/, "上一条原文整条都不再进上下文");
 });
 
 test("才看过没多久不催：这一轮别提「你没回」", () => {
@@ -407,8 +409,10 @@ test("已读未回三个窗口共用一份口径：姿态、菜单、收口不�
     userName: "阿舟",
     followup: { count: 3, read: true, readAgeMs: 60 * 60 * 1000, previousText: "你咋不理我嘛" },
   });
-  assert.match(aWhile.userText, /先把「她看了还没回」这件事接住/, "看过一阵才是该接这层关系的窗口");
-  assert.match(aWhile.userText, /打趣找人/);
+  assert.match(aWhile.userText, /读过多久只用来把握轻重/, "看过一阵也不指定把已读未回当题目");
+  assert.doesNotMatch(aWhile.userText, /先把「她看了还没回」这件事接住/);
+  assert.doesNotMatch(aWhile.userText, /打趣找人|拿自己开涮|嘴硬收场/, "任何窗口都不再派以她没回为由头的活");
+  assert.match(aWhile.userText, /直接搭话/, "看过一阵还能不催地搭话");
 });
 
 test("看过很久了就放下这事，不再提她没回", () => {  const spec = proactiveSpec({
@@ -431,11 +435,7 @@ test("看过很久了就放下这事，不再提她没回", () => {  const spec 
   assert.match(unknown.userText, /可以放下了/);
 });
 
-test("她翻回来的题要优先接，不能只当背景参考", () => {
-  assert.equal(hasOpenHook("四川那边是不是看不起鸳鸯锅？"), true);
-  assert.equal(hasOpenHook("今天天气咋样"), true);
-  assert.equal(hasOpenHook("我困了"), false, "顺口话不该当成待接的题");
-
+test("她翻回来的题不再摘两行当提纲，改成指向独立历史", () => {
   const base = {
     partnerName: "小花",
     userName: "阿舟",
@@ -447,15 +447,15 @@ test("她翻回来的题要优先接，不能只当背景参考", () => {
     ...base,
     sceneEcho: { userText: "四川那边是不是看不起鸳鸯锅？", assistantText: "鸳鸯锅本质上就是让一桌人都能留下来嘛" },
   });
-  assert.match(asked.userText, /她上一轮问了你一件具体的事/);
-  assert.match(asked.userText, /优先于你手上那条面/);
+  assert.match(asked.userText, /最近确实在这条对话里聊过/);
+  assert.doesNotMatch(asked.userText, /四川那边是不是看不起鸳鸯锅/, "上一轮原话不再成文");
+  assert.doesNotMatch(asked.userText, /她上一轮问了你一件具体的事/);
 
   const chat = proactiveSpec({
     ...base,
     sceneEcho: { userText: "我今天把那个按钮改完了", assistantText: "厉害呀" },
   });
-  assert.match(chat.userText, /不代表这次必须承接/);
-  assert.doesNotMatch(chat.userText, /优先于你手上那条面/);
+  assert.match(chat.userText, /不等于这次必须承接/);
 });
 
 test("有新探索发现时才从长期兴趣生成内容话题，静态兴趣本身不会被直接复述", () => {

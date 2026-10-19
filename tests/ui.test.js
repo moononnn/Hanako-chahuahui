@@ -946,7 +946,9 @@ test("起跑线：自动量那边的痕迹，也能自己定从哪儿算，只�
   assert.match(app, /seedStale\(knowing\.relationSeed, seedLastTry\)/, "该重量的就重量一份（量不出东西也有节流）");
   assert.doesNotMatch(app, /session:list/, "量会话那条路 v2 应用走不通，别写");
   assert.match(app, /note: relationshipNote\(effectiveRelationship\(knowing\), knowing\.relationSeed\)/, "回复那一句也要带上起跑线");
-  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, video: shareableVideo, videoLoginNotice, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, askBudgetSpent: askSpent, reason: sendReason, introducedText \}\)/, "主动消息只带与当前消息类型相符的兴趣发现，同时带上本人人格、电脑那边的近况、「纯招呼」标志、关系式由头与已经介绍过什么");
+  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, video: shareableVideo, videoLoginNotice, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, morningFirst: morningFirstScene, askBudgetSpent: askSpent, reason: sendReason, introducedText \}\)/, "主动消息只带与当前消息类型相符的兴趣发现，同时带上本人人格、电脑那边的近况、「纯招呼」标志、晨间首次这层、关系式由头与已经介绍过什么");
+  assert.match(app, /const morningFirstScene = morningFirst && isFirstProactiveOfLifeDay\(store\.getProactiveState\(agentId\)\.lastSentAt, now\)/, "晨间首次在出站按当前已发送时刻复核一次");
+  assert.match(app, /const historyWindow = splitForContext\(conversationMessages\(threadRows\)\)\.recent/, "主动开口复用同一份上下文预算");
   assert.match(app, /isFirstProactiveOfLifeDay\(state\.lastSentAt, now\)/, "首条联系按四点生活日计算");
   assert.match(app, /const morningFirst = firstOfLifeDay && isMorningPart\(now\)/, "晨间开口只由生活日首条且实际时段决定");
   assert.ok(app.includes("&& !followup?.read && !wakeEcho && !greetingOnly"), "只有纯招呼才跳过兴趣素材");
