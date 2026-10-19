@@ -1,5 +1,59 @@
 # TESTING · 茶话会
 
+## 发布 v0.10.2 前的完整验证（2026-10-19）
+
+- 定版：manifest 0.10.1 → 0.10.2，`.cloud-build/config.json` 同步；CHANGELOG 把从未发出去过的 0.10.1 条目并入本版，不再留一个空版本号。
+- 开发源码全量：`release.ps1 -Project chahuahui -Phase verify`，100 个测试文件，**1855/1855 通过，0 失败/取消/跳过**，36.3 秒（不含本地专用的 `tests/reply-rule-probe.test.js`）。1854 为补语音新断言前的数；提交拆分阶段的全量是 1854，定版并补上那条断言后为 1855。
+- 提交按逻辑边界拆三笔，每笔都用 `git checkout-index` 导出真实快照再跑测试，不是拿最终工作树冒充：
+  - `perf: 表情包网格改走缩略图，图库按新到旧摆` → 导出版 9 文件 **245/245 通过**。
+  - `fix: 语音中途按停看得出停过` → 导出版 6 文件 **199/199 通过**；本条新增 1 项断言（暂停态类名、图标、波形 done、CSS 两处）。
+  - `feat: 主动开口带上真聊天历史，晨间第一条不再非得有料` → 导出版 9 文件 **311/311 通过**。
+- 踩到的坑：先按 hunk 分批暂存时，把 `tests/ui.test.js` 里主动消息那条旧断言也带进了语音那笔。该断言期望 `morningFirst: morningFirstScene`，而那一笔的 index.js 还没这行，导出版当场失败。按索引重看 hunk 后只取语音那条，重跑通过才提交。教训：hunk 分批必须验提交快照，不能验工作树。
+- 未做：真实/付费模型调用，Release 安装、升级与真实旧数据迁移；独立交叉审包在打包后单独进行。
+
+## 主动消息复用近期聊天与晨间场景（2026-10-19）
+
+- 基线与范围：本轮始于 manifest 0.10.1（该版本未发布，已并入 0.10.2）；此前图库性能/加载优化保留。本轮只改主动消息上下文接线、晨间场景与已读跟进引导，不改伙伴人格/普通归属规则。
+- `tests/proactive-context-history.test.js` 12项：独立历史含角色与时间、最多24条、排除动作/硬撤回/别的伙伴；自己图库标签在模拟实际请求中出现；字符污染重试保留历史；视频流式请求同样带历史；有种子的晨间首次场景及同生活日已联系后的非首次；共同经历不预设回味，空对象不能冒充来源，已读尾部不再指定围绕没回创作。纯函数与App harness模拟不等于真实模型自然度验收。
+- 初版新增9项由实施阶段验证旧码失败；主会复核又发现强制回味/已读尾部指派/空对象凭据残留，3项断言在补修前实际失败。自有表情测试首次误把description当标签，已按现行情绪标签契约修正断言，非业务缺陷。补修后首轮18文件587过/2失败为旧断言未同步（仍期望旧指派、空白对象算来源），修正后589/589通过。再补1项晨间普通开口回归，确认旧的兴趣系统指令仍会逼伙伴贴题；限定普通晨间使用COMMON与可选背景，改掉尾部强制分享/由头，修后最终590/590通过。有种子的晨间用例让生成桩只回“早上好呀”，确认实际能发出。
+- 最终定向命令：`node --test --test-concurrency=1 tests/proactive-context-history.test.js tests/compose.test.js tests/proactive.test.js tests/proactive-reasons.test.js tests/proactive-expression.test.js tests/proactive-clarity.test.js tests/video-login-notice-compose.test.js tests/ui.test.js tests/video-share-routes.test.js tests/video-login.test.js tests/awaiting.test.js tests/model.test.js tests/prompt.test.js tests/reply-supersede-routes.test.js tests/conversation-grounding.test.js tests/memory.test.js tests/poke.test.js tests/reply-action-target.test.js`，**590/590通过，0失败/取消/跳过**，约20.39秒。相关4份JS语法及定向diff空白检查通过。只跑直接相关测试，未跑全量，未调用真实/付费模型。
+- 保留的边界：24条仍受既有4000字符预算限制，长消息时少于24条；日期标注复用普通聊天的时间格式，不为每条重复写时间。跨日连续感不硬切，原有末轮场景只作由头资格依据，12小时资格门未改。出站晨间资格重新读取当前lastSentAt；用例覆盖已有联系状态，不冒称模拟了生成中的并发更新。夜间/睡前/被叫醒等共用出口也会收到历史，专项真实表现未测。素材使用记账仍沿用既有“提供给本轮即消费”逻辑，晨间选择只招呼时也可能消耗所提供的种子/发现；本轮未引入新的意图协议或素材使用分类调用。
+- 独立只读交叉审查完成，无已确认硬阻断。补充未测边界：有电脑近况时LINKUP_DISCIPLINE仍在；晨间有种子/发现仍经过既有清楚度复核，自动返回send的桩不能证明真实模型必然放行问候。普通utility生成中撤回/线程变化未增加出站新鲜度复核；硬撤回用例只覆盖构造前已撤回，不能宣称覆盖生成中撤回。字符污染重试已有带历史行为证明，utility空回复加预算重试虽静态复用messages，尚无带历史专项集成回归。审查为静态，590项最终结果由主会实际运行核对。
+- 真实聊天表现和说话人归属仍待观察，不能把接线测试通过当作模型不再读串。正式加载状态见PROJECT_LOG。
+
+## 表情包网格缩略图（2026-10-18 起，2026-10-19 补 JPEG 与通用性）
+
+- 基线（实机数据）：茶话会图库 205 张，原图合计 314.9 MB，平均 1.5 MB，最大单张 6 MB；网格一打开就把全部原图经 `hana.api.fetch` 一次并发 4 张拉进 webview。她的截图表现为“一堆空格子 + 破图图标”，实际是请求还在排队。
+- 改动：`lib/png-codec.js`（PNG 编解码 + 框面积缩放）、`lib/jpeg-codec.js`（基线 JPEG 解码）、`lib/sticker-thumb.js`（按内容哈希缓存到 `sticker-thumbs/`，最长边 256）；`index.js` 新增 `/sticker-thumb/:agentId/:id` 与 `/source-sticker-thumb/:id`；`ui/panel.html` 网格改取缩略图、加 IntersectionObserver 懒加载、失败不再永久缓存；`lib/gif-frames.js` 改用共用编码器。
+- 第一轮翻车：缩略图失败时兜底掉去查来源快照（自己图库里的图不在那儿），JPEG 全库 404。已改为就地退回这张自己的原图。
+- 解码器正确性取证：PNG 解码与 .NET `System.Drawing` 对同一张图取 5 个采样点逐像素一致；JPEG 取图库 25 张真 JPEG（23 基线 + 2 渐进），与 .NET 对同一坐标 **828 个通道采样最大差 3**（IDCT 舍入），2 张渐进式正确返回 null 退回原图。修掉三个真 bug：量化表之字序反向（DC 恰蒙对、AC 全错）、RGB 直接写 Buffer 按 256 回绕（255.6→0）、YCbCr 色度改双线性上采样。
+- 测试夹具：项目无 JPEG 编码器，`tests/helpers/sample-jpeg.js` 按规范手工拼最小基线 JPEG（灰度 16×8、两 MCU），另经 .NET 核对（左右 128 / 129 一致）才当基准。
+- 修前实测一个自造 bug：pending 为空时 async 任务同步跑完，`warming.delete(slot)` 先于 `warming.add(slot)`，槽位永久卡住，“以后新加的图也补上”实际不成立。已改为无待办直接返回、先 add 后建任务，并有专门用例锁住。
+- 定向测试：`node --test --test-concurrency=1 tests/jpeg-codec.test.js tests/sticker-thumb.test.js tests/ui.test.js tests/ui-loading.test.js tests/sticker-library.test.js tests/stickers.test.js tests/sticker-usage.test.js tests/gif-frames.test.js tests/vision.test.js`，**242/242 通过，0 失败/取消/跳过**。新文件 17 项（JPEG 4、缩略图 13），UI 新增“网格只取缩略图、屏幕外等露脸、缩不出来退回自己原图”断言。
+- 实机数据（2026-10-19 补齐后）：图库 205 张中 **202 张有缩略图**，剩 3 张走原图（2 渐进式 JPEG + 1 头部无法识别），合计 211 KB；整库 314.9 MB → 49.5 MB。来源库 330 张中 303 张有缩略图（72 张基线 JPEG 中已含大部分，26 张渐进 + 1 未知走原图）。
+- 已知边界：只支持基线/扩展顺序 JPEG（SOF0/SOF1）、PNG、GIF；**渐进式 JPEG（实测 26/98）和 WebP 不缩**，直接走原图，行为不变但不享受优化。像素上限 8 MP（同时是内存红线）；单图超过就退回原图。缩略图缓存不主动清理已删图片的孤儿文件。
+- 通用性自查：第一版只认 PNG/GIF 是被本机图库数据（164 PNG / 36 JPEG）掩盖的，对多数以 JPEG 为主的用户等于没优化；已补 JPEG 解码并按文件头（magic bytes）认格式，不信后缀（本机图库实测有后缀 jpeg 内容 PNG 4 张、后缀 gif 内容 WebP 1 张）。
+- 未跑全量测试（发布时再跑）；未调用真实/付费模型；未改 manifest 版本/简介/README，未提交或发布。正式 reload 返回成功。
+
+## 表情包图库按新到旧排列（2026-10-19）
+
+- 需求：图库列表改按新入库在前。加完图第一件事就是看一眼刚加的那几张。
+- 改动：`listStickerLibrary` 在返回给界面前 `.reverse()`；`readStickerLibrary` 的存储顺序不动（`removeSticker` / `removeStickerGroup` / `renameStickerGroup` 都从它读，反转只发生在给界面看的那一层，避免把存储顺序也带偏）。
+- **范围是整个逻辑，不是只改「全部」那一页**：顺序在筛选之前就定好了，`rowsForGroup` 只筛不排，所以每个自定义分组里的图同样是新到旧。为防止以后被人“顺手整理”掉，加了行为回归：`ui-loading.test.js` 用 `panelHarness(["rowsForGroup"])` 跑真实函数，三个分组断言新到旧；并在 `rowsForGroup` 上写明「只筛不排」。
+- 测试：`tests/sticker-library.test.js` 新增「新入库的排最前」，同时断言盘上顺序仍是导入顺序；`node --test --test-concurrency=1 tests/sticker-library.test.js tests/stickers.test.js tests/ui.test.js tests/ui-loading.test.js` **205/205 通过**；`tests/ui-loading.test.js` 单跑 **26/26 通过**。
+- 实机数据核对（只读）：存储顺序最后 3 张与界面顺序最前 3 张正好逆序；分组「古装小圆子」里也是新到旧。未写入生产数据。
+- 未跑全量测试；未调用真实/付费模型；未改 manifest 版本/简介/README，未提交或发布。正式 reload 返回成功。
+
+## 表情包抽屉「刚打开一片空白、分组不出来」（2026-10-19）
+
+- 现象：刚点开表情包时有一段空白，自己建的分组也不显示，过一会儿才齐。
+- 根因：图库和来源用 `Promise.all` 绑成一个请求。分组 tab 和网格只靠图库，却要陪着等那份三百多张的来源清单；另外图库没到之前，`renderStickerRows` 先摆了一句「图库还空着，去挑几张你喜欢的」和一个「添加」按钮——她看到的不是空库，是还没到。
+- 改动：`loadStickerLibrary` 与新的 `loadStickerSource` 拆开（来源在飞行中去重 `sourceTask`，拉完 `sourceReady` 记一笔）；打开聊天时 `void ensureStickerLibrary().catch()` 预热图库，点笑脸时已是现成；未拉到时显示「正在读图库…」并藏掉「添加」按钮；来源清单不进聊天预热（跟伙伴无关），改在「添加」页现读现用并显示「正在读来源图库…」，读不出来时先清掉那句再摆解释。
+- 修测试夹具：`ui-loading.test.js` 的 `openHarness` 按名字注入函数，新加的两个预热函数不在名单里，`openPartner` 一调就 ReferenceError，整条打开流程断掉。已补两个返回 Promise 的替身（返回 undefined 也不行，`openPartner` 后面接的是 `.catch()`）。
+- 测试：`node --test --test-concurrency=1 tests/ui.test.js tests/ui-loading.test.js tests/sticker-thumb.test.js tests/jpeg-codec.test.js tests/sticker-library.test.js tests/stickers.test.js tests/sticker-usage.test.js tests/gif-frames.test.js tests/vision.test.js`，**243/243 通过**。新增断言：两个请求不再绑成一个、来源飞行中去重、聊天打开即预热、未拉到说「正在读」、添加页现读现用。
+- 语法：panel.html 内联主脚本 `node --check` 通过（注意该文件有两个 script 块，取第二个，块 0 是 380 字节的中文注释片段）。
+- 未跑全量测试；未调用真实/付费模型；未改 manifest 版本/简介/README，未提交或发布。正式 reload 返回成功；打开抽屉的实际观感仍待她在实机上看一眼。
+
 ## 专属节日回应引导（2026-10-18）
 
 - 基线：重载前App Manager运行清单显示0.8.0、磁盘manifest为0.9.0。正式reload后运行清单为`app:chahuahui on / 0.9.0`。没有保存的实际茶话会生成请求，不能把提示词测试当作模型已自然说出口。
