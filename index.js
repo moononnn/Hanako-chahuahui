@@ -6747,7 +6747,11 @@ export function apply(ctx) {
           if (generation.agentId === agentId) voiceGenerations.delete(key);
         }
         store.resetPartnerMemory(agentId);
-        try { fs.rmSync(path.join(voiceDir, agentId), { recursive: true, force: true }); } catch (error) {
+        try {
+          // 前面的 store 调用会先过 requirePartnerId，非法 id 到这里已经走不下来了；
+          // 但删除这层不靠调用顺序保平安：自己再校验一次，非法值直接不删。
+          if (isValidPartnerId(agentId)) fs.rmSync(path.join(voiceDir, agentId), { recursive: true, force: true });
+        } catch (error) {
           diagnostics({ event: "partner.reset.voice-cleanup.failed", agentId, error: describeError(error) });
         }
         diagnostics({ event: "partner.reset", agentId });

@@ -243,3 +243,28 @@ test("一张坏图缩不出来，不能把后面的图和下一次预热一起�
   assert.equal(await startThumbWarmup(dir, fixed, async () => ({ bytes: good, contentType: "image/png" }), { idleMs: 0, scope }), 1, "槽位没卡住才补得动");
   assert.ok(hasThumb(dir, thumbKeyFor(fixed[0])));
 });
+
+test("IHDR 段太短时不读越界，老实返回 null", () => {
+  // PNG 签名 + 一个声明长度 8 的 IHDR：readUInt32BE(4) 会抛 ERR_OUT_OF_RANGE。
+  // 现在只有 buildStickerThumb 一个调用点且在 try 里，但解码器不该指望上游兜。
+  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const short = Buffer.concat([
+    sig,
+    Buffer.from([0, 0, 0, 8]),           // length = 8
+    Buffer.from("IHDR", "ascii"),
+    Buffer.alloc(8),
+    Buffer.alloc(4),                      // 假装有个 CRC
+  ]);
+  assert.doesNotThrow(() => decodePng(short));
+  assert.equal(decodePng(short), null);
+
+  // 长度 0 也一样
+  const zero = Buffer.concat([
+    sig,
+    Buffer.from([0, 0, 0, 0]),
+    Buffer.from("IHDR", "ascii"),
+    Buffer.alloc(4),
+  ]);
+  assert.doesNotThrow(() => decodePng(zero));
+  assert.equal(decodePng(zero), null);
+});

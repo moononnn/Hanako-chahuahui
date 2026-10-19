@@ -9,6 +9,10 @@
 - 定向：`node --test --test-concurrency=1 tests/jpeg-codec.test.js tests/sticker-thumb.test.js tests/gif-frames.test.js tests/ui.test.js tests/ui-loading.test.js tests/sticker-library.test.js tests/stickers.test.js tests/sticker-usage.test.js tests/vision.test.js`，**248/248 通过**。
 - 第二轮复审（新包）无阻断项，但指出 SOS 扫描头也没卡段尾：`Ns` 只占 1 字节、读 255 也不崩，但 Buffer 越界索引会给 undefined，`dataStart` 跟着跳到文件外，后面一整段熵解码拿到空数据。虽然最坏只是退回原图，与前两处同一类，经确认后一并补上：SOS 头在 `Ns` 与 `Ns+2×分量数+3` 两处都卡 `end`。
 - SOS 取证同样做了修前/修后对照：真·修前新用例失败，修后通过；合法夹具仍能解开（确认守卫没误杀）。全量 **1858/1858 通过**。
+- 第三轮复审（终审包）无阻断项，并确认五处段头（DQT/DHT/DRI/SOF/SOS）全部卡上了段尾，没有第六处；又点了两处：① png-codec 的 IHDR 读 UInt32 没查长度；② index.js 的 `/memory/:agentId/reset` 里 `rmSync` 直接用裸 param。
+- 第①项确实存在（段长 0–7 会抛 ERR_OUT_OF_RANGE），已加 `if (length < 13) return null`，修前/修后对照同样成立。
+- 第②项待了两轮相反结论（上轮「不可利用」、这轮「未校验」），本轮实跑核清：`store.resetPartnerMemory` 第一步是 `getKnowing` → `partnerPathId` → `requirePartnerId`，实测 `..`、`../../etc`、`__proto__`、`a/b` 四个值全部抛 `INVALID_PARTNER_ID`，`rmSync` 到不了。所以上轮判断对，功能上不可利用；但形式上确实破了 partner-id.js 「新文件路径一律使用 requirePartnerId」的约定，已补一层自己校验，不靠调用顺序保平安。
+- 全量 **1859/1859 通过**（1858 为补 IHDR 用例前的数）。
 - 这轮三个同类问题（DQT 会抛异常、inflate 无上限、SOS 越界读）都出在同一份手写解码器上，根源是逐个分支各自实现段尾判断。下次动这个文件应按「每个读了几个字节、够不够」统一过一遍，而不是等审包指出。
 - 此修改发生在候选包导入之后，所以既有 ZIP/entry 证据失效；full verify、云候选、导入、副本测试、独立审包全部重跑。
 
