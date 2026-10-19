@@ -2690,6 +2690,26 @@
           ? window.requestIdleCallback(() => { void loadAudio().catch(() => {}); }, { timeout: 2000 })
           : setTimeout(() => { void loadAudio().catch(() => {}); }, 400);
         const spans = usableMarks.length ? [...transcriptText.querySelectorAll(".voice-mark")] : [];
+        const bars = [...wave.querySelectorAll("i")];
+        let lastDone = -1;
+        // 波形既是心跳也是进度：播过的那几根压深，没播到的留浅。
+        // 停下来的时候全靠它一眼认出「我按了暂停」，而不是又变回没播过的样子。
+        const paintWave = () => {
+          const ratio = audio.duration ? Math.min(1, audio.currentTime / audio.duration) : 0;
+          const done = audio.ended ? bars.length : Math.round(ratio * bars.length);
+          if (done === lastDone) return;
+          lastDone = done;
+          bars.forEach((bar, index) => bar.classList.toggle("done", index < done));
+        };
+        // 播放 / 暂停两态只由这一处说了算，别再散在各个事件里各写一半
+        // （2026-10-19：以前 pause 只在播完或还停在 0 秒时才复位，中途暂停看着跟还在放一模一样）。
+        const setPlaying = (on) => {
+          const held = !on && !audio.ended && audio.currentTime > 0;
+          box.classList.toggle("is-playing", on);
+          box.classList.toggle("is-paused", held);
+          icon.textContent = on ? "Ⅱ" : "▶";
+          play.setAttribute("aria-label", on ? "暂停语音" : held ? "继续播放语音" : "播放语音");
+        };
         let activeMark = -1;
         let markFrame = 0;
         const paintMark = (index) => {
@@ -2705,6 +2725,7 @@
             if (at >= usableMarks[i].start && at < usableMarks[i].end) { index = i; break; }
           }
           paintMark(index);
+          paintWave();
           markFrame = requestAnimationFrame(syncMark);
         };
         const stopMark = () => { if (markFrame) { cancelAnimationFrame(markFrame); markFrame = 0; } };
@@ -2713,22 +2734,22 @@
           if (!m.voice?.playedAt) {
             void hana.api.fetch(`voice/${encodeURIComponent(current)}/${encodeURIComponent(m.id)}/played`, { method: "POST" }).catch(() => {});
           }
-          if (!audio.paused) { audio.pause(); return; }
+          if (!audio.paused) { audio.pause(); setPlaying(false); paintWave(); return; }
           // 预取还没赶上，就当场告诉她在取，别让按钮看着像死了。
           if (!audio.src) box.classList.add("is-loading");
           try {
             if (!audio.src) await loadAudio();
             // 原话只由她自己点开（2026-10-05：播放不再替她展开）。
             // 收着的时候点亮照样在跑，她什么时候点开，看到的都是当前那句。
-            box.classList.add("is-playing");
-            icon.textContent = "Ⅱ";
+            setPlaying(true);
+            paintWave();
             if (usableMarks.length) { paintMark(-1); syncMark(); }
             await audio.play();
             box.classList.remove("is-loading");
           } catch { box.classList.remove("is-loading"); setStatus("这条语音暂时播不出来"); }
         });
-        audio.addEventListener("ended", () => { box.classList.remove("is-playing"); icon.textContent = "▶"; stopMark(); paintMark(-1); });
-        audio.addEventListener("pause", () => { stopMark(); if (audio.ended || audio.currentTime === 0) { box.classList.remove("is-playing"); icon.textContent = "▶"; } });
+        audio.addEventListener("ended", () => { stopMark(); setPlaying(false); paintWave(); paintMark(-1); });
+        audio.addEventListener("pause", () => { stopMark(); setPlaying(false); paintWave(); });
       } else {
         play.disabled = true;
         transcript.disabled = true;

@@ -667,6 +667,18 @@ test("语音消息采用播放胶囊，转文字独立成普通气泡", () => {
   assert.doesNotMatch(panel, /main\.append\(play, wave, duration, transcript\)/, "转文字按钮不能继续塞进语音胶囊");
 });
 
+test("语音中途暂停看得出按了停，波形兼做进度", () => {
+  // 2026-10-19 实测：以前 pause 只在播完或还停在 0 秒时才复位，
+  // 中途按停跟还在放长得一模一样，看不出「我按了停」。
+  assert.match(panel, /const setPlaying = \(on\) => \{/, "播放/暂停两态要由一处统管");
+  assert.match(panel, /const held = !on && !audio\.ended && audio\.currentTime > 0;/, "中途停下要认得出来");
+  assert.match(panel, /box\.classList\.toggle\("is-paused", held\)/);
+  assert.match(panel, /icon\.textContent = on \? "Ⅱ" : "▶"/, "停下后图标要退回播放");
+  assert.match(panel, /bar\.classList\.toggle\("done", index < done\)/, "波形要兼做进度");
+  assert.match(panelCss, /\.voice-bubble\.is-paused \.voice-play \{/, "暂停态要有自己的样式");
+  assert.match(panelCss, /\.voice-wave i\.done \{ background: currentColor; opacity: \.9; \}/);
+});
+
 test("播语音时转文字不能被轮询重画收走", () => {
   // 2026-10-05 实测：点播放 → POST /played → 5 秒轮询见 playedAt 变了 → 整段重画 →
   // 新 DOM 里转文字默认 hidden，正在播的 Audio 元素也一起被丢掉。

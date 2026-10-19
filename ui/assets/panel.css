@@ -803,15 +803,25 @@ body.slot-embedded .chat.has-bg .composer::before {
   width: 3px;
   height: 9px;
   border-radius: 99px;
-  background: currentColor;
-  opacity: .72;
+  background: var(--ink-faint);
+  opacity: .9;
 }
+/* 播过的那几根：没播到的留浅，播到的压深，这一深一浅就是进度 */
+.voice-wave i.done { background: currentColor; opacity: .9; }
 .voice-wave i:nth-child(2n) { height: 14px; }
 .voice-wave i:nth-child(3n) { height: 19px; }
 .voice-wave i:nth-child(4n) { height: 11px; }
 .voice-bubble.is-playing .voice-wave i { animation: voice-wave .72s ease-in-out infinite alternate; }
 .voice-bubble.is-playing .voice-wave i:nth-child(2n) { animation-delay: -.24s; }
 .voice-bubble.is-playing .voice-wave i:nth-child(3n) { animation-delay: -.46s; }
+/* 按了暂停：波形站着不跳，按钮从主题色实底退成同色系的淡底。
+   颜色都从主题给的 --voice-* 混出来，换主题、换音色都跟着变，不写死绿。 */
+.voice-bubble.is-paused .voice-play {
+  background: var(--accent-soft, #eef7f2);
+  background: color-mix(in srgb, var(--voice-bg, var(--primary-ink)) 14%, var(--bubble-ta-bg, var(--paper, #fff)));
+  color: var(--voice-bg, var(--primary-ink));
+  border-color: var(--voice-border, var(--line));
+}
 .voice-duration { flex: none; min-width: 20px; color: var(--ink-faint); font-size: 11px; text-align: right; }
 .voice-unplayed-dot {
   flex: none;
