@@ -49,3 +49,29 @@ test("解不了的老实说解不了，交给路由退回原图", () => {
   assert.equal(decodeJpeg(makeBaselineJpeg().subarray(0, 20)), null, "截断的");
   assert.equal(decodeJpeg(makeBaselineJpeg({ sofMarker: 0xc2 })), null, "渐进式这份解码器不认");
 });
+
+/**
+ * 段被截断的 JPEG 不许抛异常。
+ *
+ * 2026-10-19 独立审包发现：DQT 分支只判了 `p < end` 就闷头连读 64 项，
+ * 一张尾部截断的 JPEG 会让 readUInt16BE 抛 RangeError。走路由那条有 try/catch，
+ * 只坏一张图；但后台预热那条一抛就把循环打断，预热槽位永久卡死，
+ * 以后新加的图再也补不上缩略图，而且一声不响。
+ */
+test("段被截断时老实返回 null，不往外抛", () => {
+  const whole = makeBaselineJpeg();
+  // 从尾部逐字节切，任何一处都不许抛
+  for (let cut = 4; cut < whole.length; cut++) {
+    let decoded;
+    assert.doesNotThrow(() => {
+      decoded = decodeJpeg(whole.subarray(0, cut));
+    }, `切到第 ${cut} 字节时抛了`);
+    if (decoded) assert.ok(decoded.data.length > 0);
+  }
+  // 段长写小了但后面还有数据：DQT 声明放不下 64 项，也不能读出去
+  const lying = Buffer.from(whole);
+  const dqtAt = lying.indexOf(Buffer.from([0xff, 0xdb]));
+  assert.ok(dqtAt > 0, "夹具里应该有 DQT 段");
+  lying.writeUInt16BE(4, dqtAt + 2); // 声明长度 4，实际要 67
+  assert.equal(decodeJpeg(lying), null, "段长不够就得当场说解不了");
+});

@@ -1,5 +1,14 @@
 # TESTING · 茶话会
 
+## 独立审包后的加固（2026-10-19）
+
+- 来处：v0.10.2 候选包独立只读审查（无阻断项）指出 JPEG 解码器的段边界没跟段长比对。核实后发现比反馈更宽：DQT 逐项读、DHT 读计数与值、SOF 读帧头与分量、DRI 读重启间隔，四处都没用 `end` 卡。
+- 真实后果：路由那条有 try/catch，只坏一张图；但后台预热是 `void` 丢弃返回值，一张截断的 JPEG 抛 RangeError 就打断循环，`warming.delete(slot)` 跟着跳掉，预热槽位永久卡死——以后新加的图再也不补缩略图，而且不报错。这与上轮修的「空队列让槽位卡死」是同一根病根换个马甲。
+- 修法两层，各自独立成立：① 解码器四处读取前用 `end` 挡住，截断就返回 null；② 预热循环内层包 try（单张失败只跳这张）+ `finally` 里必放槽位；③ `buildStickerThumb` 也包一层 catch 兜底，`saveThumb` 改先写临时文件再 rename（避免半张 PNG 被 `hasThumb` 当成命中而永不自愈）；④ `inflateSync` 加 `maxOutputLength`（像素上限只管位图大小，不管压缩比）。
+- 取证方法：两处都做了修前/修后对照。真·修前（两个文件都回退到 HEAD）新用例失败、修后通过；单回退 `sticker-thumb.js` 时用例仍通过——说明第一个版本夹具没真正触发异常，改错了两轮才定位到必须让 DQT 的 precision=1 走 16 位读分支。实测旧码抛 `RangeError: offset 15 > 13`。
+- 定向：`node --test --test-concurrency=1 tests/jpeg-codec.test.js tests/sticker-thumb.test.js tests/gif-frames.test.js tests/ui.test.js tests/ui-loading.test.js tests/sticker-library.test.js tests/stickers.test.js tests/sticker-usage.test.js tests/vision.test.js`，**248/248 通过**。
+- 此修改发生在候选包导入之后，所以既有 ZIP/entry 证据失效；full verify、云候选、导入、副本测试、独立审包全部重跑。
+
 ## 发布 v0.10.2 前的完整验证（2026-10-19）
 
 - 定版：manifest 0.10.1 → 0.10.2，`.cloud-build/config.json` 同步；CHANGELOG 把从未发出去过的 0.10.1 条目并入本版，不再留一个空版本号。

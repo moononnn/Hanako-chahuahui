@@ -210,3 +210,36 @@ test("以后新加的图也会被补上：每次调用都重新扫一遍", async
   assert.ok(hasThumb(dir, thumbKeyFor(grown[1])));
   assert.equal(missingThumbKeys(dir, grown).length, 0);
 });
+
+/**
+ * 一张坏图不许把预热卡死。
+ *
+ * 2026-10-19 独立审包发现：预热循环里没包 try，解码抛一次就把整个循环打断，
+ * `warming.delete(slot)` 也跟着跳掉，那个槽位永久卡住——
+ * 以后新加的表情包再也补不上缩略图，而且她那边一声不响。
+ */
+test("一张坏图缩不出来，不能把后面的图和下一次预热一起废掉", async () => {
+  const dir = tempDir();
+  const scope = `坏图-${Math.random()}`;
+  const good = await makePng(12, 12, 7);
+  const rows = [
+    { sha256: "a".repeat(64), file: "stickers/broken.jpg" },
+    { sha256: "b".repeat(64), file: "stickers/good.png" },
+  ];
+  const load = async (row) => (row.file.endsWith(".png")
+    ? { bytes: good, contentType: "image/png" }
+    // 一段长度只容得下 1 个 spec 的 DQT，precision 却写着 1（每项 2 字节）：
+    // 旧代码会闷头连读 64 项，直接越界抛 RangeError（实测 offset 15 > 13）。
+    : { bytes: Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xdb, 0x00, 0x0b, 0x10]), Buffer.alloc(8)]), contentType: "image/jpeg" });
+
+  assert.equal(await startThumbWarmup(dir, rows, load, { idleMs: 0, scope }), 1, "坏的那张跳过，好的那张照样补上");
+  assert.ok(hasThumb(dir, thumbKeyFor(rows[1])), "好的那张要有缩略图");
+  assert.equal(hasThumb(dir, thumbKeyFor(rows[0])), false);
+
+  // 槽位必须放开：把坏的那张换掉再来一次，得能真补
+  const fixed = [
+    { sha256: "c".repeat(64), file: "stickers/good2.png" },
+  ];
+  assert.equal(await startThumbWarmup(dir, fixed, async () => ({ bytes: good, contentType: "image/png" }), { idleMs: 0, scope }), 1, "槽位没卡住才补得动");
+  assert.ok(hasThumb(dir, thumbKeyFor(fixed[0])));
+});
