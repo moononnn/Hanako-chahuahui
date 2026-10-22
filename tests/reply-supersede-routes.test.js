@@ -83,7 +83,7 @@ test("生成中补第二条：旧稿丢弃，只落一条回复，repliedTo 是�
   assert.equal(replies.length, 1, "磁盘上只能有一条回复，不能是两条近似的");
   assert.equal(replies[0].repliedTo, secondId, "覆盖范围要落到最新那条她的话上");
   assert.equal(replies[0].text, "困了就闭眼，我又不跑", "送出的是重新生成的那一份，不是作废的旧稿");
-  assert.equal(app.models.calls.length, 2, "旧稿那一次生成确实发生了，但不能把它的结果送出去");
+  assert.equal(app.models.replyCalls().length, 2, "旧稿那一次生成确实发生了，但不能把它的结果送出去");
 });
 
 test("已读只盖到本轮真正捕获的目标：这轮结束后才落的话不归它的定时器盖", async () => {

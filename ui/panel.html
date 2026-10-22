@@ -90,6 +90,7 @@
       <div class="stream" id="stream">
         <div class="empty" id="empty-tip">左边点一位伙伴，就能开始聊了<span class="empty-hint">还没有伙伴？点右上角齿轮，去『伙伴管理』建一个茶话会角色</span></div>
       </div>
+      <div class="wait-cup-layer" id="wait-cup-layer" aria-hidden="true"><span class="wait-cup-slot" id="wait-cup-slot"></span></div>
       <div class="composer">
         <div class="todo-proposal-layer" id="todo-proposals" hidden></div>
         <div class="emoji-drawer" id="emoji-drawer" hidden>
@@ -235,6 +236,8 @@
       friends: document.getElementById("friends"),
       chat: document.getElementById("chat"),
       stream: document.getElementById("stream"),
+      waitCupLayer: document.getElementById("wait-cup-layer"),
+      waitCupSlot: document.getElementById("wait-cup-slot"),
       jumpBottom: document.getElementById("jump-bottom"),
       input: document.getElementById("input"),
       send: document.getElementById("btn-send"),
@@ -362,8 +365,19 @@
     function voiceStateKey(message) {
       return `${message?.voice?.status || ""}:${message?.voice?.format || ""}:${message?.voice?.durationMs || ""}`;
     }
+    /**
+     * 这条该不该画成语音条。合成中（pending）也算：
+     * 不然新到的一条带语音的消息会先被当成普通文字气泡演一遍，
+     * 等下一轮轮询发现语音状态变了再整段重画，屏幕上就是「文字气泡突然变语音条」（2026-10-22）。
+     */
+    function hasVoiceBubble(message) {
+      const status = message?.voice?.status;
+      return status === "ready" || status === "pending";
+    }
     /** 聊天窗里要不要给两边挂头像（设置里开的，默认关，跟以前一样） */
     let showMessageAvatars = false;
+    // 等回复时用哪套动效："dots" 三个点（原样）/ "cup" 杯中有话
+    let typingStyle = "dots";
     /** 默认关闭：打开后才给伙伴回复显示修正入口，戳一戳只提供删除。 */
     let messageRefineEnabled = false;
     const MESSAGE_SOUND_KEY = "messageSound";
@@ -1939,6 +1953,38 @@
       return { row, col, bubble: b };
     }
 
+    /**
+     * 引用块：她说这句话时，指着 ta 之前说过的那一条。
+     * 引用不能只活在输入框上方——发出去以后它得跟着这条消息一直看得见，
+     * 否则这条消息和普通一句话没区别，ta 那边收到的是引用、她这边看到的是空气。
+     */
+    function quoteBlock(text) {
+      const body = String(text ?? "").replace(/\s+/g, " ").trim();
+      if (!body) return null;
+      const box = document.createElement("div");
+      box.className = "message-quote";
+      const label = document.createElement("span");
+      label.className = "message-quote-label";
+      label.textContent = "引用";
+      const quoted = document.createElement("span");
+      quoted.className = "message-quote-text";
+      quoted.textContent = body;
+      quoted.title = body;
+      box.append(label, quoted);
+      return box;
+    }
+
+    /** 把引用块摆在这条消息的气泡上方（消息列的第一格）。 */
+    function attachQuote(col, quote) {
+      const text = String(quote?.text ?? "").trim();
+      if (!col || !text) return null;
+      const box = quoteBlock(text);
+      if (!box) return null;
+      const first = col.children?.[0] || null;
+      col.insertBefore(box, first);
+      return box;
+    }
+
     /** 这条该放哪儿：末尾还站着那个「正在输入」的话，就插在它前面。 */
     function place(row, anchor) {
       if (anchor?.isConnected) el.stream.insertBefore(row, anchor);
@@ -2165,25 +2211,64 @@
       const text = String(selectedText || message?.text || "").trim();
       return text || (message?.voice ? "[语音]" : "");
     }
+    /**
+     * 写剪贴板：按可靠度一层层退。
+     *
+     * iframe 里 navigator.clipboard 常年被浏览器策略拦（宿主 SDK 文档里写过这一条），
+     * 宿主那条 hana.clipboard.writeText 是绕到宿主进程侧去写的，最稳；
+     * 以前只试 navigator 这一层，它存在但一被拒就直接收工，后面的老办法根本没试。
+     * 现在一层失败就往下一层退，全退完才算失败。
+     */
+    async function writeClipboard(text) {
+      const failures = [];
+      // 1. 宿主进程侧：宿主不认这个能力时会回 CAPABILITY_DENIED，接着退下一层
+      try {
+        if (typeof hana !== "undefined" && hana?.clipboard?.writeText) {
+          const result = await hana.clipboard.writeText(text);
+          if (result?.written !== false) return "host";
+          failures.push("host-not-written");
+        }
+      } catch (error) { failures.push(error?.code || "host-failed"); }
+      // 2. 浏览器原生
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text);
+          return "navigator";
+        }
+      } catch (error) { failures.push(error?.name || "navigator-failed"); }
+      // 3. 老办法：textarea + execCommand
+      try {
+        const helper = document.createElement("textarea");
+        helper.value = text;
+        helper.setAttribute("readonly", "");
+        helper.style.position = "fixed";
+        helper.style.top = "0";
+        helper.style.left = "0";
+        helper.style.width = "1px";
+        helper.style.height = "1px";
+        helper.style.opacity = "0";
+        document.body.appendChild(helper);
+        helper.focus();
+        helper.select();
+        helper.setSelectionRange?.(0, helper.value.length);
+        const copied = document.execCommand("copy");
+        helper.remove();
+        if (copied) return "exec";
+        failures.push("exec-not-copied");
+      } catch (error) { failures.push(error?.name || "exec-failed"); }
+      throw new Error(failures.join(",") || "no-clipboard-path");
+    }
     async function copyMessage(message, selectedText = "") {
       const text = messageCopyText(message, selectedText);
       if (!text) return setStatus("这条消息没有可复制的文字");
       try {
-        if (navigator.clipboard?.writeText) {
-          await navigator.clipboard.writeText(text);
-        } else {
-          const helper = document.createElement("textarea");
-          helper.value = text;
-          helper.style.position = "fixed";
-          helper.style.opacity = "0";
-          document.body.appendChild(helper);
-          helper.select();
-          if (!document.execCommand("copy")) throw new Error("copy-failed");
-          helper.remove();
-        }
+        await writeClipboard(text);
         closeMessageFeed();
         setStatus("复制好了");
-      } catch { setStatus("剪贴板没接住，再试一下"); }
+      } catch {
+        closeMessageFeed();
+        setStatus("剪贴板没接住，长按选中文字自己复制吧");
+      }
     }
     function quoteMessage(message, selectedText = "") {
       const text = messageCopyText(message, selectedText);
@@ -2477,17 +2562,110 @@
       closeMessageFeed();
     });
 
-    function typingIndicator() {
+    /*
+     * 等回复的那一记。两套都给同一种手柄（raise / remove），
+     * 因为调用方只会做两件事：新气泡出来前把它挪到末尾（raise），和收掉它（remove）。
+     * mode 只对「桌角那杯」有意义：text 冒热气，voice 荡茶水。
+     */
+    function typingIndicator(mode = "text") {
+      if (typingStyle === "cup") return cupOnTheTable(mode);
       const row = document.createElement("div");
       row.className = "row ta";
       if (showMessageAvatars) row.appendChild(avatarFor("assistant"));
       const box = document.createElement("div");
-      box.className = "typing";
-      box.innerHTML = "<i></i><i></i><i></i>";
+      const speaking = mode === "voice";
+      box.className = speaking ? "typing typing-voice" : "typing";
+      // 关掉开关就完全回到原来那套；语音那一路换成四条竖条。
+      box.innerHTML = speaking ? "<i></i><i></i><i></i><i></i>" : "<i></i><i></i><i></i>";
       row.appendChild(box);
       el.stream.appendChild(row);
       scrollDown();
-      return row;
+      return {
+        raise() { el.stream.appendChild(row); },
+        remove() { row.remove(); },
+      };
+    }
+
+    /* ── 桌角那杯 ──
+       茶杯和消息流彻底分家：不在 stream 里，没有头像、没有气泡、没有行骨架。
+       两档共用一只杯子，只差在「动哪一块」：
+         text  杯口冒热气（他在写，字往上浮）
+         voice 热气收起，茶面一圈接一圈荡、杯身轻颤（他在说，声音往下沉）
+       收起来是慢慢矮下去的，不是啪一下消失，免得像被人打断。 */
+    function cupOnTheTable(mode = "text") {
+      el.waitCupSlot.className = mode === "voice" ? "wait-cup-slot voice" : "wait-cup-slot";
+      el.waitCupSlot.innerHTML = `<span class="wait-steam" aria-hidden="true">${steamSVG()}</span>`
+        + `<span class="wait-cup-art" aria-hidden="true">${waitingCupSvg()}</span>`;
+      el.waitCupLayer.classList.add("on");
+      scrollDown();
+      let gone = false;
+      return {
+        /* 它不在流里，没有「站到最新那条下面」这回事 */
+        raise() {},
+        remove() {
+          if (gone) return;
+          gone = true;
+          el.waitCupLayer.classList.remove("on");
+          // 等矮下去再清空，不然上一杯会在半空里突然断掉
+          setTimeout(() => {
+            if (!el.waitCupLayer.classList.contains("on")) el.waitCupSlot.innerHTML = "";
+          }, 320);
+        },
+      };
+    }
+
+    /** 收桌角那杯：重画、清空、换人都要让桌面先空出来 */
+    function resetWaitCup() {
+      el.waitCupLayer?.classList.remove("on");
+      if (el.waitCupSlot) {
+        el.waitCupSlot.className = "wait-cup-slot";
+        el.waitCupSlot.innerHTML = "";
+      }
+    }
+
+    /* 热气自己一块坐标系：1 单位 = 1 像素。
+       杯子那张 SVG 映射到 29px 时线宽只剩 0.4px，气画在里头等于没画。
+       三条长短不齐（短 10 / 长 18 / 中 13），横向错在 7.5/12/16.5：
+       同周期只差 0.25 秒起跑，属于同一口气，但不能等长等距（那就成了图标）。 */
+    function steamSVG() {
+      return `<svg viewBox="0 0 24 26" aria-hidden="true">
+  <path class="st-1" d="M7.5 26 C6 23.8 9 22 7.5 19.6 C6.3 17.6 8.6 16.6 7.5 15.6" pathLength="100"/>
+  <path class="st-2" d="M12 26 C10.2 22.6 14 19.2 12 15.8 C10.2 12.8 13.6 11 12 8" pathLength="100"/>
+  <path class="st-3" d="M16.5 26 C15 23.4 18 21.4 16.5 18.8 C15.2 16.4 17.8 15 16.5 13.4" pathLength="100"/>
+</svg>`;
+    }
+
+    /* ══ 杯中有话 ══
+       几何取自原版那盏茶（120×120 画布：杯口 rx30、杯身 x30–90、
+       杯底 y91、把手伸到 x108），比例一致，不重新画。
+
+       但**不套气泡壳**。聊天流里那个泡泡本身就代表“一条消息”；
+       里面一装上有画面的东西，眼睛就直接读成“对方发了张图”。
+       三个点能读成加载，是因为它抽象、什么都没装，泡泡是个空壳。
+       所以杯子得裸着站，像加载指示该在的位置。
+
+       viewBox 收紧到 26 24 84 76，把原画布四周的空白裁掉，
+       这样 26px 的框里杯子占满，不会被白边缩小。
+
+       动效按“永不空白”排：杯身 3.6s、涟漪 2.2s 两圈错开、
+       蒸汽 2.8s，公共周期几十秒，任取一帧都有东西在动。 */
+    let cupSeq = 0;
+    function waitingCupSvg() {
+      const id = `wc${++cupSeq}`;
+      return `<svg class="wait-cup" viewBox="26 24 84 76" aria-hidden="true">
+  <g class="w-nod">
+    <path class="w-handle" d="M86 61 C106 57.5 106 79 87 78.5"/>
+    <path class="w-body" d="M30 57 C30 81 40 91 60 91 C80 91 90 81 90 57"/>
+    <ellipse class="w-tea" cx="60" cy="58.6" rx="26.5" ry="6.7"/>
+    <ellipse class="w-rim" cx="60" cy="57.5" rx="30" ry="9.5"/>
+    <clipPath id="c${id}"><ellipse cx="60" cy="58.6" rx="26.5" ry="6.7"/></clipPath>
+    <g clip-path="url(#c${id})">
+      <g class="w-ripple w-r1"><ellipse cx="61" cy="59.2" rx="7" ry="2.2"/></g>
+      <g class="w-ripple w-r2"><ellipse cx="61" cy="59.2" rx="7" ry="2.2"/></g>
+      <g class="w-ripple w-r3"><ellipse cx="61" cy="59.2" rx="7" ry="2.2"/></g>
+    </g>
+  </g>
+</svg>`;
     }
 
     /**
@@ -2511,7 +2689,7 @@
         if (!alive()) return;
         // 已读：小字收起，跟后端那套「读过就不占聊天流」同一条规矩
         tickEl?.remove();
-        dots = typingIndicator();
+        dots = typingIndicator(started.voiceRequested ? "voice" : "text");
         let payload = null;
         for (let i = 0; i < 240; i += 1) {
           const state = await api("GET", `turns/${encodeURIComponent(started.turnId)}`);
@@ -2521,7 +2699,8 @@
           await sleep(500);
         }
         if (!payload) return;
-        if (payload.message?.voice?.status === "ready") {
+        if (hasVoiceBubble(payload.message)) {
+          // 语音合成中也要直接按语音那条画，先演一遍文字气泡再变语音条，屏幕上是看得出闪的。
           dots?.remove();
           renderMessage(payload.message, { bindAssistantActions: true });
           if (payload.replyMessageId) seenIds.add(payload.replyMessageId);
@@ -2537,8 +2716,9 @@
             assistantPieces: [item.text],
             bindAssistantActions: index === payload.items.length - 1,
           });
-          // 三个点始终站在最新那条下面，不能跑到新消息头上去
-          el.stream.appendChild(dots);
+          // 三个点始终站在最新那条下面，不能跑到新消息头上去；
+          // 桌角那杯不在流里，raise 是空动作。
+          dots?.raise?.();
         }
         // 这条已经在这儿演完了；记一笔，下一轮轮询别再把整条重画一遍
         if (payload.replyMessageId) seenIds.add(payload.replyMessageId);
@@ -2760,6 +2940,20 @@
       return rendered.row;
     }
 
+    /**
+     * 语音只念得出能读的那几句。一条消息若还带着念不出来的气泡（分享链接、补充说明这类），
+     * 这些气泡得照旧摆回聊天流，否则语音那条会把整条正文一起吞掉。
+     * 2026-10-21：视频分享带语音时，第三个气泡里的 b23 链接就是这么整段消失的。
+     */
+    function voiceLeftoverBubbles(m) {
+      const spoken = String(m.voice?.text ?? m.text ?? "").replace(/\s+/gu, "");
+      const pieces = Array.isArray(m.bubbles) && m.bubbles.length ? m.bubbles : [];
+      return pieces
+        .map((piece) => String(piece ?? "").trim())
+        .filter((piece) => piece && !isBareStickerMarker(piece))
+        .filter((piece) => !spoken.includes(piece.replace(/\s+/gu, "")));
+    }
+
     function formatVoiceDuration(value) {
       const seconds = Math.max(0, Math.round(Number(value) / 1000));
       if (!seconds) return "";
@@ -2815,6 +3009,7 @@
         const read = Boolean(opts.read);
         if (!read) registerTick(m.id, tick(col));
         if (row) row.dataset.messageId = m.id;
+        if (col && m.quote?.text) attachQuote(col, m.quote);
         if (col) {
           userCols.set(m.id, col);
           renderPartnerFeed(col, m);
@@ -2825,11 +3020,16 @@
         if (m.voice && !Array.isArray(opts.assistantPieces)) {
           voiceStates.set(m.id, voiceStateKey(m));
         }
-        const voice = m.voice?.status === "ready" || m.voice?.status === "pending";
+        const voice = hasVoiceBubble(m);
         if (voice && !Array.isArray(opts.assistantPieces)) {
           renderVoiceMessage(m, opts);
           voiceStates.set(m.id, voiceStateKey(m));
           markMessageSoundVisible(m);
+          // 念不出来的气泡照常画在语音下面（分享链接就走这条路），别被语音整条盖掉。
+          for (const piece of voiceLeftoverBubbles(m)) {
+            const extra = bubble("assistant", piece, null, m.at);
+            bindMessageFeed(extra.row, m, current, piece);
+          }
           return true;
         }
         const rawList = Array.isArray(opts.assistantPieces)
@@ -2950,7 +3150,7 @@
         // 回执还没回来的那条，屏幕上已经有占位气泡了（带同一个 clientMessageId）。
         // 这里再画一遍就是同一条消息出现两次——当初那条一模一样的就是这么来的。
         if (m?.clientMessageId && pendingClientIds.has(m.clientMessageId)) continue;
-        if (m?.role === "assistant" && Array.isArray(m.bubbles) && m.bubbles.length > 1 && !seenIds.has(m.id)) {
+        if (m?.role === "assistant" && Array.isArray(m.bubbles) && m.bubbles.length > 1 && !seenIds.has(m.id) && !hasVoiceBubble(m)) {
           for (let index = 0; index < m.bubbles.length; index += 1) {
             if (current !== agentId || viewSeq !== threadViewSeq || generation !== renderGeneration) return restoreScroll(added);
             renderMessage(m, {
@@ -3227,6 +3427,7 @@
       closeAppearance();
       el.stream.innerHTML = '<div class="empty" id="empty-tip">左边点一位伙伴，就能开始聊了<span class="empty-hint">还没有伙伴？点右上角齿轮，去『伙伴管理』建一个茶话会角色</span></div>';
       el.emptyTip = document.getElementById("empty-tip");
+      resetWaitCup();
       clearChatBackground();
     }
 
@@ -3242,8 +3443,9 @@
         paintStateBadge(el.chatStateBadge, activePartner?.badge);
         paintStatePin(el.chatAvatarStatePin, activePartner?.badge);
       }
-      // 外观开关跟着轮询走：她在设置里改完，最迟一轮就生效
       showMessageAvatars = Boolean(data.messageAvatars);
+      // 外观开关跟着轮询走：她在设置里改完，最迟一轮就生效
+      typingStyle = data.typingIndicator === "cup" ? "cup" : "dots";
       messageRefineEnabled = Boolean(data.messageRefine);
       if (!messageRefineEnabled && actionMessage?.role === "assistant") closeMessageActions();
       actionEmoji = new Map((data.actionStyles ?? []).map((style) => [style.id, style.emoji]));
@@ -3977,6 +4179,7 @@
       closeEmojiDrawer();
       setStatus("");
       el.stream.innerHTML = "";
+      resetWaitCup();
       clearChatBackground(); // 新的人进来，先把上一位的房间收走
       seenIds = new Set();
       voiceStates.clear();
@@ -4195,6 +4398,9 @@
         optimisticRows.push(renderedUser.row);
       }
       appendInlineImage(renderedUser, image);
+      // 引用当场就摆出来：消息送出去了、界面还没回包的那几秒里，
+      // 她也得看得见自己指的是哪一条，不能等回包才补上。
+      if (renderedUser?.col && quote) attachQuote(renderedUser.col, quote);
       // 图已经进气泡了，待发送那条就别再杵着：图片是 base64，回包比文字慢一大截，
       // 等回包才撤会看着像这张还卡在半路。先撤，POST 真没被接受再放回来。
       const sentImage = pendingImage === image ? image : null;

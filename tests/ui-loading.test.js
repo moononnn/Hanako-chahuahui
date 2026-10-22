@@ -267,12 +267,12 @@ function panelHarness(names) {
     setStatus: (text) => statuses.push(text), syncChatBackground: () => {}, reportRead: () => {},
     savePartnerOrder: async () => {},
   });
-  for (const n of ["rememberComposerDraft", "clearPendingQuote", "autosizeInput", "closeMessageActions", "foldAfterPick", "closeAppearance", "clearPendingImage", "clearPendingSticker", "renderStickerTabs", "closeEmojiDrawer", "clearChatBackground", "reconcilePendingImage"]) context[n] = () => {};
+  for (const n of ["rememberComposerDraft", "clearPendingQuote", "autosizeInput", "closeMessageActions", "foldAfterPick", "closeAppearance", "clearPendingImage", "clearPendingSticker", "renderStickerTabs", "closeEmojiDrawer", "clearChatBackground", "reconcilePendingImage", "resetWaitCup"]) context[n] = () => {};
   const actual = names.map((n) => functionSource(panel, n)).join("\n");
   vm.runInContext(actual, context);
   return { context, root, el, binds, mounts, states, paints, opened, statuses, requests };
 }
-const renderFunctions = ["renderAll", "rememberTranscriptOpen", "voiceStateKey", "invalidateRendering", "renderMessage", "renderAction", "renderVoiceMessage", "fillBubbleText", "bubble", "place", "messageTime", "bubbleTimeText", "timeDivider", "timeDividerText", "stickerIdOf", "isBareImageMarker", "isBareStickerMarker", "readUserIds", "scrollDown", "updateJumpBottom", "isAtBottom", "tick", "formatVoiceDuration", "appendImageToBubble", "markMessageSoundVisible"];
+const renderFunctions = ["renderAll", "rememberTranscriptOpen", "voiceStateKey", "hasVoiceBubble", "voiceLeftoverBubbles", "invalidateRendering", "renderMessage", "renderAction", "renderVoiceMessage", "fillBubbleText", "bubble", "quoteBlock", "attachQuote", "place", "messageTime", "bubbleTimeText", "timeDivider", "timeDividerText", "stickerIdOf", "isBareImageMarker", "isBareStickerMarker", "readUserIds", "scrollDown", "updateJumpBottom", "isAtBottom", "tick", "formatVoiceDuration", "appendImageToBubble", "markMessageSoundVisible"];
 function renderHarness() {
   const h = panelHarness(renderFunctions);
   vm.runInContext("const STICKER_PREFIX = \"\\u0001stk:\"; const BARE_IMAGE_MARKER_RE = /^\\[图片\\]$/; const BARE_MARKER_RE = /^\\[表情\\]$/; const renderedMessageSoundIds = new Set(); const pendingMessageSoundById = new Map(); const BUBBLE_LINK = /https?:\\/\\/[^\\s<>\"'\\u3000-\\u303f\\u4e00-\\u9fff\\uff00-\\uffef]+/gu;", h.context);
@@ -416,4 +416,32 @@ test("rapid A-B switch and removed current partner reject stale thread responses
   pending.resolve({ messages: [{ id: "removed-message" }] }); await flush();
   h.requests.filter((r) => r.path === "partners").forEach((r) => r.resolve({})); await again;
   assert.equal(h.context.painted[0].id, "b-message");
+});
+
+test("引用块跟着消息一起出现：她看得见自己指的是哪一句", () => {
+  const h = renderHarness();
+  h.context.registerTick = () => {};
+  h.context.renderAll([
+    { id: "quoted", role: "user", text: "再联网搜一下这条", quote: { messageId: "m-news", text: "今天有一条新闻：某地天降橙雨" } },
+    { id: "plain", role: "user", text: "普通一句" },
+  ]);
+  const rows = h.el.stream.children;
+  const quoteNode = rows[0].querySelector(".message-quote");
+  assert.ok(quoteNode, "带引用的消息要画出引用块");
+  assert.match(quoteNode.textContent, /引用/);
+  assert.match(quoteNode.textContent, /天降橙雨/);
+  const col = rows[0].querySelector(".msg-col");
+  assert.equal(col.children[0], quoteNode, "引用块得站在气泡上方");
+  assert.equal(rows[1].querySelector(".message-quote"), null, "没引用的消息不该多出引用块");
+});
+
+test("空引用不画块：清掉引用只留标签行，不留空壳", () => {
+  const h = renderHarness();
+  h.context.registerTick = () => {};
+  h.context.renderAll([
+    { id: "blank", role: "user", text: "就这一句", quote: { messageId: "m1", text: "   " } },
+  ]);
+  const row = h.el.stream.children[0];
+  assert.equal(row.querySelector(".message-quote"), null);
+  assert.equal(row.querySelector(".bubble").textContent, "就这一句");
 });

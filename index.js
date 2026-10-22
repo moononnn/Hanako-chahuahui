@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { splitReply, stripTimeHeader } from "./lib/split.js";
 import { planTurn, DEFAULT_RHYTHM } from "./lib/rhythm.js";
@@ -30,7 +31,7 @@ import {
 import { hasPalette, isPaletteDone, normalizePalette, paletteToText } from "./lib/palette.js";
 import { createAvatarReader, looksLikeImage, toBytes } from "./lib/avatar.js";
 import { registerTavernImportService, renderImportedPersona } from "./lib/character-import.js";
-import { buildSystemPrompt, buildTeaseText, identityBlock, replyChoiceBlock, shouldQuietClose, threadToMessages } from "./lib/prompt.js";
+import { buildSystemPrompt, buildTeaseText, identityBlock, replyChoiceBlock, searchToolText, shouldQuietClose, threadToMessages, VOICE_REQUEST_TEXT } from "./lib/prompt.js";
 import { buildAmbientContextText, buildDaybookText, buildFestivalResponseText, daybookAvailable, daybookEntry, daybookHash, daybookQueryTopics, periodNoteDecision, previousAssistantBeforeUser, readDaybook, readDaybookVerbose, shouldUseDaybook } from "./lib/daybook.js";
 import { dueTodosFromSnapshot, nudgeKey, nudgeSeen, pickTodoNudger, todoNudgeText } from "./lib/todo-nudge.js";
 import { hasProposal, confirmProposal, makeProposal, proposalAskText, proposeFromMessage } from "./lib/todo-propose.js";
@@ -49,7 +50,7 @@ import { createStore, createDiagnostics } from "./lib/store.js";
 import { createFocusCompanion, focusReminderSpec, focusChatText } from "./lib/focus-companion.js";
 import { composeWithSupersedeRetry, hasNewerUserMessage, isSpeechMessage } from "./lib/turn-window.js";
 import { createThreadRebuildScheduler } from "./lib/rebuild-queue.js";
-import { protectKey, isProtectedKey, encryptionStatus } from "./lib/crypto.js";
+import { protectKey, unprotectKey, isProtectedKey, encryptionStatus } from "./lib/crypto.js";
 import { listBackgrounds, readBackgroundBytes, writeBackground, removeBackgroundFile, normalizeOpacity, normalizeTone, isBackgroundFile, fileTypeOf } from "./lib/background.js";
 import { pruneStickerUsage, recordStickerUsage } from "./lib/sticker-usage.js";
 import {
@@ -125,14 +126,53 @@ import {
   parseNativeHobbyReply,
   validateNativeHobbies,
 } from "./lib/growth.js";
+import {
+  needsWorldInterests,
+  parseWorldInterestReply,
+  replaceWorldInterests,
+  validateWorldInterests,
+  worldInterestSpec,
+  WORLD_SEED_RETRY_MS,
+} from "./lib/world-interests.js";
+import {
+  addNewsItems,
+  markNewsFetched,
+  markNewsOffered,
+  markNewsShared,
+  newsFetchDue,
+  newsQueryFor,
+  newsQuotaAvailable,
+  newsShareLimit,
+  newsText,
+  newsTopicFor,
+  nextNewsItem,
+  normalizeNewsBook,
+  noteNewsSent,
+  pickDomainForNews,
+  rejectNewsItem,
+} from "./lib/news-feed.js";
 import { cleanVoice, farewellSpec, hasOpenHook, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNighttimeSleepQuestion, isNoReply, isUsableVoice, nightSpec, proactiveSpec, stirredSpec } from "./lib/compose.js";
-import { formatSearchContext, searchTimelyTopic, isSafeSearchQuery } from "./lib/topic-search.js";
-import { searchVideos, collectVideoMaterials, readVideoCredential, writeVideoCredential, clearVideoCredential } from "./lib/video-source.js";
+import { formatSearchContext, isSafeSearchQuery } from "./lib/topic-search.js";
+import { searchVideos, fetchPopularVideos, collectVideoMaterials, readVideoCredential, writeVideoCredential, clearVideoCredential } from "./lib/video-source.js";
 import { createVideoLogin } from "./lib/video-login.js";
 import { normalizeVideoBook, makeVideoCandidate, addVideoCandidate, nextVideoCandidate, offerVideoCandidate, recordVideoShare,
+  arrangeShareBubbles,
   selectVideoShares, videoRecallText, videoCognitions, applyVideoFeedback, videoShareLimit, videoQuotaAvailable, noteVideoSent, matchVideoStop,
-  hasVideoShareLink } from "./lib/video-sharing.js";
-import { findPreviousSearchContext, isChatSearchCandidate, searchForChat } from "./lib/chat-search.js";
+  hasVideoShareLink, selectVideoResults } from "./lib/video-sharing.js";
+import { findPreviousSearchContext, filterRelevantSearchResults, isChatSearchCandidate, isFreshEnough, searchForChat } from "./lib/chat-search.js";
+import { SEARCH_TOOL, SEARCH_TOOL_NAME, TOOL_EMPTY_TEXT, TOOL_UNSAFE_TEXT, formatToolResults, sanitizeToolQuery } from "./lib/search-tool.js";
+import {
+  createSearchSession,
+  engineAllowsUndated,
+  listSearchEngines,
+  normalizeSearchOrder,
+  normalizeSearchEnhancement,
+  normalizeSearchEngine,
+  recordSearchUsage,
+  searchWeb,
+  searchWithEngine,
+  usageCount,
+} from "./lib/search-engine.js";
 import {
   addDiscovery,
   explorationDue,
@@ -424,6 +464,10 @@ let compactReplyPilotId = "";
 const DEV_TOOLS = true;
 // CHF-20261012-01~04：仅本地普通回复试点；设为空字符串即可回旧版。
 compactReplyPilotId = DEV_TOOLS ? "hanako" : "";
+let localDevHooks = null;
+if (DEV_TOOLS && fs.existsSync(new URL("./lib/local-dev.js", import.meta.url))) {
+  localDevHooks = await import("./lib/local-dev.js");
+}
 // __CHAHUAHUI_DEV_ONLY_END__
 
 export function videoLoginNoticeDue(login, noted, now = new Date()) {
@@ -464,6 +508,14 @@ export function apply(ctx) {
   function videoQuota(now = new Date()) {
     return videoQuotaAvailable(store.getGlobalRuntime().videoShares,
       videoShareLimit(store.getGlobalSettings().videoShareMaxPerDay), dayKey(now));
+  }
+  /**
+   * 新闻每天的天（2026-10-20）。跟视频分开记：视频一天最多 5 条是「她想刷就刷」，
+   * 新闻是主动插进来的，一天两条封顶，再多就变成推送了。
+   */
+  function newsQuota(now = new Date()) {
+    return newsQuotaAvailable(store.getGlobalRuntime().newsShares,
+      newsShareLimit(store.getGlobalSettings().newsShareMaxPerDay), dayKey(now));
   }
   // App service 注册是入口登记，不在装载期请求宿主数据或调用模型；能力未授权时茶话会本体仍照常加载。
   try {
@@ -552,20 +604,194 @@ export function apply(ctx) {
     }
   }
 
+  /**
+   * 页面里写死的那个版本号。
+   * 上面那个哈希是后端算的，页面旧了它照样会把新值显示出来，证明不了她眼前是哪一版；
+   * 这个号写在页面源码里，两边对不上就说明 webview 里那一页还没更新。
+   */
+  function settingsUiBuild() {
+    try {
+      const file = path.join(path.dirname(fileURLToPath(import.meta.url)), "ui", "settings.html");
+      return fs.readFileSync(file, "utf8").match(/const UI_BUILD = "([^"]+)"/u)?.[1] || "unknown";
+    } catch {
+      return "unknown";
+    }
+  }
+
   function globalSettingsView() {
     const global = store.getGlobalSettings();
     const maskVoice = (config) => config ? { ...config, apiKey: config.apiKey ? "********" : "" } : null;
     const activeModel = global.voiceModel || {};
     return {
       ...global,
+      // 设置页自报构建号：webview 可能拿着缓存的旧页面，对不上时页面自己会把提示露出来。
+      settingsUiBuild: settingsUiBuild(),
       voiceModel: maskVoice(activeModel),
       voiceProfiles: Object.fromEntries(Object.entries(global.voiceProfiles || {}).map(([id, profile]) => [id, { ...profile, config: maskVoice(profile.config) }])),
       // 少一个必填项就等于一条也合成不出来；设置页直接把这件事说清楚。
       voiceReady: Boolean(activeModel.baseUrl && activeModel.model && activeModel.apiKey),
       // 系统加密用不上时 Key 就是明文躺着，界面得如实说，不能让她以为已经加密。
       voiceKeyEncrypted: isProtectedKey(activeModel.apiKey),
+      // 搜索增强：Key 不回传页面，只给「存没存」「这个月用了多少次」。
+      searchEnhancement: {
+        engine: global.searchEnhancement?.engine || "bing",
+        // 搜索顺序：第一家就是现在走的那家，后面依次降级；默认搜索一定在名单里（兜底）。
+        order: normalizeSearchOrder(global.searchEnhancement?.order ?? [global.searchEnhancement?.engine ?? "bing"]),
+        engines: listSearchEngines().map((spec) => ({
+          id: spec.id,
+          label: spec.label,
+          keyRequired: spec.keyRequired,
+          keyHint: spec.keyHint,
+          hasKey: Boolean(global.searchEnhancement?.keys?.[spec.id]),
+          // 系统加密用不上时会退回本机锁：她得知道这把 Key 的保护范围到哪儿为止。
+          keyEncrypted: isProtectedKey(global.searchEnhancement?.keys?.[spec.id] || ""),
+        })),
+        states: global.searchEnhancement?.states || {},
+        usageThisMonth: usageCount(global.searchEnhancement?.usage),
+        usageByEngine: global.searchEnhancement?.usageByEngine || {},
+      },
       effectiveUserName: USER_NAME,
       myActionTail: actionTailFromTemplate(readMyTemplateEntry(global)),
+    };
+  }
+
+  /**
+   * 旧结构里那把单独的 Key 可能还是明文：加密搬进 keys.tavily，顺手丢掉旧字段。
+   * 三条路都会经过这里（聊天、保存、测试），任何一次写盘都不会让明文留在文件里。
+   */
+  async function migrateLegacySearchKey() {
+    const saved = store.getGlobalSettings().searchEnhancement || {};
+    if (!saved.legacyApiKey) return saved;
+    const plain = String(saved.legacyApiKey);
+    const stored = plain ? await protectKey(plain) : "";
+    const fresh = store.getGlobalSettings().searchEnhancement || {};
+    const { legacyApiKey, ...rest } = fresh;
+    const next = stored ? { ...rest, keys: { ...(rest.keys || {}), tavily: stored } } : rest;
+    store.setGlobalSettings({ searchEnhancement: next });
+    return next;
+  }
+
+  /** 搜索增强的真配置：Key 是密文存的，发请求前解开。 */
+  async function searchEnhancementConfig() {
+    await migrateLegacySearchKey();
+    const current = store.getGlobalSettings().searchEnhancement || {};
+    const keys = {};
+    for (const [id, value] of Object.entries(current.keys || {})) {
+      keys[id] = value ? await unprotectKey(value) : "";
+    }
+    return { ...current, engine: normalizeSearchEngine(current.engine), keys };
+  }
+
+  /**
+   * 每发一次请求记一笔：她填的是自己的额度，得让她看得见花了多少。
+   * 按引擎分开记：换一家不该把别家的账搅在一起。
+   */
+  function noteSearchUsage(count = 1, engine = "") {
+    const times = Math.max(0, Math.floor(Number(count) || 0));
+    if (!times) return;
+    const saved = store.getGlobalSettings().searchEnhancement || {};
+    let usage = saved.usage || {};
+    const byEngine = { ...(saved.usageByEngine || {}) };
+    for (let index = 0; index < times; index += 1) usage = recordSearchUsage(usage);
+    const id = normalizeSearchEngine(engine);
+    if (id !== "bing") byEngine[id] = (byEngine[id] ?? 0) + times;
+    store.setGlobalSettings({ searchEnhancement: { ...saved, usage, usageByEngine: byEngine } });
+  }
+
+  /**
+   * 聊天里撞上鉴权/额度类的失败，要把它记下来。
+   * 不记的话，熔断永远不上膛：每条要搜的消息都先白吃一次超时。
+   * 只改状态，不碰 Key。
+   */
+  function markSearchEngineFailed(reason, engine = "", anonymous = false) {
+    const id = normalizeSearchEngine(engine);
+    if (id === "bing") return;
+    const saved = store.getGlobalSettings().searchEnhancement || {};
+    const states = { ...(saved.states || {}) };
+    const current = states[id];
+    // 限流是瞬时的：已经失败过的时候只刷新冷却时钟，别把原因盖掉。
+    if (current?.status === "failed") {
+      if (!/http-429/iu.test(String(reason))) return;
+      states[id] = { ...current, testedAt: new Date().toISOString() };
+    } else {
+      states[id] = { status: "failed", testedAt: new Date().toISOString(), error: `搜索服务没接上（${reason}）` };
+    }
+    void anonymous;
+    store.setGlobalSettings({ searchEnhancement: { ...saved, states } });
+  }
+
+  /**
+   * 一轮搜索的花销与故障记账：链上有几家真发过包就各记各的，
+   * 鉴权/额度类失败落成状态，熔断才上得了膛。
+   */
+  function bookSearchOutcome(search) {
+    if (!search) return;
+    const calls = Array.isArray(search.calls) ? search.calls : [];
+    if (calls.length) {
+      for (const call of calls) noteSearchUsage(1, call.engine);
+    } else if (search.enhancedCalls) {
+      noteSearchUsage(search.enhancedCalls, search.enhancedEngine);
+    }
+    for (const failure of Array.isArray(search.failures) ? search.failures : []) {
+      if (SEARCH_ENGINE_HARD_FAIL_RE.test(String(failure.reason ?? ""))) markSearchEngineFailed(failure.reason, failure.engine);
+    }
+  }
+
+  /**
+   * 伙伴自己发起的搜索（2026-10-21）。
+   *
+   * 以前搜索是「应用在回复前代为搜」：关键词规则先判定这句要不要查，搜到的材料塞进提示词，
+   * 伙伴全程没有发起权——它说「我去查」是句空话，下一轮只能改口「你把链接甩我嘛」。
+   * 现在搜索是一个真工具：它自己决定查不查、自己写搜索词，这里负责执行、回结果、记账。
+   *
+   * 隐私门沿用老规矩：搜索词里不许有她的名字、私人经历、联系方式。
+   * 工具回给它的只是标题与摘要——它没读过那篇网页，这话也得在提示词里说清楚。
+   */
+  function createWebSearchTool({ agentId, partnerName }) {
+    const fetcher = typeof ctx.network?.fetch === "function" ? ctx.network.fetch.bind(ctx.network) : null;
+    return async ({ name, arguments: args } = {}) => {
+      if (name !== SEARCH_TOOL_NAME) {
+        return { isError: true, text: "这个工具不存在。就用手上已有的东西说话。" };
+      }
+      const raw = args?.query ?? args?.q ?? args?.keyword ?? args?.search ?? "";
+      const checked = sanitizeToolQuery(raw, { privateTerms: [USER_NAME, partnerName] });
+      if (!checked.ok) {
+        diagnostics({ event: "chat.tool.blocked", agentId, reason: checked.reason });
+        return {
+          isError: true,
+          text: checked.reason === "unsafe-query" ? TOOL_UNSAFE_TEXT : "没说要搜什么。转回聊天本身。",
+        };
+      }
+      if (!fetcher) return { isError: true, text: TOOL_EMPTY_TEXT };
+      try {
+        const enhancement = await searchEnhancementConfig();
+        const search = await searchWeb(fetcher, {
+          query: checked.query,
+          enhancement,
+          privateTerms: [USER_NAME, partnerName],
+          maxResults: 8,
+          session: createSearchSession(),
+        });
+        bookSearchOutcome(search);
+        diagnostics({
+          event: "chat.tool.search",
+          agentId,
+          ok: search.ok === true,
+          reason: search.reason ?? null,
+          engine: search.engine ?? null,
+          enhancedEngine: search.enhancedEngine ?? null,
+          results: search.results?.length ?? 0,
+        });
+        if (!search.ok || !search.results?.length) return { isError: true, text: TOOL_EMPTY_TEXT };
+        const now = new Date();
+        const fresh = search.results.filter((row) => isFreshEnough(row, now, engineAllowsUndated(search.engine)));
+        const relevant = filterRelevantSearchResults(checked.query, fresh.length ? fresh : search.results);
+        if (!relevant.results.length) return { isError: true, text: TOOL_EMPTY_TEXT };
+        return { isError: false, text: formatToolResults(relevant.results) };
+      } catch (error) {
+        diagnostics({ event: "chat.tool.failed", agentId, error: describeError(error) });
+        return { isError: true, text: TOOL_EMPTY_TEXT };
+      }
     };
   }
 
@@ -584,9 +810,13 @@ export function apply(ctx) {
     return daybookAvailable(ctx);
   }
 
+  // 鉴权/额度类的失败：得记成状态，熔断才上得了膛（不然后面每轮都白等一次超时）。
+  // 429 是限流、瞬时会恢复，也记上——引擎层会按冷却时间放行。
+  const SEARCH_ENGINE_HARD_FAIL_RE = /http-401|http-402|http-403|http-433|http-429|quota|missing-key/iu;
+
   const GLOBAL_SETTING_KEYS = new Set([
     "model", "recognitionModel", "vision", "userNameOverride", "daybookEnabled", "workfeedEnabled",
-    "globalGate", "quiet", "actionStyle", "messageAvatars", "messageRefine", "myActionTail",
+    "globalGate", "quiet", "actionStyle", "messageAvatars", "messageRefine", "typingIndicator", "myActionTail",
     "rhythmEnabled", "rhythmStyleEnabled", "rhythmProactiveEnabled", "rhythmResetAt", "voiceEnabled", "voiceDelivery", "voiceProfiles", "voiceProfile", "videoShareMaxPerDay",
   ]);
   const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "vision", "voice", "partnerFeedEnabled", "videoSharingEnabled"]);
@@ -1582,13 +1812,30 @@ export function apply(ctx) {
    * 合并与延后逻辑在 lib/rebuild-queue.js，那里有单测。
    */
   const threadRebuild = createThreadRebuildScheduler({
-    run: (agentId, days) => queueMemoryJob(agentId, async () => {
-      for (const day of days) await rebuildLedgerDay(agentId, day);
-      await maybeRollup(agentId);
-      await maybeRefreshProfile(agentId, { force: true });
-    }),
+    readState: (agentId) => store.getPartnerSettings(agentId).memoryRebuild ?? null,
+    writeState: (agentId, state) => store.setPartnerSettings(agentId, { memoryRebuild: state }),
+    retryDelaysMs: [60_000, 300_000],
+    run: (agentId, days) => {
+      const generation = store.getPartnerSettings(agentId).memoryRebuild?.generation;
+      if (!Number.isSafeInteger(generation)) return { ok: false, error: "missing-rebuild-generation" };
+      return queueMemoryJob(agentId, async () => {
+        if (store.getPartnerSettings(agentId).memoryRebuild?.generation !== generation) return { ok: false, error: "superseded" };
+        const failures = [];
+        for (const day of days) {
+          const result = await rebuildLedgerDay(agentId, day);
+          if (!result.updated && result.reason !== "no-remaining-messages") failures.push(`ledger:${day}:${result.reason}`);
+        }
+        const rolled = await maybeRollup(agentId);
+        if (!rolled.rolled && rolled.reason) failures.push(`archive:${rolled.reason}`);
+        const profile = await refreshProfile(agentId, 30, { remainingOnly: true });
+        if (!profile.updated && profile.reason !== "no-material") failures.push(`profile:${profile.reason}`);
+        diagnostics({ event: "memory.rebuild.result", agentId, ok: failures.length === 0, failures });
+        return { ok: failures.length === 0, error: failures.join("; ") || null };
+      }).then((result) => typeof result?.ok === "boolean" ? result : { ok: false, error: "记忆重建任务未返回有效结果" });
+    },
     onSchedule: ({ agentId, delayMs, days }) => diagnostics({ event: "memory.rebuild.scheduled", agentId, delayMs, days }),
   });
+  for (const agentId of Object.keys(store.allPartnerSettings())) threadRebuild.resume(agentId);
 
   // 旧调用方只给 systemPrompt/userText 时行为不变（不传 messages，askUtility 仍包一条 user）。
   // 需要带真实聊天历史的那几路（主动开口、视频分享）在这里把 messages 转交下去。
@@ -1600,6 +1847,54 @@ export function apply(ctx) {
     timeoutMs: options.timeoutMs ?? 120_000,
     diagnostics,
   });
+
+  const memorySourceStamp = (agentId) => JSON.stringify(store.getThread(agentId).messages.map((row) =>
+    [row.id, row.role, row.text, row.at, row.kind, row.recalled, row.recallMode, row.proactive, row.repliedTo]));
+
+  // 自服务RPC由宿主重新进入App作用域，避免延后任务继承已经结束的工具调用凭证。
+  // 只包模型调用，业务串行队列仍在外层，不能在服务里再次排同一把队列。
+  try {
+    ctx.bus.handle("memory-generate", async (payload, { callerAppId, signal }) => {
+      if (callerAppId !== "chahuahui") throw new Error("记忆生成服务仅供本应用调用");
+      const modelRef = normalizeModelRef(payload?.modelRef);
+      if (!modelRef || typeof payload?.systemPrompt !== "string" || typeof payload?.userText !== "string"
+        || !Number.isFinite(payload?.maxTokens) || payload.maxTokens < 8192 || payload.maxTokens > 16384) {
+        throw new Error("记忆生成参数不完整");
+      }
+      return generateReply(ctx, {
+        systemPrompt: payload.systemPrompt, messages: [{ role: "user", content: payload.userText }],
+        modelRef, catalog: [modelRef], maxTokens: payload.maxTokens, temperature: 0.4,
+        diagnostics, retryDelaysMs: [], allowUtilityFallback: false, strictOutput: true, signal,
+      });
+    }, { allowCrossApp: false });
+  } catch (error) {
+    diagnostics({ event: "memory.service.unavailable", error: describeError(error) });
+  }
+
+  // 记忆材料交给该伙伴当前的聊天模型；一次任务固定选择，不借共享工具模型代写。
+  function memoryAsker(agentId) {
+    let selected;
+    return async (systemPrompt, userText, maxTokens = 500) => {
+      selected ??= (async () => {
+        const catalog = await ctx.models.list();
+        const choice = resolveModelChoice(catalog, {
+          partnerRef: store.getPartnerSettings(agentId).model,
+          globalRef: store.getGlobalSettings().model,
+          agentRef: await agentDefaultModel(agentId),
+        });
+        if (!choice) throw new Error("记忆整理没有可用的伙伴聊天模型");
+        diagnostics({ event: "memory.model.choice", agentId, ...choice });
+        return { catalog, choice };
+      })();
+      const { choice } = await selected;
+      const result = await ctx.bus.request("app:chahuahui/memory-generate", {
+        systemPrompt, userText: String(userText ?? ""), modelRef: choice,
+        maxTokens: Math.max(8192, Number(maxTokens) || 0),
+      }, { timeout: 180_000 });
+      if (typeof result?.text !== "string" || !result.text.trim()) throw new Error("记忆生成没有有效正文");
+      return result.text;
+    };
+  }
 
   /**
    * 明确偏好只在候选消息上走一次短 reconciler。
@@ -1943,7 +2238,8 @@ export function apply(ctx) {
       store.markRolledThrough(agentId, plan.batch.at(-1).id);
       return { rolled: true, count: 0 };
     }
-    const result = await runSummary(askCheap, segmentSpec(material, USER_NAME));
+    const askMemory = memoryAsker(agentId);
+    const result = await runSummary(askMemory, segmentSpec(material, USER_NAME));
     if (!result.ok) {
       diagnostics({ event: "memory.rollup.failed", agentId, reason: result.reason, error: result.error ?? null });
       return { rolled: false, reason: result.reason };
@@ -1953,7 +2249,7 @@ export function apply(ctx) {
     try {
       const factSpec = buildLongtermSpec(material, { userName: USER_NAME, partnerName, eligibleIds: eligible });
       // 复用原事实整理这一次调用；结构化结果留足正文空间，不增加每轮后台调用。
-      const factRaw = await askCheap(factSpec.systemPrompt, factSpec.userText, 2000);
+      const factRaw = await askMemory(factSpec.systemPrompt, factSpec.userText, 2000);
       const parsedEntries = parseLongtermResult(factRaw, material, new Date(), { eligibleIds: eligible });
       const parsedFacts = parseFactsResult(factRaw, material);
       if (!parsedEntries.ok || !parsedFacts.ok) throw new Error("facts.parse-failed");
@@ -1974,24 +2270,33 @@ export function apply(ctx) {
   }
 
   /** 关系档案：把新聊到的并进"我认识的她"。 */
-  async function refreshProfile(agentId, sampleSize = 30) {
+  async function refreshProfile(agentId, sampleSize = 30, { remainingOnly = false } = {}) {
+    const sourceStamp = memorySourceStamp(agentId);
     const memory = store.readMemory(agentId);
     // 她没接住的主动独白不进画像素材（2026-10-06 修）：那些话只是伙伴自己在琢磨的东西，
     // 混进去就会被写成「我们商量过的事」「她还没定」，档案一脏，后面每条消息都踩着假来处走。
     const recent = dropUnansweredProactive(conversationMessages(store.getThread(agentId).messages)).slice(-sampleSize);
     // Hana 那边记着的「关于她的事」也带进来：那边抽出的事实和这边聊出来的印象，合起来才是一个人
-    const persona = await getPersona(agentId);
-    const facts = String(persona?.files?.facts ?? "");
+    const persona = remainingOnly ? null : await getPersona(agentId);
+    const facts = remainingOnly ? "" : String(persona?.files?.facts ?? "");
     // 这边还没聊过也不要紧：只要那边有关于她的事，就先起一版底稿（跟起跑线一个道理）
-    if (recent.length === 0 && !facts.trim()) return { updated: false, reason: "no-material" };
+    if (recent.length === 0 && !facts.trim()) {
+      if (remainingOnly) {
+        if (memorySourceStamp(agentId) !== sourceStamp) return { updated: false, reason: "source-changed" };
+        store.writeMemory(agentId, { ...store.readMemory(agentId), profile: { text: "", updatedAt: null, source: null, quarantine: null } });
+        store.setPartnerSettings(agentId, { profileRefreshedAt: null });
+      }
+      return { updated: false, reason: "no-material" };
+    }
     const partner = (await listPartners()).find((row) => row.id === agentId);
     const partnerName = partner?.name ?? agentId;
-    const judgmentText = longtermBlock(recallMemoryEntries(memory, recent.slice(-8).map((row) => row.text ?? "").join(" ")));
-    const result = await runSummary(askCheap, profileSpec(memory.profile.text, recent, USER_NAME, facts, partnerName, judgmentText));
+    const judgmentText = remainingOnly ? "" : longtermBlock(recallMemoryEntries(memory, recent.slice(-8).map((row) => row.text ?? "").join(" ")));
+    const result = await runSummary(memoryAsker(agentId), profileSpec(remainingOnly ? "" : memory.profile.text, recent, USER_NAME, facts, partnerName, judgmentText));
     if (!result.ok) {
       diagnostics({ event: "memory.profile.failed", agentId, reason: result.reason, error: result.error ?? null });
       return { updated: false, reason: result.reason };
     }
+    if (memorySourceStamp(agentId) !== sourceStamp) return { updated: false, reason: "source-changed" };
     if (!isProfileIdentitySafe(result.text, partnerName)) {
       store.quarantineProfile(agentId, result.text, "identity-mismatch", {
         partnerName,
@@ -2025,6 +2330,7 @@ export function apply(ctx) {
 
   /** 跨天了：给最近一个尚未收口的旧日子补一条日账，顺手更新档案。 */
   async function maybeCloseDay(agentId) {
+    const sourceStamp = memorySourceStamp(agentId);
     const rows = conversationMessages(store.getThread(agentId).messages);
     if (rows.length === 0) return { closed: false, reason: "empty" };
     const today = dayKey();
@@ -2034,7 +2340,7 @@ export function apply(ctx) {
     if (!lastDay) return { closed: false, day: today };
     const sameDay = rows.filter((row) => dayKey(row.at) === lastDay);
     if (sameDay.length === 0) return { closed: false, day: lastDay };
-    const result = await runSummary(askCheap, dailySpec(sameDay, lastDay, USER_NAME));
+    const result = await runSummary(memoryAsker(agentId), dailySpec(sameDay, lastDay, USER_NAME));
     if (!result.ok) {
       diagnostics({
         event: "memory.ledger.failed",
@@ -2045,6 +2351,7 @@ export function apply(ctx) {
       });
       return { closed: false, day: lastDay, reason: result.reason };
     }
+    if (memorySourceStamp(agentId) !== sourceStamp) return { closed: false, day: lastDay, reason: "source-changed" };
     store.upsertLedger(agentId, lastDay, result.text);
     diagnostics({ event: "memory.ledger.ok", agentId, day: lastDay, chars: result.text.length });
     await maybeRefreshProfile(agentId, { force: true });
@@ -2053,22 +2360,24 @@ export function apply(ctx) {
 
   /** 回复删除后，按剩下的聊天记录重建被清理的那一天；失败时旧摘要已清掉，不会继续引用被删内容。 */
   async function rebuildLedgerDay(agentId, day) {
+    const sourceStamp = memorySourceStamp(agentId);
     const rows = conversationMessages(store.getThread(agentId).messages).filter((row) => dayKey(row.at) === day);
     if (!rows.length) return { updated: false, reason: "no-remaining-messages" };
-    const result = await runSummary(askCheap, dailySpec(rows, day, USER_NAME));
+    const result = await runSummary(memoryAsker(agentId), dailySpec(rows, day, USER_NAME));
     if (!result.ok) {
       diagnostics({ event: "memory.ledger.rebuild-after-delete.failed", agentId, day, reason: result.reason });
       return { updated: false, reason: result.reason };
     }
+    if (memorySourceStamp(agentId) !== sourceStamp) return { updated: false, reason: "source-changed" };
     store.upsertLedger(agentId, day, result.text);
     return { updated: true };
   }
 
   /** 把一条主动消息送进她那个窗（她不在也照发，显示未读）。 */
-  async function deliverProactive(agentId, { partnerName, topic, hobby, discovery, seed, video = null, videoLoginNotice = null, reason = null, reasonCandidates = [], exception, followup, wakeEcho, sceneEcho, kind = "proactive", activity = null, sleepStart = "", greetingOnly = false, morningFirst = false, todoNudge = "" }) {
+  async function deliverProactive(agentId, { partnerName, topic, hobby, discovery, seed, video = null, news = null, videoLoginNotice = null, reason = null, reasonCandidates = [], exception, followup, wakeEcho, sceneEcho, kind = "proactive", activity = null, sleepStart = "", greetingOnly = false, morningFirst = false, todoNudge = "" }) {
     const videoStamp = video || videoLoginNotice ? threadStamp(agentId) : null;
     await loadUserName();
-    const memoryQuery = [reason?.kind === "interest" ? topic : "", reason?.text, hobby?.name, discovery?.text, seed?.title, video?.video?.title, followup?.text, sceneEcho?.text]
+    const memoryQuery = [reason?.kind === "interest" ? topic : "", reason?.text, hobby?.name, discovery?.text, seed?.title, video?.video?.title, news?.title, followup?.text, sceneEcho?.text]
       .filter((value) => typeof value === "string").join(" ");
     const memoryText = buildMemoryBlock(store.readMemory(agentId), { query: memoryQuery });
     // 主动开口也得是「ta 本人」在说话：跟面对面回复用同一份人格来源。
@@ -2104,8 +2413,11 @@ export function apply(ctx) {
       }
     }
     const shareableVideo = interestContent && video && videoPartnerEnabled(agentId) && videoQuota() ? video : null;
-    const shareableDiscovery = interestContent && !shareableVideo ? discoveryForProactiveMessage(discovery, { exception }) : null;
-    const shareableSeed = interestContent && !shareableVideo ? seed ?? null : null;
+    // 新闻排在观察式前面（2026-10-20）：它一天最多两条、有冷却，而观察式已经限了每日一条。
+    // 这样“有话想说”的名额优先给外面正在发生的事，种子和探索发现留在账上等下一次。
+    const shareableNews = interestContent && !shareableVideo && news && newsQuota() ? news : null;
+    const shareableDiscovery = interestContent && !shareableVideo && !shareableNews ? discoveryForProactiveMessage(discovery, { exception }) : null;
+    const shareableSeed = interestContent && !shareableVideo && !shareableNews ? seed ?? null : null;
     const shareableHobby = shareableSeed
       ? hobby ?? { id: shareableSeed.motifId, name: shareableSeed.motifName }
       : shareableDiscovery || shareableVideo ? hobby : null;
@@ -2247,7 +2559,7 @@ export function apply(ctx) {
               sleepStart,
               stickerText,
             })
-          : proactiveSpec({ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, video: shareableVideo, videoLoginNotice, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, morningFirst: morningFirstScene, askBudgetSpent: askSpent, reason: sendReason, introducedText });
+          : proactiveSpec({ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, video: shareableVideo, news: shareableNews, videoLoginNotice, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, morningFirst: morningFirstScene, askBudgetSpent: askSpent, reason: sendReason, introducedText });
 
     let raw = "";
     try {
@@ -2337,9 +2649,9 @@ export function apply(ctx) {
       });
       return { ok: false, reason: "repeat-phrasing" };
     }
-    if (text && needsClarityReview({ seed: shareableSeed, discovery: shareableDiscovery, exception, kind, todoNudge, followup, greetingOnly, wakeEcho })) {
+    if (text && needsClarityReview({ seed: shareableSeed, discovery: shareableDiscovery, news: shareableNews, exception, kind, todoNudge, followup, greetingOnly, wakeEcho })) {
       const clarity = await reviewProactiveClarity({
-        text, seed: shareableSeed, discovery: shareableDiscovery,
+        text, seed: shareableSeed, discovery: shareableDiscovery, news: shareableNews,
         sharedContext: JSON.stringify({
           currentTime: currentTimeText,
           conversationMemory: memoryText,
@@ -2351,8 +2663,8 @@ export function apply(ctx) {
         ask: askCheap,
       });
       if (!clarity.ok) {
-        persistClarityRejection(store, agentId, clarity, { seed: shareableSeed, discovery: shareableDiscovery });
-        diagnostics({ event: "proactive.clarity-skipped", agentId, seedId: shareableSeed?.id ?? null, discoveryId: shareableDiscovery?.id ?? null, reason: clarity.reason });
+        persistClarityRejection(store, agentId, clarity, { seed: shareableSeed, discovery: shareableDiscovery, news: shareableNews });
+        diagnostics({ event: "proactive.clarity-skipped", agentId, seedId: shareableSeed?.id ?? null, discoveryId: shareableDiscovery?.id ?? null, newsId: shareableNews?.id ?? null, reason: clarity.reason });
         return { ok: false, reason: "clarity-skipped" };
       }
     }
@@ -2366,17 +2678,24 @@ export function apply(ctx) {
     if (shareableVideo) {
       // 分享这一段由系统给：真人点 B 站「分享」拿到的就是「【标题-哔哩哔哩】 短链」，
       // 让模型自己写只会写成一条裸链接（而且它没能力生成短链，也不该编）。
-      // 模型如果还是把链接写进了气泡，先拿掉，免得到时候一条长、一条短重复。
-      const video = shareableVideo.video;
-      const escaped = String(video.link).replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-      const kept = bubbles
-        .map((line) => String(line).replace(new RegExp(escaped, "gu"), "").replace(/[ \t]+$/u, "").trim())
-        .filter((line) => line.length > 0);
-      bubbles = [...kept, video.shareText];
-      diagnostics({ event: "video.share.card", agentId, videoId: shareableVideo.id, droppedBubbles: composed.bubbles.length - kept.length });
+      // 位置每次掷一次（2026-10-22）：有时先说两句再补链接，有时先甩卡片再补话。
+      const linkFirst = Math.random() < 0.5;
+      const shareCount = shareableVideo.video.shareText ? 1 : 0;
+      bubbles = arrangeShareBubbles(bubbles, shareableVideo.video, { linkFirst });
+      diagnostics({
+        event: "video.share.card", agentId, videoId: shareableVideo.id, linkFirst,
+        droppedBubbles: composed.bubbles.length - (bubbles.length - shareCount),
+      });
     }
     if (shareableVideo && !hasVideoShareLink(visibleTextOf(bubbles), shareableVideo.video)) {
       return { ok: false, reason: "video-link-lost" };
+    }
+    // 新闻的稿子发出去之前再核一遍：配额、伙伴开关、这条是不是还在池子里。
+    // 跟视频同一个道理——中间可能已经过了一轮，天也可能已经换了。
+    if (shareableNews && (!newsQuota() || !store.getProactiveState(agentId).newsBook
+      || !normalizeNewsBook(store.getProactiveState(agentId).newsBook).items.some((row) => row.id === shareableNews.id && !row.sharedAt && !row.rejectedAt))) {
+      diagnostics({ event: "news.share.stale", agentId, newsId: shareableNews.id });
+      return { ok: false, reason: "news-stale" };
     }
 
     let preparedVoice = await prepareVoice(agentId, text, { kind: "proactive" });
@@ -2428,6 +2747,7 @@ export function apply(ctx) {
       topicId: topic?.id ?? null,
       discoveryId: shareableDiscovery?.id ?? null,
       seedId: shareableSeed?.id ?? null,
+      ...(shareableNews ? { newsId: shareableNews.id, newsTitle: shareableNews.title } : {}),
       ...(shareableVideo ? { videoId: shareableVideo.id, videoLink: shareableVideo.video.link } : {}),
       ...(videoLoginNotice ? { videoLoginNotice: true } : {}),
       interestId: shareableHobby?.id ?? shareableDiscovery?.interestId ?? null,
@@ -2438,6 +2758,14 @@ export function apply(ctx) {
     if (shareableVideo) {
       store.saveVideoBook(agentId, recordVideoShare(store.getVideoBook(agentId), shareableVideo, stored));
       store.setGlobalRuntime({ videoShares: noteVideoSent(store.getGlobalRuntime().videoShares, dayKey(new Date(stored.at))) });
+    }
+    if (shareableNews) {
+      // 真的发出去了才算讲过；空正文、重复措辞、清晰度核查拦下的都还在池子里。
+      store.setProactiveState(agentId, {
+        newsBook: markNewsShared(normalizeNewsBook(store.getProactiveState(agentId).newsBook), shareableNews.id, text, new Date(stored.at)),
+      });
+      store.setGlobalRuntime({ newsShares: noteNewsSent(store.getGlobalRuntime().newsShares, dayKey(new Date(stored.at))) });
+      diagnostics({ event: "news.share.ok", agentId, newsId: shareableNews.id, domain: shareableNews.domainName });
     }
     if (videoLoginNotice) {
       store.setGlobalRuntime({ videoLoginNotice: { episodeId: videoLoginNotice.episodeId || "expired", day: dayKey(new Date(stored.at)), sentAt: stored.at, messageId: stored.id, agentId } });
@@ -3089,6 +3417,20 @@ export function apply(ctx) {
           diagnostics({ event: "interest.exploration.failed", agentId, error: describeError(error) });
         });
       }
+      // 世界领域与新闻（2026-10-20）：领域不够先补齐；新闻池空了且到点，就去取一趟外面的新料。
+      // 这一条独立于兴趣探索的节拍：探索那套 18~36 小时才跑一次，产出的又多半是冷门考据，
+      // 而主动消息真正缺的是“外面这阵子在发生什么”。
+      await maybeTendWorldInterests(agentId).catch((error) => {
+        diagnostics({ event: "knowing.world.tick.failed", agentId, error: describeError(error) });
+      });
+      if (!newsQuota(now)) {
+        // 天用完了就把下一次取料往后推，别每轮都在配额门口空转。
+        store.setProactiveState(agentId, { newsBook: markNewsFetched(normalizeNewsBook(store.getProactiveState(agentId).newsBook, now), "", now) });
+      } else if (!exploredThisTick) {
+        await maybeFetchNews(agentId, now).catch((error) => {
+          diagnostics({ event: "news.fetch.tick.failed", agentId, error: describeError(error) });
+        });
+      }
       state = store.getProactiveState(agentId);
       const pending = takeIntent(state, now);
       // 轮到 ta 说这件事时，不等随机落点
@@ -3170,6 +3512,31 @@ export function apply(ctx) {
       const candidateDiscovery = followup?.read || candidateSeed || candidateVideo
         ? null
         : nextDiscovery(state.interestLearning, now);
+      /**
+       * 观察式每天封顶一条（2026-10-20）。
+       *
+       * 实机反馈：最近的小花主动消息全是“我注意到 XX + 我的联想”，她完全不知道要回什么。
+       * 观察式本身没错（它是人味来源），错在它一天能连着占好几条，把主动消息全部填成了小作文。
+       * 所以这里只封数量：一天一条留给观察，其余名额给新闻和视频。
+       * 判断口径是“这条实际用了种子或探索发现”，关系式由头、问候、待办这些都不算。
+       */
+      const observationSpent = followup?.read || candidateVideo
+        ? 0
+        : countTodayObservation(store.getThread(agentId).messages, now);
+      const observationLeft = Math.max(0, OBSERVATION_MAX_PER_DAY - observationSpent);
+      if (observationLeft === 0 && (candidateSeed || candidateDiscovery)) {
+        diagnostics({ event: "proactive.observation-capped", agentId, spent: observationSpent });
+      }
+      // 封顶只限观察式：关系式由头、想念、搭话、共同经历、吐槽都照旧。
+      const cappedSeed = observationLeft === 0 ? null : candidateSeed;
+      const cappedDiscovery = observationLeft === 0 ? null : candidateDiscovery;
+      // 新闻和视频各算各的配额，不受观察式封顶影响（2026-10-20 修正：
+      // 以前这里多挂了一个 observationLeft，结果是当天发过一条观察式之后，新闻整天都死了，
+      // 和“一天给新闻两条”直接打架。
+      const newsBook = normalizeNewsBook(state.newsBook, now);
+      const candidateNews = followup?.read || candidateVideo || !newsQuota(now)
+        ? null
+        : nextNewsItem(newsBook, now);
       const topic = null;
       // 电脑那边此刻的动静：两边本来就是同一个伙伴，晨间第一句、睡前收尾、被薅起来都靠它落地。
       const workActivity = workfeedOn()
@@ -3221,11 +3588,16 @@ export function apply(ctx) {
         diagnostics({ event: "proactive.no-anchor", agentId, motif: candidateSeed.motifName ?? null });
       }
       // 夜间例外走独立留言提示词，不带兴趣发现，也不能把发现误记为已分享。
+      // 素材型分享（视频、新闻）不走锚点门（2026-10-21 她要更多新闻与视频）。
+      // 锚点门原本是为了拦“ta 自己的观察写成小作文”——那类东西没有外部依据，需要她那边有点动静才算有资格开口。
+      // 新闻和视频本身就是外面真实存在的东西，不需要她先说话才能分享；拿锚点卡它，
+      // 结果就是她一整天不聊天，一条新闻视频都收不到。
       const discovery = gate.exception || !anchor.ok
         ? null
-        : discoveryForProactiveMessage(candidateDiscovery, { exception: gate.exception });
-      const seed = gate.exception || !anchor.ok ? null : candidateSeed;
-      const video = gate.exception || !anchor.ok ? null : candidateVideo;
+        : discoveryForProactiveMessage(cappedDiscovery, { exception: gate.exception });
+      const seed = gate.exception || !anchor.ok ? null : cappedSeed;
+      const video = gate.exception ? null : candidateVideo;
+      const news = gate.exception ? null : candidateNews;
       const hobby = video
         ? knowing.hobbies.find((row) => row.id === video.interestId) ?? { id: video.interestId, name: video.interestName }
         : seed
@@ -3278,7 +3650,11 @@ export function apply(ctx) {
         && !wakeEcho
         && !followup
         && !gate.exception
-        && !videoLoginNotice;
+        && !videoLoginNotice
+        // 有新闻或视频就先把它们发出去（2026-10-21）：关系式由头一旦抽中，
+        // 下面的“非兴趣不带兴趣素材”会把素材整条吞掉，结果就是搜回来的东西全白攒了。
+        && !video
+        && !news;
       const reasonPick = (
         // __CHAHUAHUI_DEV_ONLY__
         devForceInterest === agentId
@@ -3289,8 +3665,10 @@ export function apply(ctx) {
           ? pickReason({
               relationship: effectiveRelationship(knowing),
               personality: knowing.personality,
-              // 兴趣那一份仍然得过锚点门：这层不改内容型开口的老规矩
-              interestAvailable: Boolean(anchor.ok && (seed || discovery || video)),
+              // 兴趣那一份仍然得过锚点门：这层不改内容型开口的老规矩。
+              // 2026-10-20：新闻也算这一份里的料——只带新闻的那一轮，抽不中 interest 由头
+              // 就会按“非兴趣不带兴趣素材”把新闻整条丢掉，等于白搜。
+              interestAvailable: Boolean(anchor.ok && (seed || discovery || video || news)),
               // 共同经历和吐槽的真凭据：同一位伙伴有效的最近一轮对话，或者电脑那边确有动静
               hasContext: Boolean(sceneEcho) || workActivity.active === true,
             })
@@ -3318,6 +3696,7 @@ export function apply(ctx) {
         && !seed
         && !discovery
         && !video
+        && !news
         && !videoLoginNotice
         && !gate.exception
         && morningOpening({ tier: settings.tier, workActive: workActivity.active });
@@ -3327,7 +3706,7 @@ export function apply(ctx) {
         ? "word"
         : wakeEcho || followup?.read || farewellSend
         ? "word"
-        : seed || discovery || video
+        : seed || discovery || video || news
           ? "word"
           : greetingOnly
             ? "word"
@@ -3394,6 +3773,7 @@ export function apply(ctx) {
           discovery,
           seed,
           video,
+          news,
           videoLoginNotice,
           reason: reasonForSend,
           reasonCandidates: reasonPick.candidates,
@@ -3785,6 +4165,10 @@ export function apply(ctx) {
 
   /** 试过一次之后多久才允许再试（性格初稿与爱好共用这条节流） */
   const HOBBY_SEED_RETRY_MS = 6 * 60 * 60 * 1000;
+  /** 观察式主动消息每天上限（2026-10-20）：一天一条，其余名额给新闻和视频。 */
+  const OBSERVATION_MAX_PER_DAY = 1;
+  /** 一轮视频取料最多试几条（2026-10-20 从 3 抬到 10：以前剩下十几条根本没被看过）。 */
+  const VIDEO_TRY_PER_ROUND = 10;
   const DRAFT_RETRY_MS = 6 * 60 * 60 * 1000;
   /** 话题种子：库存低于这个数就再去长一批 */
   const SEED_LOW_WATER = 20;
@@ -3877,6 +4261,18 @@ export function apply(ctx) {
       }
     }
     return spots.slice(0, 20);
+  }
+
+  /** 今天已经发出去几条「观察式」主动消息。
+   *
+   * 口径只看实际用上种子或探索发现的那几条：关系式由头、问候、待办、夜间留言不算，
+   * 视频和新闻也不算（它们各走各的配额）。
+   */
+  function countTodayObservation(messages, now = new Date()) {
+    const day = dayKey(now);
+    return (Array.isArray(messages) ? messages : []).filter((row) => row?.proactive
+      && (row.seedId || row.discoveryId)
+      && dayKey(new Date(row.at || now)) === day).length;
   }
 
   /** 兴趣那条：先补/重塑独立的原生兴趣；够格了再从真实相处里长共同兴趣。 */
@@ -4010,6 +4406,99 @@ export function apply(ctx) {
     return { grown: 1 };
   }
 
+  /** 同一批伙伴已经占了哪些领域：换一批不同的，别全员都是八卦号。 */
+  async function collectTakenWorldNames(selfId) {
+    const names = [];
+    for (const partner of await listPartners()) {
+      if (partner.id === selfId) continue;
+      try {
+        for (const row of store.getKnowing(partner.id).worldInterests ?? []) {
+          if (row?.name) names.push(row.name);
+        }
+      } catch {
+        // 读不到就当没占，不因为别人的坏数据卡住这一位。
+      }
+    }
+    return names.slice(0, 20);
+  }
+
+  /**
+   * 世界领域养护（2026-10-20）。
+   *
+   * 现有的兴趣点全是「我怎么注意世界」，从它长出来的消息只能是「我注意到 XX」——
+   * 这就是主动消息写成没人接得住的小作文的根子。这一层补的是另一半：ta 会自己去刷什么。
+   * 不动旧数据，只整批替换这一层；失败就下轮再来，绝不写空。
+   */
+  async function maybeTendWorldInterests(agentId) {
+    const partner = (await listPartners()).find((row) => row.id === agentId);
+    if (!partner) return { world: 0, reason: "no-partner" };
+    let knowing = store.getKnowing(agentId);
+    if (!needsWorldInterests(knowing.worldInterests)) return { world: 0, reason: "enough" };
+    const lastTry = Date.parse(store.getPartnerSettings(agentId).worldSeedTryAt ?? "") || 0;
+    if (Date.now() - lastTry < WORLD_SEED_RETRY_MS) return { world: 0, reason: "throttled" };
+    store.setPartnerSettings(agentId, { worldSeedTryAt: new Date().toISOString() });
+    const spec = worldInterestSpec({
+      partnerName: partner.name ?? agentId,
+      personalityText: nativeInterestSeed(knowing.personality),
+      takenNames: await collectTakenWorldNames(agentId),
+    });
+    try {
+      const raw = await askCheap(spec.systemPrompt, spec.userText, 640);
+      const rows = validateWorldInterests(parseWorldInterestReply(raw), {
+        userName: USER_NAME,
+        takenNames: await collectTakenWorldNames(agentId),
+      });
+      if (!rows.length) {
+        diagnostics({ event: "knowing.world.empty", agentId, rawHead: String(raw ?? "").slice(0, 160) });
+        return { world: 0, reason: "empty" };
+      }
+      store.saveKnowing(agentId, { ...knowing, worldInterests: replaceWorldInterests(knowing.worldInterests, rows) });
+      diagnostics({ event: "knowing.world.ready", agentId, count: rows.length, names: rows.map((row) => row.name).join("、") });
+      return { world: rows.length };
+    } catch (error) {
+      diagnostics({ event: "knowing.world.failed", agentId, error: describeError(error) });
+      return { world: 0, reason: describeError(error) };
+    }
+  }
+
+  /**
+   * 新闻取料（2026-10-20）。
+   *
+   * 这一层是补上「搜索只长考据」那个洞：查询词由世界领域确定性拼出来，
+   * 不再让模型现编（规划那步今天已经因为 180 token 预算翻过一次车）。
+   * 搜回来的东西只进短期池子，讲不讲、怎么讲留给最后一步的 ta 自己。
+   */
+  async function maybeFetchNews(agentId, now = new Date()) {
+    const book0 = normalizeNewsBook(store.getProactiveState(agentId).newsBook, now);
+    if (!newsQuota(now)) return { fetched: false, reason: "daily-limit" };
+    if (!newsFetchDue(book0, now)) return { fetched: false, reason: "not-due" };
+    const knowing = store.getKnowing(agentId);
+    const domain = pickDomainForNews(knowing.worldInterests, book0, { now });
+    if (!domain) return { fetched: false, reason: "no-domain" };
+    const query = newsQueryFor(domain, { now });
+    if (!query) return { fetched: false, reason: "no-query" };
+    const fetcher = typeof ctx.network?.fetch === "function" ? ctx.network.fetch.bind(ctx.network) : null;
+    if (!fetcher) return { fetched: false, reason: "network-unavailable" };
+    try {
+      await loadUserName();
+      const enhancement = await searchEnhancementConfig();
+      const search = await searchWeb(fetcher, { query, enhancement, privateTerms: [USER_NAME] });
+      bookSearchOutcome(search);
+      if (!search.ok || !search.results?.length) {
+        diagnostics({ event: "news.fetch.failed", agentId, domain: domain.name, query, reason: search.reason ?? "no-results" });
+        store.setProactiveState(agentId, { newsBook: markNewsFetched(book0, domain.id, now) });
+        return { fetched: false, reason: search.reason ?? "no-results" };
+      }
+      const added = addNewsItems(book0, { domain, query, results: search.results }, now);
+      store.setProactiveState(agentId, { newsBook: markNewsFetched(added.book, domain.id, now) });
+      diagnostics({ event: "news.fetch.ready", agentId, domain: domain.name, query, results: search.results.length, added: added.added });
+      return { fetched: true, domain: domain.name, added: added.added };
+    } catch (error) {
+      diagnostics({ event: "news.fetch.failed", agentId, domain: domain.name, error: describeError(error) });
+      return { fetched: false, reason: describeError(error) };
+    }
+  }
+
   /**
    * 给一位伙伴补一批话题种子。
    *
@@ -4087,6 +4576,85 @@ export function apply(ctx) {
       await loadUserName();
       await maybeTendHobbies(agentId);
       const knowing = store.getKnowing(agentId);
+      const fetcher = typeof ctx.network?.fetch === "function" ? ctx.network.fetch.bind(ctx.network) : null;
+      if (videoEnabled) {
+        // 两路取材共享旧额度与材料门禁；约2/3先逛兴趣，1/3先逛热门，失败再试另一边。
+        if (!videoPartnerEnabled(agentId) || !videoQuota()) return retryLater("video-daily-limit");
+        const sources = Math.random() < 1 / 3 ? ["popular", "interest"] : ["interest", "popular"];
+        const canContinue = () => videoPartnerEnabled(agentId) && videoQuota() && !focusCompanion.active() && threadStamp(agentId) === explorationStamp;
+        const previous = normalizeVideoBook(store.getVideoBook(agentId), now);
+        const seen = new Set([...previous.pending, ...previous.shares].map((row) => row.id));
+        for (const source of sources) {
+          let topic = "";
+          let interest = null;
+          let plan = null;
+          if (source === "interest") {
+            const newsBook0 = normalizeNewsBook(store.getProactiveState(agentId).newsBook, now);
+            const domain = pickDomainForNews(knowing.worldInterests, newsBook0, { now });
+            topic = domain ? newsTopicFor(domain) : "";
+            interest = domain ? { id: domain.id, name: domain.name } : null;
+            plan = domain ? { focus: topic, searchQuery: topic } : null;
+            if (!topic) {
+              const hobby = pickInterestForExploration(knowing.hobbies, learning, { now });
+              const spec = hobby ? explorationSpec({ interest: hobby, book: learning, now }) : null;
+              let parsed = null;
+              try { parsed = spec ? parseExplorationPlan(await askCheap(spec.systemPrompt, spec.userText, 800, { timeoutMs: 60_000 })) : null; }
+              catch { /* 兴趣规划失败不堵住热门入口。 */ }
+              if (parsed) {
+                topic = parsed.searchQuery;
+                plan = parsed;
+                interest = { id: hobby.id, name: hobby.name };
+              }
+            }
+            if (!canContinue()) return retryLater("video-exploration-stale");
+            if (!topic || !isSafeSearchQuery(topic, [USER_NAME, partnerName])) continue;
+          }
+          const login = await videoLogin();
+          if (!login?.ok) return retryLater("video-login-required");
+          if (!canContinue()) return retryLater("video-exploration-stale");
+          let search = source === "popular"
+            ? await fetchPopularVideos(fetcher)
+            : await searchVideos(fetcher, topic, { cookie: login.cookie, order: "click",
+              publishedAfter: Math.floor(now.getTime() / 1000) - 30 * 24 * 60 * 60,
+              publishedBefore: Math.floor(now.getTime() / 1000) });
+          if (!canContinue()) return retryLater("video-exploration-stale");
+          // 若服务端日期筛选失效或近期材料不足，再补一页最新；最终仍本地筛近30天后比热度。
+          if (source === "interest" && selectVideoResults(search.results, { source, seen, now }).length < 5) {
+            const recent = await searchVideos(fetcher, topic, { cookie: login.cookie, order: "pubdate",
+              publishedAfter: Math.floor(now.getTime() / 1000) - 30 * 24 * 60 * 60,
+              publishedBefore: Math.floor(now.getTime() / 1000) });
+            if (!canContinue()) return retryLater("video-exploration-stale");
+            if (recent.ok) search = { ok: true, results: [...(search.results ?? []), ...recent.results] };
+          }
+          if (!search.ok) {
+            diagnostics({ event: "video.exploration.source-unavailable", agentId, source });
+            continue;
+          }
+          // 每路最多一半名额，给另一条路留下机会，材料尝试总上限仍10条。
+          const fresh = selectVideoResults(search.results, { source, seen, now, limit: Math.floor(VIDEO_TRY_PER_ROUND / 2) });
+          diagnostics({ event: "video.exploration.search", agentId, source, query: topic.slice(0, 60),
+            results: (search.results ?? []).length, fresh: fresh.length });
+          for (const result of fresh) {
+            if (!canContinue()) return retryLater("video-exploration-stale");
+            seen.add(`${result.bvid}:1`);
+            const materials = await collectVideoMaterials(fetcher, result.bvid, { cookie: login.cookie, requireSubtitle: false });
+            if (!canContinue()) return retryLater("video-exploration-stale");
+            if (!materials.ok || !materials.shareable) {
+              diagnostics({ event: "video.exploration.unusable", agentId, bvid: result.bvid,
+                reason: String(materials.reason ?? materials.subtitleReason ?? "").slice(0, 120) || null, readKind: materials.readKind ?? null });
+              continue;
+            }
+            const candidate = makeVideoCandidate(materials, { interest, plan, source }, new Date());
+            if (!candidate) continue;
+            store.saveVideoBook(agentId, addVideoCandidate(store.getVideoBook(agentId), candidate));
+            store.setProactiveState(agentId, { interestLearning: scheduleExploration(store.getProactiveState(agentId).interestLearning, new Date()) });
+            diagnostics({ event: "video.exploration.ready", agentId, source, bvid: materials.video.bvid, page: materials.video.page ?? 1,
+              readKind: candidate.readKind, domain: interest?.name ?? null });
+            return { explored: true, source: "bilibili" };
+          }
+        }
+        return retryLater("video-no-usable-candidate");
+      }
       const hobby = pickInterestForExploration(knowing.hobbies, learning, { now });
       if (!hobby) return retryLater("no-interest");
       const spec = explorationSpec({
@@ -4094,48 +4662,14 @@ export function apply(ctx) {
         book: learning,
         now,
       });
-      const login = videoEnabled ? await videoLogin() : null;
-      if (videoEnabled && !login?.ok) return retryLater("video-login-required");
-      if (videoEnabled && !videoPartnerEnabled(agentId)) return retryLater("video-partner-off");
-      const rawPlan = await askCheap(spec.systemPrompt, spec.userText, videoEnabled ? 1000 : 180, { timeoutMs: 60_000 });
+      // 2026-10-20：探索问句那步从 180 抬到 800。以前 180 的输出预算被思考吃干净，
+      // 中午那趟直接回空包（provider-or-empty），整趟取料连搜索词都没生成。
+      const rawPlan = await askCheap(spec.systemPrompt, spec.userText, 800, { timeoutMs: 60_000 });
       const plan = parseExplorationPlan(rawPlan);
       if (!plan) return retryLater("no-new-angle");
-      const fetcher = typeof ctx.network?.fetch === "function" ? ctx.network.fetch.bind(ctx.network) : null;
-      if (videoEnabled) {
-        if (!videoPartnerEnabled(agentId) || !videoQuota()) return retryLater("video-daily-limit");
-        if (!isSafeSearchQuery(plan.searchQuery, [USER_NAME, partnerName])) return retryLater("unsafe-query");
-        const canContinue = () => videoPartnerEnabled(agentId) && videoQuota() && !focusCompanion.active() && threadStamp(agentId) === explorationStamp;
-        if (!canContinue()) return retryLater("video-exploration-stale");
-        const search = await searchVideos(fetcher, plan.searchQuery, { cookie: login.cookie, order: "totalrank" });
-        if (!canContinue()) return retryLater("video-exploration-stale");
-        if (!search.ok) return retryLater("video-search-unavailable");
-        const previous = normalizeVideoBook(store.getVideoBook(agentId), now);
-        const seen = new Set([...previous.pending, ...previous.shares].map((row) => row.id));
-        const fresh = (search.results ?? []).filter((row) => !seen.has(`${row.bvid}:1`)).slice(0, 3);
-        // 没拿到可用字幕时只留下安全原因，不让下次又不知道卡在哪一步。
-        diagnostics({ event: "video.exploration.search", agentId, query: String(plan.searchQuery ?? "").slice(0, 60),
-          results: (search.results ?? []).length, fresh: fresh.length });
-        for (const result of fresh) {
-          if (!canContinue()) return retryLater("video-exploration-stale");
-          const materials = await collectVideoMaterials(fetcher, result.bvid, { cookie: login.cookie, requireSubtitle: true });
-          if (!canContinue()) return retryLater("video-exploration-stale");
-          if (!materials.ok || materials.readKind !== "subtitle" || !materials.subtitle?.length) {
-            diagnostics({ event: "video.exploration.unusable", agentId, bvid: result.bvid,
-              reason: String(materials.reason ?? "").slice(0, 120) || null, readKind: materials.readKind ?? null });
-            continue;
-          }
-          const candidate = makeVideoCandidate(materials, { interest: hobby, plan }, new Date());
-          if (!candidate) continue;
-          store.saveVideoBook(agentId, addVideoCandidate(store.getVideoBook(agentId), candidate));
-          store.setProactiveState(agentId, { interestLearning: scheduleExploration(store.getProactiveState(agentId).interestLearning, new Date()) });
-          diagnostics({ event: "video.exploration.ready", agentId, bvid: materials.video.bvid, page: materials.video.page ?? 1 });
-          return { explored: true, source: "bilibili" };
-        }
-        return retryLater("video-no-readable-subtitle");
-      }
-      const search = await searchTimelyTopic(fetcher, { title: plan.focus, searchQuery: plan.searchQuery }, {
-        privateTerms: [USER_NAME, partnerName],
-      });
+      const enhancement = await searchEnhancementConfig();
+      const search = await searchWeb(fetcher, { query: plan.searchQuery, enhancement, privateTerms: [USER_NAME, partnerName] });
+      bookSearchOutcome(search);
       if (!search.ok || !search.results?.length) return retryLater(search.reason ?? "no-results");
       const added = addDiscovery(learning, { interest: hobby, plan, results: search.results }, now);
       if (!added.added) return retryLater(added.reason);
@@ -4192,6 +4726,7 @@ export function apply(ctx) {
 
   /** 从最近的对话里抽新话题。攒够了新的才抽，不是每句话都抽。 */
   async function maybeExtractTopics(agentId, { force = false } = {}) {
+    const sourceStamp = memorySourceStamp(agentId);
     const book = upkeepTopics(agentId);
     const messages = conversationMessages(store.getThread(agentId).messages);
     if (messages.length === 0) return { extracted: false, reason: "no-messages" };
@@ -4214,11 +4749,12 @@ export function apply(ctx) {
     const spec = topicSpec(sample, existingTitles(book), (rows) => renderForSummary(rows, USER_NAME, partnerName));
     let raw = "";
     try {
-      raw = await askCheap(spec.systemPrompt, spec.userText, 400);
+      raw = await memoryAsker(agentId)(spec.systemPrompt, spec.userText, 400);
     } catch (error) {
       diagnostics({ event: "memory.topics.failed", agentId, error: describeError(error) });
       return { extracted: false, reason: "threw" };
     }
+    if (memorySourceStamp(agentId) !== sourceStamp) return { extracted: false, reason: "source-changed" };
     const incoming = parseTopics(raw);
     const merged = mergeTopics(book, incoming, new Date());
     const next = store.saveTopicBook(agentId, {
@@ -4476,8 +5012,18 @@ export function apply(ctx) {
       ask: (prompt, text) => askCheap(prompt, text, 180, { timeoutMs: 10_000 }),
       fetcher: typeof ctx.network?.fetch === "function" ? ctx.network.fetch.bind(ctx.network) : null,
       privateTerms: [USER_NAME, partner?.name ?? agentId],
+      enhancement: await searchEnhancementConfig(),
     });
-    if (chatSearch.attempted) diagnostics({ event: "chat.search", agentId, ok: chatSearch.ok, requestSent: chatSearch.requestSent === true, reason: chatSearch.reason, query: chatSearch.query ?? null, results: chatSearch.results ?? 0, candidates: chatSearch.candidates ?? 0, sources: chatSearch.sources ?? null });
+    bookSearchOutcome(chatSearch);
+    if (chatSearch.attempted) diagnostics({ event: "chat.search", agentId, ok: chatSearch.ok, requestSent: chatSearch.requestSent === true, reason: chatSearch.reason, query: chatSearch.query ?? null, engine: chatSearch.engine ?? null, enhancedEngine: chatSearch.enhancedEngine ?? null, fallbackReason: chatSearch.fallbackReason ?? null, failures: chatSearch.failures ?? null, calls: chatSearch.calls ?? null, results: chatSearch.results ?? 0, candidates: chatSearch.candidates ?? 0, sources: chatSearch.sources ?? null });
+    // 工具这一轮给不给（2026-10-21）：
+    // 后台已经搜到材料 → 不给，一份材料够了，两边各搜一次是白花钱；
+    // 后台没搜到（或者压根没触发）→ 给，让伙伴自己能发起一次。
+    // 以前它没有这个发起权：说「我去查」是句空话，下一轮只能改口「你把链接给我」。
+    const offerSearchTool = !chatSearch.context;
+    const webSearchTool = offerSearchTool
+      ? createWebSearchTool({ agentId, partnerName: partner?.name ?? agentId })
+      : null;
     // 手里有还没讲过的发现时，普通聊天也允许 ta 自然带出来。
     // 只有“这轮压根没拿到外部材料”时才给：有新料还拿旧料凑，反而像没在听。
     const heldAt = new Date();
@@ -4508,6 +5054,11 @@ export function apply(ctx) {
     } catch (error) {
       diagnostics({ event: "stance.echo.failed", agentId, error: describeError(error) });
     }
+    // 她这一句是不是明确要听声音：判据跟发语音那边共用。
+    // 不告诉 ta 的话，它会一边被念成语音、一边在正文里解释自己发不了（2026-10-22 实机）。
+    const voiceAsk = isExplicitVoiceRequest(
+      replyTargetId ? threadMessages.find((row) => row.id === replyTargetId)?.text : latestUser?.text,
+    );
     const systemPrompt = buildSystemPrompt({
       ruleProfile: agentId === compactReplyPilotId ? "compact-v1" : "legacy",
       partnerId: agentId,
@@ -4527,6 +5078,10 @@ export function apply(ctx) {
       todoDoneText,
       workfeedText,
       searchText: chatSearch.context,
+      // 自己上网查的工具：后台这一轮没搜到东西时，就把工具给 ta，
+      // 让它能自己发起一次（以前它只有张嘴的份儿）。
+      // 后台已经拿到材料的那一轮不给：一份材料够了，别两边各搜一次。
+      searchToolText: chatSearch.context ? "" : searchToolText(agentId === compactReplyPilotId ? "compact-v1" : "legacy"),
       discoveryText: heldDiscovery ? heldDiscoveryText(heldDiscovery) : "",
       userRhythmText: rhythmText,
       // 徽章那段每轮重算：它得告诉 ta「你现在戴着什么」，静态块做不到。
@@ -4535,6 +5090,8 @@ export function apply(ctx) {
       wakeText: wakeBlockFor(agentId),
       // 每轮都给伙伴一个真实的回应出口：正常说、只发表情包，或安静收尾。
       replyText: replyChoiceBlock({ userName: USER_NAME }),
+      // 她这一句是叫你的声音的：告诉 ta 这一轮的面孔，别一边被念成语音、一边说自己发不了。
+      voiceText: voiceAsk ? VOICE_REQUEST_TEXT : "",
       // 这一句只说关系走到哪儿了（有人话、不给分数）；有起跑线时额外说不必重新自我介绍
       note: relationshipNote(effectiveRelationship(knowing), knowing.relationSeed),
       // 能损到什么份上：只跟关系档位有关，跟她说没说什么无关
@@ -4585,6 +5142,11 @@ export function apply(ctx) {
           maxTokens: feedbackPrompt ? 1800 : 900,
           modelRef: choice ? { provider: choice.provider, model: choice.model } : null,
           catalog: modelCatalog,
+          // 工具回合：伙伴自己决定要不要查、自己写搜索词。
+          tools: offerSearchTool ? [SEARCH_TOOL] : null,
+          executeTool: offerSearchTool ? webSearchTool : null,
+          maxToolCalls: 2,
+          maxToolRounds: 2,
         });
       } catch (error) {
         if (error?.code === "MODEL_UNAVAILABLE") {
@@ -6154,6 +6716,12 @@ export function apply(ctx) {
   async function tasteProbeOnce(input = {}) {
     const agentId = String(input?.agentId ?? "").trim();
     if (!agentId) throw new Error("要带 agentId");
+    const ruleProfile = input.ruleProfile ?? "legacy";
+    if (!["legacy", "compact-v1"].includes(ruleProfile)) throw new Error("测试档位无效，未发模型请求");
+    const rawHistory = input.history ?? [];
+    if (!Array.isArray(rawHistory) || rawHistory.length > 24 || rawHistory.some((row) => !["user", "assistant"].includes(row?.role) || typeof row.text !== "string" || !row.text.trim() || row.text.length > 4000)) throw new Error("测试历史须为最多24条有效角色/文字，未发模型请求");
+    const history = rawHistory.map(({ role, text }) => ({ role, text }));
+    const probeHistory = threadToMessages(history, 24, { userName: USER_NAME });
     const probes = Array.isArray(input?.probes) && input.probes.length
       ? input.probes.map((row) => String(row ?? "").trim()).filter(Boolean).slice(0, 6)
       : ["在干嘛呀", "我今天好累，什么都不想做"];
@@ -6266,8 +6834,10 @@ export function apply(ctx) {
         userName: USER_NAME,
       });
       const note = relationshipNote(merged, seed);
-      // 体感台不接 ruleProfile，这里恒 legacy，不能给 compact-v1 背书。
+      // 本机验证显式记录档位，补普通回应出口；不把 legacy 结果当作 compact 证据。
       const systemPrompt = buildSystemPrompt({
+        ruleProfile,
+        replyText: replyChoiceBlock({ userName: USER_NAME }),
         partnerId: agentId,
         partnerName: partner.name ?? agentId,
         personaText,
@@ -6292,7 +6862,7 @@ export function apply(ctx) {
       };
       if (script.length) {
         // 多轮：一轮接一轮走，前一轮的回复也进上下文。关系这种东西得连着看。
-        const messages = [];
+        const messages = [...probeHistory];
         for (let i = 0; i < script.length; i += 1) {
           messages.push({ role: "user", content: script[i] });
           const generated = await generateReply(ctx, {
@@ -6314,7 +6884,7 @@ export function apply(ctx) {
           for (let round = 1; round <= repeats; round += 1) {
             const generated = await generateReply(ctx, {
               systemPrompt,
-              messages: [{ role: "user", content: probe }],
+              messages: [...probeHistory, { role: "user", content: probe }],
               diagnostics,
               maxTokens: 900,
               modelRef: choice ? { provider: choice.provider, model: choice.model } : null,
@@ -6340,7 +6910,7 @@ export function apply(ctx) {
       });
     }
     diagnostics({ event: "probe.taste", agentId, levels: out.length, probes: probes.length, repeats });
-    return { ok: true, agentId, model: choice ? `${choice.provider}/${choice.model}` : null, blocks, repeats, probes, script, levels: out };
+    return { ok: true, agentId, model: choice ? `${choice.provider}/${choice.model}` : null, ruleProfile, history, stickerHintIncluded: Boolean(stickerText), blocks, repeats, probes, script, levels: out };
   }
 
   /**
@@ -6467,6 +7037,8 @@ export function apply(ctx) {
             // 聊天窗要用的外观开关（跟轮询走，她在设置里改完最迟一轮就生效）
             messageAvatars: Boolean(globalSettings.messageAvatars),
             messageRefine: Boolean(globalSettings.messageRefine),
+            // 等待回复时用哪套动效：dots（三个点，原来的）/ cup（杯中有话）
+            typingIndicator: globalSettings.typingIndicator === "cup" ? "cup" : "dots",
             // 聊天窗那条淡字前面的表情：跟叫法表同源，不在前端另拄一份
             actionStyles: ACTION_STYLES.map((s) => ({ id: s.id, emoji: s.emoji })),
           });
@@ -7280,6 +7852,9 @@ export function apply(ctx) {
           messageId: stored.id,
           readAfterMs,
           mode: plan.mode,
+          /* 她这一句是不是明确要了语音。要丁的话等待态从发送那一刻就走「在说」，
+             不用等回复出来才切（概率触发的那一类本来也算不出来）。 */
+          voiceRequested: isExplicitVoiceRequest(stored.text),
           recall: recallEligibility(stored),
         });
       });
@@ -7455,6 +8030,113 @@ export function apply(ctx) {
         return c.json({ ok: result.ok, vision, error: result.ok ? null : result.error });
       });
 
+      // 搜索引擎设置：引擎清单 + 每家自己的 Key。Key 加密存，页面只回「已保存」。
+      app.post("/settings/search-engine", async (c) => {
+        try {
+          const body = await c.req.json();
+          const incoming = body?.searchEnhancement && typeof body.searchEnhancement === "object" ? body.searchEnhancement : body;
+          await migrateLegacySearchKey();
+          const current = store.getGlobalSettings().searchEnhancement || {};
+          // 两件事分开：order 是“按什么顺序试”，keyEngine 是“这把 Key 是谁的”。
+          // 老页面（或老客户端）只传 engine：那就把它当顺序第一位，行为跟以前一样。
+          const rawOrder = Array.isArray(incoming?.order)
+            ? incoming.order
+            : (incoming?.engine
+              ? [incoming.engine, ...(Array.isArray(incoming.backups) ? incoming.backups : (current.order ?? []))]
+              : (current.order ?? [current.engine ?? "bing"]));
+          const order = normalizeSearchOrder(rawOrder);
+          const engine = normalizeSearchEngine(incoming?.keyEngine ?? incoming?.engine ?? order[0]);
+          const typed = typeof incoming?.apiKey === "string" ? incoming.apiKey.trim() : "";
+          const plain = typed && typed !== "********" ? typed : "";
+          // 加密这一步要起系统进程，可能慢；得知道它到底成没成。
+          const startedAt = Date.now();
+          const storedKey = plain ? await protectKey(plain) : "";
+          const enc = encryptionStatus();
+          diagnostics({
+            event: "search.engine.save",
+            received: Object.keys(body ?? {}),
+            bodyType: Array.isArray(body) ? "array" : typeof body,
+            engine,
+            hadKey: Boolean(plain),
+            stored: Boolean(storedKey),
+            encrypted: storedKey ? isProtectedKey(storedKey) : false,
+            storage: enc.storage || null,
+            reason: enc.reason || null,
+            elapsedMs: Date.now() - startedAt,
+          });
+          if (plain && !storedKey) {
+            return c.json({ ok: false, error: { message: `这条 Key 没能安全存下来（${enc.reason || "加密用不上"}），先别保存` } }, 400);
+          }
+          // 写回前重新读一次：等待期间可能刚记过一笔用量，别把它盖掉。
+          const fresh = store.getGlobalSettings().searchEnhancement || {};
+          const keys = { ...(fresh.keys || {}) };
+          if (storedKey) keys[engine] = storedKey;
+          const states = { ...(fresh.states || {}) };
+          const changed = Boolean(storedKey);
+          if (changed) states[engine] = { status: "untested", testedAt: null, error: null };
+          // 写回：order 是唯一真相，engine 跟着它走（老代码与状态映射还靠 engine 认“现在走的那家”）。
+          store.setGlobalSettings({
+            searchEnhancement: {
+              ...fresh,
+              engine: order[0],
+              order,
+              keys,
+              states,
+              usage: fresh.usage || {},
+              usageByEngine: fresh.usageByEngine || {},
+            },
+          });
+          return c.json({ ok: true, global: globalSettingsView() });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 400);
+        }
+      });
+
+      // 「测一下」：真发一次查询，把 Key 通不通、结果长什么样当场说清楚。
+      app.post("/settings/search-engine/test", async (c) => {
+        try {
+          const body = await c.req.json();
+          await migrateLegacySearchKey();
+          const saved = store.getGlobalSettings().searchEnhancement || {};
+          const engine = normalizeSearchEngine(body?.engine ?? saved.engine);
+          const typed = typeof body?.apiKey === "string" ? body.apiKey.trim() : "";
+          const usingTyped = Boolean(typed) && typed !== "********";
+          const plain = usingTyped ? typed : await unprotectKey(saved.keys?.[engine] || "");
+          if (!plain && engine !== "anysearch") {
+            return c.json({ ok: false, error: { message: "先填上这家的 Key 再测" } }, 400);
+          }
+          const fetcher = typeof ctx.network?.fetch === "function" ? ctx.network.fetch.bind(ctx.network) : null;
+          const result = await searchWithEngine(engine, fetcher, { query: "Hana Agent 茶话会", apiKey: plain, maxResults: 3 });
+          // 写回前重新读一次：等待期间聊天链路可能刚记过一笔，别把它抹掉。
+          const current = store.getGlobalSettings().searchEnhancement || {};
+          const patch = { ...current };
+          // 测试也算一次真实请求：额度是她的，得记。真发出去了才算。
+          if (result.sent) {
+            patch.usage = recordSearchUsage(current.usage);
+            patch.usageByEngine = { ...(current.usageByEngine || {}), [engine]: (current.usageByEngine?.[engine] ?? 0) + 1 };
+          }
+          // 测的是输入框里那把新 Key 时，不许改已保存配置的状态——
+          // 否则页面会显示「测试通过」，而聊天其实还在用那把旧的、可能已经失效的 Key。
+          if (!usingTyped) {
+            const states = { ...(current.states || {}) };
+            states[engine] = {
+              status: result.ok ? "verified" : "failed",
+              testedAt: new Date().toISOString(),
+              error: result.ok ? null : `搜索服务没接上（${result.reason}）`,
+            };
+            patch.states = states;
+          }
+          store.setGlobalSettings({ searchEnhancement: patch });
+          diagnostics({ event: "search.engine.test", engine, ok: result.ok, reason: result.reason ?? null, results: result.results?.length ?? 0, usedSavedKey: !usingTyped });
+          if (!result.ok) {
+            return c.json({ ok: false, error: { message: `没连上（${result.reason}），检查一下 Key 是不是填错了` }, global: globalSettingsView(), usedSavedKey: !usingTyped }, 400);
+          }
+          return c.json({ ok: true, results: result.results.length, sample: result.results[0]?.title ?? "", global: globalSettingsView(), usedSavedKey: !usingTyped });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 400);
+        }
+      });
+
       app.put("/settings/video-sharing", async (c) => {
         try {
           const patch = pickSettingsPatch(await c.req.json(), new Set(["maxPerDay", "partnerIds"]), "B站分享设置");
@@ -7482,6 +8164,11 @@ export function apply(ctx) {
             if (enc.storage === "local" && globalPatch.voiceProfiles) {
               diagnostics({ event: "voice.key.local", reason: enc.reason });
             }
+          }
+          // 搜索 Key 不走这条通用路：它有自己专门的路由（每家一把锁、各自的加密与状态）。
+          // 通用路径一旦也写这个字段，就多一条可能明文落盘的口子。
+          if (globalPatch.searchEnhancement) {
+            return c.json({ ok: false, error: { message: "搜索设置请用搜索那一页自己改" } }, 400);
           }
           store.setGlobalSettings(globalPatch);
           // 今日情境从关到开：清掉「今天已经露过」的记账。
@@ -7636,7 +8323,8 @@ export function apply(ctx) {
           }));
           return c.json({
             ok: true,
-            global: store.getGlobalSettings(),
+            // 搜索 Key 走投影（只给状态，不给凭据）。语音那边的 Key 仍是密文原样带着——既有行为，本轮没动。
+            global: { ...store.getGlobalSettings(), searchEnhancement: globalSettingsView().searchEnhancement },
             globalRuntime: store.getGlobalRuntime(),
             partners,
           });
@@ -7648,6 +8336,45 @@ export function apply(ctx) {
       // __CHAHUAHUI_DEV_ONLY__
       // 内测：手动跑一次主动巡检（跳过“到没到点”这道门，静默与日上限照管）。
       // 发布前连同 /probe 一起剥掉。
+      if (DEV_TOOLS) app.post("/probe/tool", async (c) => {
+        try {
+          const body = await c.req.json().catch(() => ({}));
+          const partners = await listPartners();
+          const target = partners.find((row) => row.id === body?.agentId) ?? partners[0];
+          const catalog = await ctx.models.list();
+          const choice = resolveModelChoice(catalog, {
+            partnerRef: target ? store.getPartnerSettings(target.id).model : null,
+            globalRef: store.getGlobalSettings().model,
+            agentRef: target ? await agentDefaultModel(target.id) : null,
+          });
+          const seen = [];
+          const generated = await generateReply(ctx, {
+            systemPrompt: "你是这位伙伴本人，正在跟对方聊天。你有一个搜索工具 web_search。",
+            messages: [{ role: "user", content: String(body?.text ?? "你去查查最近有什么科技新闻") }],
+            diagnostics: (row) => { if (String(row?.event ?? "").includes("tool")) seen.push(row); },
+            maxTokens: 900,
+            modelRef: choice ? { provider: choice.provider, model: choice.model } : null,
+            catalog,
+            tools: [SEARCH_TOOL],
+            executeTool: async (call) => {
+              diagnostics({ event: "probe.tool.called", name: call.name, args: call.arguments });
+              return { isError: false, text: "【搜索结果（标题与摘要，不是网页正文）】· 假的一条结果：某厂商今天发了条新消息。" };
+            },
+          });
+          return c.json({
+            ok: true,
+            agentId: target?.id ?? null,
+            model: choice ? { provider: choice.provider, model: choice.model, source: choice.source } : null,
+            via: generated.via,
+            toolCalls: generated.toolCalls ?? [],
+            text: String(generated.text ?? ""),
+            events: seen,
+          });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 500);
+        }
+      });
+
       if (DEV_TOOLS) app.post("/proactive/tick", async (c) => {
         try {
           return c.json({ ok: true, result: await runProactiveTick({ force: true }) });
@@ -9022,6 +9749,94 @@ export function apply(ctx) {
 
   // __CHAHUAHUI_DEV_ONLY__
   try {
+    if (DEV_TOOLS && localDevHooks) localDevHooks.mount({
+      store, ctx, diagnostics, turns, pendingReplies, deliveringReplies,
+      autonomousLanes, voiceGenerations, queueMemoryJob, voiceFile, threadRebuild,
+    });
+  } catch (error) {
+    ctx.logger.error(`[${name}] 本地维护工具注册失败: ${error?.message || error}`);
+  }
+  // __CHAHUAHUI_DEV_ONLY_END__
+
+  // __CHAHUAHUI_DEV_ONLY__
+  // 内测：真机验一次「伙伴自己发起搜索」这条链路。
+  // 问的是：宿主到底会不会把 tool-call 事件发出来、provider 认不认工具声明。
+  // 工具结果用假的，不打真实搜索：这一条只验机制，省额度也不碰外网。
+  try {
+    if (DEV_TOOLS) ctx.tools.register({
+      name: "chahuahui_tool_probe",
+      description:
+        "内测：拿真机模型跑一次带搜索工具的对话，看宿主会不会把 tool-call 事件发出来。"
+        + "工具结果是假的，不打真实搜索，只验机制。不写聊天记录、不动账本。",
+      parameters: {
+        type: "object",
+        properties: {
+          agentId: { type: "string", description: "哪位伙伴（茶话会里的 agentId，如 hanako）" },
+          text: { type: "string", description: "给伙伴的那句话（默认：你去查查最近有什么科技新闻）" },
+          real: { type: "string", description: "传 1 就用真实搜索（真打网络、真花额度），不传就用假材料" },
+        },
+      },
+      execute: async (input) => {
+        const partners = await listPartners();
+        const target = partners.find((row) => row.id === input?.agentId) ?? partners[0];
+        if (!target) return { content: [{ type: "text", text: "没有可用伙伴" }] };
+        // 模型调用慢（工具回合要两轮），但不能放到后台去跑：宿主给模型调用发的是
+        // 「本次 App 调用」的一次性凭据，调用一返回凭据就作废（APP_CALL_TOKEN_INVALID）。
+        // 所以在这里同步跑完、结果先落盘；调用方那 30 秒 RPC 上限可能先到，但文件会写出来。
+        const stamp = Date.now().toString(36);
+        const file = `probe-tool-${stamp}.json`;
+        const outPath = path.join(ctx.dataDir, "v2", file);
+        const seen = [];
+        const raw = [];
+        try {
+          const catalog = await ctx.models.list();
+          const choice = resolveModelChoice(catalog, {
+            partnerRef: store.getPartnerSettings(target.id).model,
+            globalRef: store.getGlobalSettings().model,
+            agentRef: await agentDefaultModel(target.id),
+          });
+          const generated = await generateReply(ctx, {
+            systemPrompt: "你是这位伙伴本人，正在跟对方聊天。你有一个搜索工具 web_search。",
+            messages: [{ role: "user", content: String(input?.text ?? "你去查查最近有什么科技新闻") }],
+            diagnostics: (row) => { seen.push(row); diagnostics(row); },
+            onRaw: (body) => { raw.push(String(body ?? "").slice(-1500)); },
+            maxTokens: 900,
+            modelRef: choice ? { provider: choice.provider, model: choice.model } : null,
+            catalog,
+            tools: [SEARCH_TOOL],
+            executeTool: input?.real
+              ? createWebSearchTool({ agentId: target.id, partnerName: target.name })
+              : async (call) => {
+                diagnostics({ event: "probe.tool.called", name: call.name, args: call.arguments });
+                return { isError: false, text: "【搜索结果（标题与摘要，不是网页正文）】· 假的一条结果：某厂商今天发了条新消息。" };
+              },
+          });
+          fs.writeFileSync(outPath, JSON.stringify({
+            ok: true,
+            agentId: target.id,
+            model: choice ? { provider: choice.provider, model: choice.model, source: choice.source } : null,
+            via: generated.via,
+            toolCalls: generated.toolCalls ?? [],
+            text: String(generated.text ?? ""),
+            events: seen,
+            raw,
+          }, null, 2), "utf8");
+          return { content: [{ type: "text", text: `探针跑完，结果在：${outPath}` }] };
+        } catch (error) {
+          try {
+            fs.writeFileSync(outPath, JSON.stringify({ ok: false, error: describeError(error), events: seen }, null, 2), "utf8");
+          } catch { /* 写不出去就算了 */ }
+          return { content: [{ type: "text", text: `探针失败，结果在：${outPath}` }] };
+        }
+      },
+    });
+  } catch (error) {
+    ctx.logger.error(`[${name}] 工具探针注册失败: ${error?.message || error}`);
+  }
+  // __CHAHUAHUI_DEV_ONLY_END__
+
+  // __CHAHUAHUI_DEV_ONLY__
+  try {
     if (DEV_TOOLS) ctx.tools.register({
       name: "chahuahui_ping",
       description: "茶话会存活检查。",
@@ -9074,6 +9889,8 @@ export function apply(ctx) {
             items: { type: "string" },
             description: "探针：模拟她说的几句，最多 6 句",
           },
+          ruleProfile: { type: "string", enum: ["legacy", "compact-v1"], description: "显式指定要验证的普通回复规则档位；默认legacy，结果记录真实档位" },
+          history: { type: "array", maxItems: 24, description: "仅用于本次验证的固定前文，不读写真实聊天；每条role/text", items: { type: "object", properties: { role: { type: "string", enum: ["user", "assistant"] }, text: { type: "string", minLength: 1, maxLength: 4000 } }, required: ["role", "text"], additionalProperties: false } },
           repeats: { type: "number", description: "每个档位每句探针回几次（1~5），默认 1" },
           levels: {
             type: "array",

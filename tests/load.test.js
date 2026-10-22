@@ -83,14 +83,14 @@ test("内测入口必须包在 DEV_TOOLS 开关里（本地验收要用、发布
   let found;
   while ((found = toolRe.exec(src))) guarded.add(found[1]);
   if (stripped) {
-    for (const name of ["chahuahui_ping", "chahuahui_remind_now", "chahuahui_taste_probe"]) {
+    for (const name of ["chahuahui_ping", "chahuahui_remind_now", "chahuahui_taste_probe", "chahuahui_tool_probe"]) {
       assert.doesNotMatch(src, new RegExp(`name: "${name}"`), `发布副本里不该还留着内测工具 ${name}`);
     }
     return;
   }
   assert.deepEqual(
     [...guarded].sort(),
-    ["chahuahui_ping", "chahuahui_remind_now", "chahuahui_taste_probe"],
-    "内测工具要刚好这三个，且都包在 DEV_TOOLS 里",
+    ["chahuahui_ping", "chahuahui_remind_now", "chahuahui_taste_probe", "chahuahui_tool_probe"],
+    "内测工具要刚好这几个，且都包在 DEV_TOOLS 里",
   );
 });

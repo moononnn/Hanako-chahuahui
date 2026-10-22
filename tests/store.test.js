@@ -649,6 +649,30 @@ test("聊天窗头像开关默认是关的，开了之后记得住（重启也�
   assert.equal(again.getGlobalSettings().messageAvatars, true);
 });
 
+test("等待动效默认还是三个点；改成杯子记得住，也能改回去", () => {
+  const { store, dir } = freshStore();
+  // 默认必须还是三个点：新动效得她自己点了才算，不能开场就把老手感换掉
+  assert.equal(store.getGlobalSettings().typingIndicator, "dots");
+
+  store.setGlobalSettings({ typingIndicator: "cup" });
+  assert.equal(store.getGlobalSettings().typingIndicator, "cup");
+
+  const again = createStore(dir);
+  assert.equal(again.getGlobalSettings().typingIndicator, "cup", "重启后还是杯子");
+
+  // 退回原来那套
+  again.setGlobalSettings({ typingIndicator: "dots" });
+  assert.equal(again.getGlobalSettings().typingIndicator, "dots");
+});
+
+test("等待动效读到不认识的值得退回三个点，不能让聊天窗空着", () => {
+  const { store } = freshStore();
+  store.setGlobalSettings({ typingIndicator: "某种以后才有的动效" });
+  assert.equal(store.getGlobalSettings().typingIndicator, "dots");
+  store.setGlobalSettings({ typingIndicator: null });
+  assert.equal(store.getGlobalSettings().typingIndicator, "dots");
+});
+
 test("移出伙伴只隐藏清单，聊天、记忆和设置都保留；放回后重启也记得", () => {
   const { store, dir } = freshStore();
   store.appendMessage("probe", { role: "assistant", text: "别把这句弄丢" });

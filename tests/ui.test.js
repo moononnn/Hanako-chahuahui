@@ -190,8 +190,9 @@ test("回复只有一条路能画：正在演的那轮归演出，剩下的归�
   assert.match(panel, /liveSkipRepliedTo\.has\(m\.repliedTo\)\) continue;/);
   assert.match(panel, /liveSkipRepliedTo\.delete\(repliedTo\)/);
   assert.match(panel, /if \(payload\.replyMessageId\) seenIds\.add\(payload\.replyMessageId\)/);
-  // 三个点要跟着最新一条走，不能跑到新消息头上去
-  assert.match(panel, /el\.stream\.appendChild\(dots\);/);
+  // 等待态不能跑到新消息头上去：三个点靠 raise 挪到末尾，桌角那杯本来就不在流里
+  assert.match(panel, /dots\?\.raise\?\.\(\);/);
+  assert.match(panel, /raise\(\) \{ el\.stream\.appendChild\(row\); \}/);
   assert.match(panel, /const alive = \(\) => current === agentId && viewSeq === threadViewSeq/);
 });
 
@@ -667,6 +668,25 @@ test("语音消息采用播放胶囊，转文字独立成普通气泡", () => {
   assert.doesNotMatch(panel, /main\.append\(play, wave, duration, transcript\)/, "转文字按钮不能继续塞进语音胶囊");
 });
 
+test("带语音的新消息不会先演成文字气泡再变语音条", () => {
+  // 2026-10-22 实测：轮询补画多气泡消息时走逐条演出，整条绕过了语音分支，
+  // 屏幕上先出现普通气泡，下一轮发现语音状态变了才整段重画成语音条。
+  assert.match(panel, /function hasVoiceBubble\(message\)/);
+  assert.match(panel, /const status = message\?\.voice\?\.status;[\s\S]{0,60}?status === "ready" \|\| status === "pending"/);
+  assert.match(panel, /const voice = hasVoiceBubble\(m\);/);
+  assert.match(panel, /m\.bubbles\.length > 1 && !seenIds\.has\(m\.id\) && !hasVoiceBubble\(m\)/, "带语音的那条不逐条演文字");
+  assert.match(panel, /if \(hasVoiceBubble\(payload\.message\)\)/, "实时演出也要按语音那条画");
+});
+
+test("带语音的消息不能把念不出来的气泡一起吞掉", () => {
+  // 2026-10-21 实测：视频分享带语音时，第三个气泡里的 b23 链接整段没画出来，
+  // 屏幕上只剩语音胶囊和转文字（转文字本来就只收能念的那几句）。
+  assert.match(panel, /function voiceLeftoverBubbles\(m\)/);
+  assert.match(panel, /const spoken = String\(m\.voice\?\.text \?\? m\.text \?\? ""\)/, "以语音实际念的那段为基准");
+  assert.match(panel, /!spoken\.includes\(piece\.replace\(\/\\s\+\/gu, ""\)\)/, "念过的气泡不重复画");
+  assert.match(panel, /for \(const piece of voiceLeftoverBubbles\(m\)\) \{[\s\S]{0,120}?bubble\("assistant", piece, null, m\.at\)/, "念不出来的气泡要照常画在语音下面");
+});
+
 test("语音中途暂停看得出按了停，波形兼做进度", () => {
   // 2026-10-19 实测：以前 pause 只在播完或还停在 0 秒时才复位，
   // 中途按停跟还在放长得一模一样，看不出「我按了停」。
@@ -708,7 +728,7 @@ test("判定发语音时先在后台合成，实时回合直接摆最终语音�
   assert.doesNotMatch(app, /void maybeGenerateVoice\(/, "不能再先落文字再异步补语音");
   assert.match(app, /turn\.message = made\.message/, "实时回合要把最终消息带给前端");
   assert.match(app, /app\.post\("\/thread\/:agentId\/clear"[\s\S]{0,500}voiceGenerations/, "清空聊天时要取消尚未落消息的语音合成");
-  assert.match(panel, /payload\.message\?\.voice\?\.status === "ready"/, "实时回合识别已准备好的语音消息");
+  assert.match(panel, /if \(hasVoiceBubble\(payload\.message\)\)/, "实时回合识别已准备好的语音消息（合成中也算）");
   assert.match(panel, /renderMessage\(payload\.message, \{ bindAssistantActions: true \}\)/, "实时回合直接渲染语音消息");
   assert.match(app, /voice: null,\s*editedAt: new Date\(\)\.toISOString\(\),\s*userRefined: true/, "手动编辑文字时要清掉旧语音");
   assert.match(app, /event: "voice\.commit\.failed"/, "语音已送出后账本异常不能触发整轮重试");
@@ -946,19 +966,20 @@ test("起跑线：自动量那边的痕迹，也能自己定从哪儿算，只�
   assert.match(app, /seedStale\(knowing\.relationSeed, seedLastTry\)/, "该重量的就重量一份（量不出东西也有节流）");
   assert.doesNotMatch(app, /session:list/, "量会话那条路 v2 应用走不通，别写");
   assert.match(app, /note: relationshipNote\(effectiveRelationship\(knowing\), knowing\.relationSeed\)/, "回复那一句也要带上起跑线");
-  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, video: shareableVideo, videoLoginNotice, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, morningFirst: morningFirstScene, askBudgetSpent: askSpent, reason: sendReason, introducedText \}\)/, "主动消息只带与当前消息类型相符的兴趣发现，同时带上本人人格、电脑那边的近况、「纯招呼」标志、晨间首次这层、关系式由头与已经介绍过什么");
+  // 2026-10-20：主动拼装多带了一路新闻素材（news），意图不变：只带当前消息类型真正用得上的那一份。
+  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, video: shareableVideo, news: shareableNews, videoLoginNotice, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, morningFirst: morningFirstScene, askBudgetSpent: askSpent, reason: sendReason, introducedText \}\)/, "主动消息只带与当前消息类型相符的兴趣发现，同时带上本人人格、电脑那边的近况、「纯招呼」标志、晨间首次这层、关系式由头与已经介绍过什么");
   assert.match(app, /const morningFirstScene = morningFirst && isFirstProactiveOfLifeDay\(store\.getProactiveState\(agentId\)\.lastSentAt, now\)/, "晨间首次在出站按当前已发送时刻复核一次");
   assert.match(app, /const historyWindow = splitForContext\(conversationMessages\(threadRows\)\)\.recent/, "主动开口复用同一份上下文预算");
   assert.match(app, /isFirstProactiveOfLifeDay\(state\.lastSentAt, now\)/, "首条联系按四点生活日计算");
   assert.match(app, /const morningFirst = firstOfLifeDay && isMorningPart\(now\)/, "晨间开口只由生活日首条且实际时段决定");
   assert.ok(app.includes("&& !followup?.read && !wakeEcho && !greetingOnly"), "只有纯招呼才跳过兴趣素材");
-  assert.match(app, /const greetingOnly = morningFirst\s+&& !todoHere\s+&& !wakeEcho\s+&& !followup\s+&& !farewellSend\s+&& !seed\s+&& !discovery\s+&& !video\s+&& !videoLoginNotice\s+&& !gate\.exception/u, "有待办、回声、等回音、视频或兴趣素材时不走纯招呼抽签");
+  assert.match(app, /const greetingOnly = morningFirst\s+&& !todoHere\s+&& !wakeEcho\s+&& !followup\s+&& !farewellSend\s+&& !seed\s+&& !discovery\s+&& !video\s+&& !news\s+&& !videoLoginNotice\s+&& !gate\.exception/u, "有待办、回声、等回音、视频、新闻或兴趣素材时不走纯招呼抽签");
   assert.ok(app.includes('if (!exception && kind === "proactive" && !String(todoNudge ?? "").trim() && isNighttimeSleepQuestion(text, now))'), "只拦普通闲聊主动消息，不丢到点提醒或晚安/夜间例外");
   // 锚点门（2026-10-06）：内容型开口先看她那边有没有真凭据，免得又出一条她插不进嘴的自说自话
   assert.match(app, /const anchor = proactiveAnchor\(\{/, "内容型开口要过锚点门");
   // 关系式由头（2026-10-12）：多一条不用兴趣也能开口的路，但频率、护栏、老规矩一样不动
-  assert.match(app, /const reasonEligible = !todoHere\s+&& !farewellSend\s+&& !wakeEcho\s+&& !followup\s+&& !gate\.exception/u, "待办、回声、未回复跟进、晚安、夜间例外优先，关系式由头一个都不抢");
-  assert.match(app, /const reasonPick = \(?[\s\S]{0,400}?reasonEligible\s+\? pickReason\(\{[\s\S]{0,320}?interestAvailable: Boolean\(anchor\.ok && \(seed \|\| discovery \|\| video\)\)[\s\S]{0,160}?hasContext: Boolean\(sceneEcho\) \|\| workActivity\.active === true/u, "兴趣那一份仍过锚点门；共同经历和吐槽只认真凭据");
+  assert.match(app, /const reasonEligible = !todoHere\s+&& !farewellSend\s+&& !wakeEcho\s+&& !followup\s+&& !gate\.exception[\s\S]{0,320}?&& !video\s+&& !news/u, "待办、回声、未回复跟进、晚安、夜间例外优先；有新闻或视频时也不抽关系式由头（抽中会把素材吞掉）");
+  assert.match(app, /const reasonPick = \(?[\s\S]{0,400}?reasonEligible\s+\? pickReason\(\{[\s\S]{0,320}?interestAvailable: Boolean\(anchor\.ok && \(seed \|\| discovery \|\| video \|\| news\)\)[\s\S]{0,160}?hasContext: Boolean\(sceneEcho\) \|\| workActivity\.active === true/u, "种子与探索发现仍过锚点门；共同经历和吐槽只认真凭据");
   assert.match(app, /const reasonForSend = greetingOnly \? null : reason/, "纯招呼占住这一轮时不叠关系式由头");
   assert.match(app, /: reasonForSend\s+\? "word"\s+: decideForm\(/u, "挑到关系式由头就走文字出口，不再退回去要话题");
   assert.match(app, /&& !\(reasonAllowed && reason && reason\.kind !== "interest"\)/, "非兴趣那几种由头不带兴趣素材，也不消耗种子和发现");
@@ -970,7 +991,7 @@ test("起跑线：自动量那边的痕迹，也能自己定从哪儿算，只�
   assert.match(app, /reason: "reason-context-empty", preserveIntent: true/, "由头缺凭据不算时机不合适，暂存意图得留着");
   assert.match(app, /const keepIntent = Boolean\(sent\.gateBlocked \|\| sent\.preserveIntent\) && Boolean\(pending\.intent\)/u, "通用失败分支不吞掉「想找你」");
   assert.doesNotMatch(app, /nextDueFor\([^)]*reason/u, "排点那一层不因由头改频率");
-  assert.match(app, /const seed = gate\.exception \|\| !anchor\.ok \? null : candidateSeed/, "没过锚点门的种子不发，留着下次");
+  assert.match(app, /const seed = gate\.exception \|\| !anchor\.ok \? null : cappedSeed/, "没过锚点门的种子不发，留着下次");
   assert.match(app, /dropUnansweredProactive\(conversationMessages\(store\.getThread\(agentId\)\.messages\)\)/, "画像素材里剔掉她没接住的主动独白");
   assert.doesNotMatch(app, /isSeedKindVoiceMismatch/, "词法那一关已经交给语义核查，不再拦首次介绍");
   // 到点待办是「这次为什么开口」，不是可以捎带的背景：混进情境块就会被写成尾巴
@@ -978,15 +999,16 @@ test("起跑线：自动量那边的痕迹，也能自己定从哪儿算，只�
   assert.match(app, /const sendKind = farewellSend && !todoHere/, "到点待办优先于睡前收尾，别被 farewell 占掉");
   assert.match(app, /const carriedTodo = todoHere && sendKind === "proactive" && !Boolean\(finalGate\.exception\)/, "真把由头带出去的那一轮才算说过");
   assert.match(app, /if \(todoHere && sent\.carriedTodo\)/, "没带出去不许记账，否则这件事今天不会再来");
-  assert.match(app, /async function maybeExploreInterest[\s\S]*?searchTimelyTopic\(fetcher, \{ title: plan\.focus, searchQuery: plan\.searchQuery \}, \{\s*privateTerms: \[USER_NAME, partnerName\],\s*\}\)/, "探索由稳定兴趣生成新角度；已知称呼外发前过滤");
+  assert.match(app, /async function maybeExploreInterest[\s\S]*?searchWeb\(fetcher, \{ query: plan\.searchQuery, enhancement, privateTerms: \[USER_NAME, partnerName\] \}\)/, "探索由稳定兴趣生成新角度；已知称呼外发前过滤（2026-10-20：换引擎后仍走同一道隐私门）");
   assert.match(app, /const candidateSeed = followup\?\.read[\s\S]{0,220}?pickSeed\(seedBook, \{[\s\S]{0,220}?mutedIds: mutedMotifIds\(moodBook\)[\s\S]{0,160}?perMotifCooldown: cooldownByMotif\(moodBook\)/, "主动话题先用手上的种子，她冷掉的方向也一并排除");
   assert.match(app, /const mooded = recomputeMood\(revived\.book, thread\.messages/, "话题温度每轮从消息流重算（她后来才回话也要算得进去）");
   assert.match(app, /const motif = pickMotifForSeeds\(motifs, book, \{ mutedIds \}\)/, "冷掉的方向不再长新种子");
   assert.match(app, /const starved = live\.filter\(/, "还有方向空仓就继续补货，后备库才叫充足");
   assert.match(app, /const candidateDiscovery = followup\?\.read \|\| candidateSeed[\s\S]{0,90}?nextDiscovery\(state\.interestLearning, now\)/, "种子在手时不再另找时效发现");
-  assert.match(app, /discoveryForProactiveMessage\(candidateDiscovery, \{ exception: gate\.exception \}\)/, "夜间例外不得绑定或消耗兴趣发现");
+  assert.match(app, /discoveryForProactiveMessage\(cappedDiscovery, \{ exception: gate\.exception \}\)/, "夜间例外不得绑定或消耗兴趣发现");
   assert.match(app, /const interestContent = \(?[\s\S]{0,400}?!videoLoginNotice && !exception && kind === "proactive"/, "夜间例外与登录提醒不使用兴趣素材");
-  assert.match(app, /const shareableDiscovery = interestContent(?: && !shareableVideo)? \? discoveryForProactiveMessage\(discovery, \{ exception \}\) : null/, "问候、回声、提醒与例外都不消耗候选发现");
+  // 2026-10-20：新闻、视频、发现三者只挑一份带出去，意图不变：问候、回声、提醒与例外都不消耗候选发现。
+  assert.match(app, /const shareableDiscovery = interestContent(?: && !shareableVideo)?(?: && !shareableNews)? \? discoveryForProactiveMessage\(discovery, \{ exception \}\) : null/, "问候、回声、提醒与例外都不消耗候选发现");
   assert.match(app, /if \(shareableDiscovery\) \{[\s\S]{0,250}?markDiscoveryShared\(current\.interestLearning, shareableDiscovery\.id/, "只在实际采用兴趣分享消息后消耗发现");
   assert.match(app, /主动联系不能等用户先说话才有兴趣/);
   assert.match(app, /const personaText = renderPersona\(persona/);
@@ -1444,8 +1466,9 @@ test("等回音也过主动硬门并在真实发送后记配额，暂存意图�
   assert.match(app, /staged: \[pending\.intent, \.\.\.pending\.rest\]/, "gate 拦住时旧暂存意图要显式写回");
   assert.match(app, /const candidateSeed = followup\?\.read[\s\S]{0,220}?pickSeed\(seedBook, \{[\s\S]{0,220}?mutedIds: mutedMotifIds\(moodBook\)/, "临门先端手上的种子，种子也就那一份");
   assert.match(app, /const candidateDiscovery = followup\?\.read \|\| candidateSeed[\s\S]{0,90}?nextDiscovery\(state\.interestLearning, now\)/, "临门只剩种子或时效发现二选一");
-  assert.match(app, /discoveryForProactiveMessage\(candidateDiscovery, \{ exception: gate\.exception \}\)/, "夜间例外不得消耗兴趣发现");
-  assert.match(app, /const shareableDiscovery = interestContent(?: && !shareableVideo)? \? discoveryForProactiveMessage\(discovery, \{ exception \}\) : null/, "发送阶段只使用实际需要的兴趣素材");
+  // 2026-10-20：种子与发现先过「观察式每日一条」的闸，出站那一步取的是闸后的候选（cappedSeed/cappedDiscovery）。
+  assert.match(app, /discoveryForProactiveMessage\(cappedDiscovery, \{ exception: gate\.exception \}\)/, "夜间例外不得消耗兴趣发现");
+  assert.match(app, /const shareableDiscovery = interestContent(?: && !shareableVideo && !shareableNews)? \? discoveryForProactiveMessage\(discovery, \{ exception \}\) : null/, "发送阶段只使用实际需要的兴趣素材");
   assert.match(app, /if \(shareableDiscovery\) \{[\s\S]{0,250}?markDiscoveryShared\(current\.interestLearning, shareableDiscovery\.id/, "例外和未采用发现都不落已分享状态");
   assert.doesNotMatch(app, /sent\.gateBlocked && readyTopic/, "用户旧话题不能再从暂存旁路进入主动话题");
 });
@@ -2072,7 +2095,7 @@ test("每位伙伴一间房：设置页挑图，聊天窗按浓度铺上去", ()
   assert.match(panel, /if \(loadSeq !== appearanceLoadSeq \|\| current !== agentId\) return;/, "旧伙伴的图库回包不能覆盖当前面板");
   assert.match(panel, /const currentPartner = partners\.find\(\(p\) => p\.id === current\);[\s\S]*?if \(currentPartner\?\.background\) void syncChatBackground\(current, currentPartner\.background\)/, "旧列表没有背景时不能把当前房间清成默认");
   assert.doesNotMatch(panel, /void syncChatBackground\(current, partners\.find\(\(p\) => p\.id === current\)\?\.background \?\? null\)/, "轮询不能用缺失背景的旧回包清房间");
-  assert.match(panelCss, /background: var\(--bubble-ta-fg, var\(--primary\)\);\s*opacity: \.65;/, "深色背景下正在输入的小点也要跟着主题");
+  assert.match(panelCss, /\.typing i \{[\s\S]{0,220}?background: var\(--bubble-ta-fg, var\(--primary\)\);/, "深色背景下正在输入的小点也要跟着主题");
 
   // 样式：背景铺满整扇聊天窗，头尾两条工具栏是半透磨砂玻璃，硬缝靠向外化开的雾消掉
   assert.match(panelCss, /\.chat\.has-bg \{ background-size: cover; background-position: center; background-repeat: no-repeat; \}/, "图得铺在整个聊天窗上，不是只铺中间那条滚动带");
@@ -2432,4 +2455,41 @@ test("提示音设置页能按伙伴挑音色、调音量，两处共用一份�
   assert.match(sound, /export function profileFor\(sound, agentId\)/, "按伙伴取音色的判断得在共用模块里");
   assert.match(sound, /export function normalizeSettings\(raw\)/, "读到的账本形状不对要退回默认");
   assert.doesNotMatch(sound, /Notification/);
+});
+
+test("引用要看得见：历史重开和刚发出去的那一刻都画出引用块", () => {
+  // 2026-10-21 实机反馈：引用了 ta 发的那条新闻再追问，发出去只看得见自己那句话，
+  // 引用不见了。后端一直存着、也一直注进 ta 的上下文，缺的是界面这一层。
+  assert.match(panel, /function quoteBlock\(text\)/, "要有引用块这个零件");
+  assert.match(panel, /if \(col && m\.quote\?\.text\) attachQuote\(col, m\.quote\)/, "历史消息重画时要摆出引用");
+  assert.match(panel, /if \(renderedUser\?\.col && quote\) attachQuote\(renderedUser\.col, quote\)/, "刚发出去那一刻也要摆，不能等回包");
+  // 后端：引用要真的存下来，界面才有东西可画
+  assert.match(app, /\.\.\.\(quote \? \{ quote \} : \{\}\)/);
+  assert.match(app, /const quote = rawQuote && String\(rawQuote\.text \?\? ""\)\.trim\(\)/);
+  // 后端：ta 那边也得收到引用（不然引用只是个装饰）；历史接口也要把 quote 带回来，界面才有东西可画
+  assert.match(app, /return \{ \.\.\.message, recall: verdict \};/);
+});
+
+test("引用不能被当成指令：它只是被引用的那句话", () => {
+  const prompt = fs.readFileSync(new URL("../lib/prompt.js", import.meta.url), "utf8");
+  assert.match(prompt, /if \(row\?\.role === "user" && row\?\.quote\?\.text\)/, "引用要进模型上下文");
+  assert.match(prompt, /引用了你之前的一条消息/, "要说得清她指的是哪一条");
+  assert.match(prompt, /const quoted = String\(row\.quote\.text\)\.trim\(\)\.slice\(0, 4000\)/, "引用原文有上限，别把整篇新闻塞进去");
+});
+
+test("复制要真的进剪贴板：先走宿主那条，一层不行就往下退", () => {
+  // 2026-10-21 实机反馈：点「复制」没进剪贴板。
+  // 根因：iframe 里 navigator.clipboard 被浏览器策略拒，而旧代码 navigator 一存在就走它，
+  // 一被拒就直接收工，连 execCommand 那层都没试。
+  const manifest = JSON.parse(fs.readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
+  assert.ok(manifest.capabilities.includes("app/ui.clipboard-write"), "宿主那条剪贴板能力要先声明");
+  assert.match(panel, /async function writeClipboard\(text\)/);
+  assert.match(panel, /await hana\.clipboard\.writeText\(text\)/, "先走宿主进程侧那条");
+  assert.match(panel, /await navigator\.clipboard\.writeText\(text\)/, "再退到浏览器原生");
+  assert.match(panel, /document\.execCommand\("copy"\)/, "最后退到老办法");
+  // 一层失败要记下来继续退，不能一被拒就报错收工
+  assert.match(panel, /catch \(error\) \{ failures\.push\(error\?\.code \|\| "host-failed"\); \}/);
+  assert.match(panel, /catch \(error\) \{ failures\.push\(error\?\.name \|\| "navigator-failed"\); \}/);
+  // 只有真写进去才敢说「复制好了」
+  assert.match(panel, /await writeClipboard\(text\);\s*\n\s*closeMessageFeed\(\);\s*\n\s*setStatus\("复制好了"\)/);
 });

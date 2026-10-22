@@ -240,6 +240,24 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 .inline-field > span { color: var(--ink-soft); font-size: 12px; }
 .inline-field input, .voice-model-fields select { width: 100%; box-sizing: border-box; }
 .inline-field > span { display: flex; align-items: center; gap: 6px; }
+/* 已经有 Key 的那一家：框里空着，但边上得看着有痕迹，不能像没填 */
+.inline-field input.has-saved { border-color: #bcdccd; background: #f5faf7; }
+.inline-field input.has-saved::placeholder { color: var(--mint-deep); opacity: .85; }
+/* 搜索顺序：参与的那几家排前面带序号，没参与的排在后面，行内就能调 */
+.order-list { display: grid; gap: 6px; }
+.order-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 5px 8px 5px 6px; border: 1px solid var(--line-soft); border-radius: var(--r-sm); background: var(--surface); }
+.order-row.is-off { background: transparent; border-style: dashed; }
+.order-row.is-edit { border-color: #bcdccd; background: #f5faf7; }
+.order-step { width: 16px; flex: none; text-align: center; font-size: 11px; font-weight: 700; color: var(--mint-deep); }
+.order-row.is-off .order-step { color: var(--ink-soft); font-weight: 500; }
+.order-name { flex: 1 1 140px; min-width: 0; padding: 0; border: 0; background: transparent; text-align: left; font-size: 12.5px; color: var(--ink); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.order-row .field-state { flex: 0 0 auto; }
+.order-row.is-off .order-name { color: var(--ink-soft); }
+.order-tools { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; margin-left: auto; }
+.order-arrow { width: 22px; height: 22px; border: 0; border-radius: var(--r-xs); background: transparent; color: var(--ink-soft); font-size: 13px; line-height: 1; cursor: pointer; }
+.order-toggle { border: 0; padding: 2px 9px; border-radius: 999px; background: var(--paper-deep); color: var(--ink-soft); font-size: 11.5px; cursor: pointer; }
+.order-toggle.on { background: var(--mint-soft); color: var(--mint-deep); }
+@media (hover: hover) and (pointer: fine) { .order-arrow:hover:not(:disabled) { background: var(--paper-deep); color: var(--ink); } .order-toggle:hover { color: var(--mint-deep); } .order-name:hover { color: var(--mint-deep); } }
 /* 字段标题右边的状态小胶囊：填没填一眼能看见 */
 .field-state {
   font-style: normal;

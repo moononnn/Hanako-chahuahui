@@ -3,6 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-store">
+  <meta http-equiv="Pragma" content="no-cache">
   <title>茶话会 · 设置</title>
   <script>
     // 样式表得现拉，不能等缓存（同 panel.html：宿主给静态文件挂了长缓存）
@@ -24,6 +26,9 @@
     #video-qrcode { display: block; width: min(224px, 100%); height: auto; aspect-ratio: 1; margin-top: 16px; padding: 12px; background: #fff; border: 1px solid var(--line-soft); border-radius: var(--r-md); }
     .video-partner-note { display: block; overflow-wrap: anywhere; }
     .video-partner-note:empty { display: none; }
+    .ui-stamp { margin: 4px 0 0; color: #8d8578; font-size: 11px; }
+    .ui-stamp a { color: #5b8f78; }
+  .ui-stamp .ui-stale { padding: 0 7px; border-radius: 999px; background: var(--blossom-soft); color: var(--blossom); font-weight: 600; }
   </style>
 </head>
 <body>
@@ -33,6 +38,7 @@
         <p class="eyebrow">茶话会</p>
         <h1>茶话会设置</h1>
         <p class="sub" id="sub">把聊天过成舒服的样子。常改的排在前头，伙伴自己的事单独收好。</p>
+        <p class="ui-stamp" id="ui-stamp" hidden><span class="ui-stale" id="ui-stamp-warn">这一页是旧版本</span> · <a href="#" id="ui-reload">重新载入这一页</a></p>
       </div>
       <div class="settings-head-actions">
         <button class="soft-button back-chat" id="back-to-chat" type="button">← 返回聊天</button>
@@ -52,6 +58,7 @@
       <button class="tab" id="tab-voice" data-tab="voice" role="tab" aria-selected="false" aria-controls="panel-voice">语音</button>
       <button class="tab" id="tab-immersion" data-tab="immersion" role="tab" aria-selected="false" aria-controls="panel-immersion">沉浸感</button>
       <button class="tab" id="tab-model" data-tab="model" role="tab" aria-selected="false" aria-controls="panel-model">模型</button>
+      <button class="tab" id="tab-search" data-tab="search" role="tab" aria-selected="false" aria-controls="panel-search">搜索</button>
       <button class="tab" id="tab-proactive" data-tab="proactive" role="tab" aria-selected="false" aria-controls="panel-proactive">主动联系</button>
       <button class="tab" id="tab-partners" data-tab="partners" role="tab" aria-selected="false" aria-controls="panel-partners">伙伴</button>
     </nav>
@@ -77,6 +84,15 @@
           </div>
           <button class="switch" id="msg-refine-switch" type="button" role="switch" aria-checked="false">
             <span class="track"><span></span></span><span class="switch-label">不显示</span>
+          </button>
+        </article>
+        <article class="setting-card compact">
+          <div class="setting-copy">
+            <h3>等回复时的动效</h3>
+            <p>三个点是原来那套，一直在动、不会停。杯中有话是一杯茶：涟漪、蒸汽、茶面的叶子各自慢慢动，杯身轻微起伏。</p>
+          </div>
+          <button class="switch" id="msg-typing-switch" type="button" role="switch" aria-checked="false">
+            <span class="track"><span></span></span><span class="switch-label">三个点</span>
           </button>
         </article>
       </div>
@@ -277,6 +293,26 @@
       </article>
     </section>
 
+    <section id="panel-search" role="tabpanel" aria-labelledby="tab-search" tabindex="0" hidden>
+      <div class="section-head">
+        <div><h2>搜索</h2><p>伙伴自己上网找东西时走哪条路。什么都不填，就是原来的默认搜索。</p></div>
+      </div>
+      <article class="setting-card">
+        <div class="card-title"><div><h3>搜索引擎</h3><p>默认搜索不用 Key，装好就能用。也可以把别的搜索服务排进来：伙伴上网找东西时从第一行开始试，这家不通、额度用完或者被限流就自动用下一行；默认搜索是免费的兜底，移不掉。每家要自己的 Key，填了就存到这台电脑上（Key 只在本机加密锁着，页面只回「已保存」）；AnySearch 不填也能用，走它的免费层。排在前面的那几家会收到搜的词。点某一行就是给它填 Key、测它。</p></div></div>
+        <div class="order-list" id="search-order-list"></div>
+        <small class="detail-field-note" id="search-order-summary"></small>
+        <div class="inline-field" id="search-engine-key-field" hidden>
+          <span class="key-head"><span id="search-engine-key-label">API Key</span><em class="field-state" id="search-engine-key-badge" hidden>已保存</em></span>
+          <input id="search-engine-key" type="password" autocomplete="off" placeholder="粘贴这家的 API Key" />
+        </div>
+        <div class="detail-actions">
+          <button class="soft-button" id="search-engine-save" type="button">保存</button>
+          <button class="soft-button" id="search-engine-test" type="button">测试一下</button>
+        </div>
+        <small class="detail-field-note" id="search-engine-status" aria-live="polite"></small>
+      </article>
+    </section>
+
     <section id="panel-proactive" role="tabpanel" aria-labelledby="tab-proactive" tabindex="0" hidden>
       <div class="section-head">
         <div><h2>主动联系</h2><p>管大家什么时候来、别一次挤上来。</p></div>
@@ -465,6 +501,10 @@
     const KIND_LABEL = { interest: "兴趣", worry: "心事", plan: "打算", gossip: "八卦", want: "想要", other: "其他" };
     const STATE_LABEL = { fermenting: "还在搁", ready: "可以找你说", used: "说过了", dropped: "放下了" };
 
+    // 这一页自己的版本号：后端读同一个文件里的这一行，两边对不上就说明她眼前是旧的。
+    // （以前用文件哈希当戳，但那个值是后端给的，页面旧了它照样显示新值，等于没测。）
+    const UI_BUILD = "20261020.5";
+
     const el = {
       status: document.getElementById("status"),
       backToChat: document.getElementById("back-to-chat"),
@@ -529,9 +569,20 @@
       const text = await res.text();
       let data;
       try { data = JSON.parse(text); } catch { data = { ok: false, error: { message: text.slice(0, 200) } }; }
-      if (!res.ok || data.ok === false) throw new Error(data?.error?.message || `HTTP ${res.status}`);
+      if (!res.ok || data.ok === false) {
+        // 把回包带在错上：失败时页面也得拿到最新的状态与用量，不然刚失败完那一眼还是旧的。
+        const error = new Error(data?.error?.message || `HTTP ${res.status}`);
+        error.data = data;
+        throw error;
+      }
       return data;
     }
+
+    // 页面自报版本旁边那个链接：页面看着不对时，重新拉一次（宿主给静态文件挂了长缓存）。
+    document.getElementById("ui-reload")?.addEventListener("click", (event) => {
+      event.preventDefault();
+      window.location.reload();
+    });
 
     el.backToChat.addEventListener("click", () => {
       stopVideoQr();
@@ -555,6 +606,7 @@
       voice: "伙伴偶尔发一条语音，念得带点情绪；怎么念、用哪个模型都在这一页。",
       immersion: "让伙伴多知道一点你这边今天的事。",
       model: "决定聊天时用哪个模型。给某位伙伴单独挑了就用挑的。",
+      search: "伙伴自己上网找东西时走哪条路。什么都不填，就是原来的默认搜索。",
       proactive: "管大家什么时候来、别一次挤上来。",
       partners: "先选伙伴，再看 ta 自己的设置和记忆。",
     };
@@ -796,6 +848,11 @@
       refineSwitch.classList.toggle("on", refineOn);
       refineSwitch.setAttribute("aria-checked", String(refineOn));
       refineSwitch.querySelector(".switch-label").textContent = refineOn ? "显示" : "不显示";
+      const typingSwitch = document.getElementById("msg-typing-switch");
+      const cupOn = globalSettings.typingIndicator === "cup";
+      typingSwitch.classList.toggle("on", cupOn);
+      typingSwitch.setAttribute("aria-checked", String(cupOn));
+      typingSwitch.querySelector(".switch-label").textContent = cupOn ? "杯中有话" : "三个点";
       const voiceSwitch = document.getElementById("voice-switch");
       const voiceOn = Boolean(globalSettings.voiceEnabled);
       voiceSwitch.classList.toggle("on", voiceOn);
@@ -879,6 +936,7 @@
       paintGlobalRecognitionModel();
       paintGlobalVision();
       paintGlobalVoiceModel();
+      paintSearchEngine();
     }
 
     // ── 模型：全局一份兜底，每位伙伴还能各自再压一个（2026-09-13）；
@@ -1189,6 +1247,254 @@
       }
       sel.value = visionModelCatalog.some((item) => item.key === currentKey) ? currentKey : "none";
       return sel;
+    }
+
+    // ── 搜索：按她排的顺序依次试，第一家就是现在走的那家（2026-10-20 重做）──
+    // 只有一份真相：searchEnhancement.order。默认搜索也在名单里（免费的兜底，不能移除）。
+    const searchEngineSnapshot = { engines: [], states: {}, usageByEngine: {}, order: ["bing"] };
+    // 她排的顺序草稿：只在本页活着，点保存才落盘。
+    let searchOrderDraft = null;
+    // 现在在给哪一家填 Key、测哪一家。点那一行就切过来；第一次进来默认就是第一行。
+    let searchEditId = null;
+    const SEARCH_ENGINE_FALLBACK = { id: "bing", label: "默认搜索（不用填 Key）", keyRequired: false, keyHint: "", hasKey: false, keyEncrypted: true };
+
+    function searchEngineSpecOf(id) {
+      const engines = searchEngineSnapshot.engines.length ? searchEngineSnapshot.engines : [SEARCH_ENGINE_FALLBACK];
+      return engines.find((item) => item.id === id) ?? engines[0];
+    }
+
+    /** 去掉名字后面括号里的那句描述，列表里只留名字。 */
+    function searchEngineShortName(spec) {
+      return String(spec.label || spec.id).replace(/（[^）]*）/gu, "");
+    }
+
+    /** 当前草稿顺序：默认搜索不能从名单里消失（她是兜底）。 */
+    function searchDraftOrder() {
+      const known = (id) => searchEngineSnapshot.engines.some((item) => item.id === id);
+      const draft = (Array.isArray(searchOrderDraft) ? searchOrderDraft : []).filter(known);
+      if (!draft.length) return ["bing"];
+      if (!draft.includes("bing")) draft.push("bing");
+      return draft;
+    }
+
+    /** 顺序摘要：她一眼看得到“依次试谁”。 */
+    function paintSearchOrderSummary() {
+      const summary = document.getElementById("search-order-summary");
+      if (!summary) return;
+      const draft = searchDraftOrder();
+      const names = draft.map((id) => searchEngineShortName(searchEngineSpecOf(id)));
+      const changed = JSON.stringify(draft) !== JSON.stringify(searchEngineSnapshot.order ?? []);
+      summary.textContent = `${changed ? "顺序改过了，点下面的保存才生效。" : ""}现在依次尝试：${names.join(" → ")}。`;
+    }
+
+    /** 说清楚“正在填的那一家”的 Key 和上次测得怎么样。 */
+    function paintSearchNote() {
+      const note = document.getElementById("search-engine-status");
+      if (!note) return;
+      const current = searchEngineSpecOf(searchEditId);
+      if (current.id === "bing") {
+        note.textContent = "默认搜索不用 Key，也不用测：它永远能兜住。";
+        return;
+      }
+      const state = searchEngineSnapshot.states[current.id] ?? {};
+      const currentUsed = Number(searchEngineSnapshot.usageByEngine[current.id]) || 0;
+      // 「已保存」必须一直写在明面上：toast 两秒就散了，切回来不能又变成一句空话。
+      const savedText = current.hasKey
+        ? "Key 已经存好，只存在这台电脑上、页面不回显。"
+        : (current.keyRequired ? "还没填 Key，轮到它的时候会被跳过。" : "不用填 Key，直接用它的免费层。");
+      const stateText = state.status === "failed"
+        ? `上次测试没通过：${state.error || "暂时连不上"}。`
+        : (state.status === "verified" ? "上次测试通过。" : "还没测过。");
+      const lockText = current.hasKey && current.keyEncrypted === false
+        ? "系统加密这会儿用不上，这把 Key 只存在这台电脑上（只有你的 Windows 账户能读）。"
+        : "";
+      note.textContent = `${searchEngineShortName(current)}：${savedText}${stateText}累计用了 ${currentUsed} 次。${lockText}`;
+    }
+
+    /** Key 那一栏跟着“正在填的那一家”走：显隐、标签、已存标记、占位提示。 */
+    function refreshSearchKeyField() {
+      const keyField = document.getElementById("search-engine-key-field");
+      const keyLabel = document.getElementById("search-engine-key-label");
+      const keyBadge = document.getElementById("search-engine-key-badge");
+      const keyInput = document.getElementById("search-engine-key");
+      const test = document.getElementById("search-engine-test");
+      if (!keyField || !keyInput) return;
+      const current = searchEngineSpecOf(searchEditId);
+      const needKey = current.id !== "bing";
+      keyField.hidden = !needKey;
+      if (keyLabel) keyLabel.textContent = `${searchEngineShortName(current)} 的 Key${current.keyRequired ? "" : "（可留空）"}`;
+      // 跟语音那条同一套小胶囊：框里看不到内容，就用这枚标告诉她到底填没填。
+      if (keyBadge) {
+        const typed = keyInput.value.trim();
+        const show = needKey && Boolean(current.keyRequired || current.hasKey || typed);
+        keyBadge.hidden = !show;
+        if (typed) {
+          keyBadge.className = "field-state pending";
+          keyBadge.textContent = current.hasKey ? "会覆盖已保存的" : "待保存";
+        } else if (current.hasKey) {
+          keyBadge.className = "field-state saved";
+          keyBadge.textContent = current.keyEncrypted === false ? "已保存 · 未加密" : "已保存";
+        } else {
+          keyBadge.className = "field-state missing";
+          keyBadge.textContent = "还没填";
+        }
+      }
+      keyInput.placeholder = current.hasKey ? "已经存好了，留空点保存不会改它" : (current.keyHint || "粘贴这家的 API Key");
+      keyInput.classList.toggle("has-saved", Boolean(current.hasKey));
+      if (test) test.disabled = current.id === "bing";
+      paintSearchNote();
+    }
+
+    /**
+     * 搜索顺序：按她排的依次试，第一行就是现在走的那家。
+     * 点某一行 = 切到那一家填 Key / 测它；箭头调顺序；默认搜索那行移不掉。
+     */
+    function paintSearchOrder() {
+      const host = document.getElementById("search-order-list");
+      if (!host) return;
+      const draft = searchDraftOrder();
+      const engines = searchEngineSnapshot.engines.length ? searchEngineSnapshot.engines : [SEARCH_ENGINE_FALLBACK];
+      const rows = [...draft, ...engines.map((item) => item.id).filter((id) => !draft.includes(id))];
+      host.replaceChildren();
+      for (const id of rows) {
+        const spec = searchEngineSpecOf(id);
+        const position = draft.indexOf(id);
+        const on = position >= 0;
+        const row = document.createElement("div");
+        row.className = `order-row${on ? "" : " is-off"}${id === searchEditId ? " is-edit" : ""}`;
+        const step = document.createElement("span");
+        step.className = "order-step";
+        step.textContent = on ? String(position + 1) : "·";
+        row.appendChild(step);
+        const name = document.createElement("button");
+        name.type = "button";
+        name.className = "order-name";
+        name.textContent = spec.label;
+        name.title = id === "bing" ? "默认搜索：免费的兜底，不能移除" : "点一下，给这一家填 Key、测它";
+        name.addEventListener("click", () => {
+          searchEditId = id;
+          paintSearchOrder();
+        });
+        row.appendChild(name);
+        const state = document.createElement("em");
+        if (id === "bing") {
+          state.className = "field-state pending";
+          state.textContent = "兜底";
+        } else {
+          state.className = `field-state ${spec.hasKey ? "saved" : (spec.keyRequired ? "missing" : "pending")}`;
+          state.textContent = spec.hasKey ? "已存 Key" : (spec.keyRequired ? "没 Key" : "免 Key");
+        }
+        row.appendChild(state);
+        const tools = document.createElement("div");
+        tools.className = "order-tools";
+        if (on) {
+          for (const [label, delta, hint] of [["↑", -1, "往前排"], ["↓", 1, "往后排"]]) {
+            const arrow = document.createElement("button");
+            arrow.type = "button";
+            arrow.className = "order-arrow";
+            arrow.textContent = label;
+            arrow.setAttribute("aria-label", `${spec.label} ${hint}`);
+            arrow.disabled = position + delta < 0 || position + delta >= draft.length;
+            arrow.addEventListener("click", () => {
+              const next = [...draft];
+              const [moved] = next.splice(position, 1);
+              next.splice(position + delta, 0, moved);
+              searchOrderDraft = next;
+              paintSearchOrder();
+            });
+            tools.appendChild(arrow);
+          }
+          // 默认搜索是免费的兜底，不给移除。
+          if (id !== "bing") {
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "order-toggle on";
+            remove.textContent = "移除";
+            remove.addEventListener("click", () => {
+              searchOrderDraft = draft.filter((item) => item !== id);
+              paintSearchOrder();
+            });
+            tools.appendChild(remove);
+          }
+        } else {
+          const add = document.createElement("button");
+          add.type = "button";
+          add.className = "order-toggle";
+          add.textContent = "加入";
+          add.addEventListener("click", () => {
+            searchOrderDraft = [...draft, id];
+            paintSearchOrder();
+          });
+          tools.appendChild(add);
+        }
+        row.appendChild(tools);
+        host.appendChild(row);
+      }
+      paintSearchOrderSummary();
+      refreshSearchKeyField();
+    }
+
+    function paintSearchEngine() {
+      const host = document.getElementById("search-order-list");
+      const keyInput = document.getElementById("search-engine-key");
+      const save = document.getElementById("search-engine-save");
+      const test = document.getElementById("search-engine-test");
+      if (!host || !keyInput || !save || !test) return;
+      const search = globalSettings.searchEnhancement ?? {};
+      const engines = Array.isArray(search.engines) && search.engines.length ? search.engines : [SEARCH_ENGINE_FALLBACK];
+      // 先换快照：后面所有判定都读这一份最新的。
+      searchEngineSnapshot.engines = engines;
+      searchEngineSnapshot.states = search.states ?? {};
+      searchEngineSnapshot.usageByEngine = search.usageByEngine ?? {};
+      searchEngineSnapshot.order = Array.isArray(search.order) && search.order.length ? search.order : [search.engine ?? "bing"];
+      // 草稿只在第一次建：之后的保存回包里拿到的是服务器归一后的结果，那才准。
+      if (!Array.isArray(searchOrderDraft)) searchOrderDraft = [...searchEngineSnapshot.order];
+      // 第一次进来就指着第一行（不是默认搜索）：不然 Key 那一栏一上来就隐着，看着像配置项没了。
+      if (!searchEditId || !engines.some((item) => item.id === searchEditId)) searchEditId = searchEngineSnapshot.order[0] ?? "bing";
+      // 输入监听只挂一次：每次重绘都挂会叠出一堆。
+      if (!keyInput.dataset.searchBound) {
+        keyInput.dataset.searchBound = "1";
+        keyInput.addEventListener("input", refreshSearchKeyField);
+      }
+      paintSearchOrder();
+      save.onclick = async () => {
+        // 存的是两件事：顺序 + 当前这一家的 Key。顺序里第一行就是“现在走的那家”。
+        const chosen = searchEditId;
+        const typedKey = keyInput.value.trim();
+        save.disabled = true;
+        try {
+          // 存 Key 要走一次本机加密（会起一个系统进程），8 秒不够用：给足时间。
+          const data = await apiWith("POST", "settings/search-engine", { order: searchDraftOrder(), keyEngine: chosen, apiKey: typedKey }, 30000);
+          globalSettings = data.global ?? globalSettings;
+          // 存完以服务器归一后的顺序为准（它会把不认识的项剔掉，并保证默认搜索在里面）。
+          searchOrderDraft = [...(data.global?.searchEnhancement?.order ?? [])];
+          keyInput.value = "";
+          say("已保存", "ok");
+        } catch (error) {
+          say(`没存上：${error.message}`, "err");
+        } finally {
+          save.disabled = false;
+          paintSearchEngine();
+        }
+      };
+      test.onclick = async () => {
+        test.disabled = true;
+        try {
+          const data = await apiWith("POST", "settings/search-engine/test", { engine: searchEditId, apiKey: keyInput.value.trim() }, 30000);
+          globalSettings = data.global ?? globalSettings;
+          // 测试不改变已保存的 Key，输入框里这把得留着：她多半是「先测一下，通了就点保存」。
+          const tail = data.usedSavedKey ? "" : "（这把 Key 还没保存，记得点保存）";
+          say(data.ok ? `连上了，搜到 ${data.results} 条${tail}` : "没连上", data.ok ? "ok" : "err");
+        } catch (error) {
+          // 失败时后端也把最新状态带回来了：接住它，页面才不会停在旧数字上。
+          if (error?.data?.global) globalSettings = error.data.global;
+          const tail = error?.data?.usedSavedKey === false ? "（已保存的配置没动）" : "";
+          say(`没测成：${error.message}${tail}`, "err");
+        } finally {
+          test.disabled = false;
+          paintSearchEngine();
+        }
+      };
     }
 
     function paintGlobalVision() {
@@ -1546,6 +1852,13 @@
     document.getElementById("msg-refine-switch").addEventListener("click", async () => {
       const next = !Boolean(globalSettings.messageRefine);
       if (await saveGlobal({ messageRefine: next }, next ? "回复修整入口已打开" : "回复修整入口已关闭")) paintGlobal();
+    });
+    document.getElementById("msg-typing-switch").addEventListener("click", async () => {
+      const next = globalSettings.typingIndicator === "cup" ? "dots" : "cup";
+      if (await saveGlobal(
+        { typingIndicator: next },
+        next === "cup" ? "等回复时改成一盏茶" : "等回复时换回三个点"
+      )) paintGlobal();
     });
 
     // ── 提示音：开关、音量、默认音色、按伙伴各自挑的音色 ──
@@ -3898,6 +4211,13 @@
       // GET本身也入队，避免先取得的旧快照在集中保存之后回填。
       const run = globalSaveChain.then(async () => {
         const data = await api("GET", "settings");
+        // 这一页是不是旧的：后端从同一个文件里读出 UI_BUILD，跟页面自己带的那个对不上就是没更新。
+        // 对得上时整行隐身（不摆版本号、不摆刷新链），只真旧了才露出来。
+        const stampLine = document.getElementById("ui-stamp");
+        if (stampLine) {
+          const serverBuild = data.global?.settingsUiBuild;
+          stampLine.hidden = !serverBuild || serverBuild === UI_BUILD;
+        }
         const previousVisibleIds = new Set(partners.map((p) => p.id));
         partners = data.partners ?? [];
         hiddenPartners = data.hiddenPartners ?? [];

@@ -1,8 +1,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { AsyncResource } from "node:async_hooks";
 
 import { createStore } from "../../lib/store.js";
+import { DAILY_SYSTEM, PROFILE_SYSTEM, SEGMENT_SYSTEM } from "../../lib/summarize.js";
+
+/**
+ * 记忆维护（分段/日账/关系档案）和聊天回复走的是同一个模型出口。
+ * 它们会在第一轮对话后自己跑一次，算进“这轮发了几个请求”会把账数错，
+ * 所以按系统提示词认出来单独排掉。
+ */
+const MEMORY_SYSTEMS = new Set([SEGMENT_SYSTEM, DAILY_SYSTEM, PROFILE_SYSTEM]);
 
 /**
  * 一个只覆盖茶话会实际用到那点接口的路由宿主。
@@ -163,6 +172,10 @@ function createModelStub() {
       if (!entry) throw new Error(`没有第 ${target} 次模型调用`);
       entry.resolve({ ndjson: text });
     },
+    /** 只要聊天回复那几次生成；后台记忆维护不算。 */
+    replyCalls() {
+      return stub.calls.filter((entry) => !MEMORY_SYSTEMS.has(String(entry.request?.systemPrompt ?? "")));
+    },
     /** 回一个带错的空包：走「模型接不上」那条判定。 */
     releaseError(target, code = "APP_MODEL_QUOTA_EXCEEDED", message = "quota exceeded") {
       const entry = typeof target === "number" ? stub.calls[target] : target;
@@ -179,7 +192,10 @@ function createModelStub() {
           if (entry.settled) return;
           entry.settled = true;
           resolve({
-            text: async () => (payload.asEvent ? payload.ndjson : JSON.stringify({ type: "text-delta", delta: payload.ndjson }) + "\n"),
+            text: async () => (payload.asEvent ? payload.ndjson : [
+              { type: "text-delta", requestId: request.requestId, delta: payload.ndjson },
+              { type: "done", requestId: request.requestId, stopReason: "stop", assistant: { role: "assistant", content: [{ type: "text", text: payload.ndjson }] } },
+            ].map((event) => JSON.stringify(event)).join("\n") + "\n"),
             json: async () => ({}),
           });
         };
@@ -258,12 +274,16 @@ export function fakeWavBase64() {
  * 起一个真装载的茶话会：走真的 apply(ctx)，路由是真的，数据目录是临时的。
  * 只有宿主接口是假的（模型、伙伴列表、网络）。
  */
-export async function bootChahuahui({ seed } = {}) {
+export async function bootChahuahui({ seed, entryUrl = new URL("../../index.js", import.meta.url) } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "chahuahui-routes-"));
   const store = createStore(dataDir);
   const models = createModelStub();
   const net = createNetworkStub();
   const emittedAppEvents = [];
+  const serviceHandlers = new Map();
+  const serviceCalls = [];
+  // 真实宿主以独立RPC进入服务；不能让mock直接继承工具的短命调用上下文。
+  const serviceScope = new AsyncResource("AppHarnessService");
 
   const partner = { id: "nova", name: "小花", description: "测试用伙伴", personality: "嘴上不饶人，但心里有数" };
   const ctx = {
@@ -271,12 +291,26 @@ export async function bootChahuahui({ seed } = {}) {
     routes: { register(callback) { callback(host.app); } },
     logger: { info() {}, warn() {}, error() {} },
     bus: {
-      request: async (type) => {
+      request: async (type, payload, options = {}) => {
+        if (String(type).startsWith("app:chahuahui/")) {
+          const handler = serviceHandlers.get(type.slice("app:chahuahui/".length));
+          if (!handler) throw new Error(`没有本App服务: ${type}`);
+          serviceCalls.push({ type, payload, options });
+          return serviceScope.runInAsyncScope(() => handler(payload, {
+            requestId: `service-${serviceCalls.length}`, callerAppId: "chahuahui",
+            signal: options.signal ?? new AbortController().signal,
+          }));
+        }
         if (type === "agent:list") return { agents: [partner] };
         if (type === "agent:profile") return { agent: partner };
         return { agents: [] };
       },
       subscribe() { return () => {}; },
+      handle(method, handler, options = {}) {
+        if (serviceHandlers.has(method)) throw new Error(`服务重复: ${method}`);
+        serviceHandlers.set(method, handler);
+        return () => serviceHandlers.delete(method);
+      },
     },
     models,
     network: { fetch: net.fetch },
@@ -293,11 +327,11 @@ export async function bootChahuahui({ seed } = {}) {
   const host = createHost();
 
   if (typeof seed === "function") seed(store, ctx);
-  const { apply } = await import("../../index.js");
+  const { apply } = await import(entryUrl);
   apply(ctx);
 
   const request = (method, url, options) => host.dispatch(method, url, options);
-  return { dataDir, store, models, net, ctx, request, host, emittedAppEvents };
+  return { dataDir, store, models, net, ctx, request, host, emittedAppEvents, serviceCalls, serviceHandlers };
 }
 
 /** 临时目录下的真账本读回：证明写进去的是文件里的东西，不是内存里的残留。 */
