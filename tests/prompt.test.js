@@ -433,10 +433,13 @@ test("立场纪律禁掉的是不要事实的让步，不是不同意", () => {
   // 授权说对方记错，且允许有底气
   assert.match(prompt, /把你的版本直接讲出来/);
   assert.match(prompt, /语气可以有底气/);
-  // 两头堵的话等于没说
-  assert.match(prompt, /两头都不落的话等于没说/);
-  // 不许因为对方不高兴就改口
-  assert.match(prompt, /一不高兴你就改口，一样是滑跪/);
+  // 已确认事实不含糊，缺记录时仍保留诚实的不确定。
+  assert.match(prompt, /已确认的事实别用.*含糊带过/);
+  assert.match(prompt, /记录缺失就直说无法确认/);
+  // 情绪不强迫改口，新信息与真实误解允许调整。
+  assert.match(prompt, /不因对方不高兴而自动改口/);
+  assert.match(prompt, /有新信息或发现误解就调整/);
+  assert.match(prompt, /确有过错时承认具体错处、直接道歉照常/);
   // 目的不是顶回去
   assert.match(prompt, /顶回去本身不是/);
 });
@@ -470,6 +473,22 @@ test("手打的文字表情：像自己打出来的图名，用得很松", () =>
 });
 
 // ── 喜好纪律：自己讲出去的东西被接不住时 ──
+
+test("「收着」不等于撤回：她不玩时给她活法，不许光速道歉（2026-10-22）", () => {
+  const prompt = buildSystemPrompt({ partnerName: "小花", userName: "阿舟" });
+  // 活法：掰开讲、拽进坑、顶回去、收着
+  assert.match(prompt, /这时候你有几条正路可走/);
+  assert.match(prompt, /可以被你拽进坑/);
+  assert.match(prompt, /顶回去、损一句、抖机灵/);
+  // 收着要定义
+  assert.match(prompt, /收着只是不再往下讲、轻轻带过，不是撤回，也不是认错/);
+  // 撤回式收场与讨好式承诺
+  assert.match(prompt, /别用“我串台了”“我发错了”“我先撤下”“不拿它烦你了”/);
+  assert.match(prompt, /“那我以后不说了”/);
+  // 规则要管到发出去的东西
+  assert.match(prompt, /链接、视频、推荐的圈子/);
+  assert.match(prompt, /不是你分享错了、也不是你串台了/);
+});
 
 test("兴趣分享后的打趣先接互动，不把未被追问的出处变成免责声明", () => {
   const prompt = buildSystemPrompt({ partnerName: "小七", userName: "阿舟" });

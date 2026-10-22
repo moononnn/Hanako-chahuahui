@@ -1,5 +1,28 @@
 # TESTING · 茶话会
 
+## 通用立场准则（2026-10-22，CHF-20261022-04）
+
+- 最终补齐：独立复核发现专注陪读的独立生成路径漏接，在 `focusReminderSpec.system` 复用同一CORE，新增start/reply/distracted/end四种接线断言；不改专注行为。上列7文件命令追加 `tests/focus-companion.test.js tests/focus-routes.test.js`，最终9文件166/166通过，0失败/取消/跳过；focus-companion语法通过、git diff --check通过。补齐后再次正式reload成功，inspect为host=on/agent=on。以下138项为补齐前阶段结果，保留追溯。
+
+- 范围：legacy/compact普通回复、主动/晨间/夜间/睡前/睡后被叫起/催话共用 `STANCE_CORE`，各路径只注入一次。构造验收题覆盖随口质疑、事实纠错/误解、情绪与明确边界、真心赞同和温柔性格；仅验证规则文本与接线，不冒充真实模型行为验证。
+- 命令：`node --test tests/prompt.test.js tests/reply-rules-compact.test.js tests/compose.test.js tests/familiar-tease.test.js tests/proactive-expression.test.js tests/stance.test.js tests/awaiting.test.js`；`node --check` 检查 `lib/prompt.js`、`lib/reply-rules-compact.js`、`lib/compose.js`、`lib/stance.js`、`lib/awaiting.js`。
+- 结果：相关7文件138/138通过，0失败/取消/跳过，5份JS语法通过。首轮5文件117/118通过，唯一失败为legacy两项旧字面断言，按新语义改为已确认事实/记录缺失/新信息/直接道歉边界后通过；后续diff检查发现两行行尾空格，已仅去除空格。
+- 已通过正式入口reload，随后inspect为host=on/agent=on。此结果证明本地代码已加载，真实聊天效果仍待观察；未调用真实模型、未全量、未改版本/README/简介、未提交上传。
+
+## 她说「没玩过」，伙伴不再光速滑跪（2026-10-22）
+
+- 她的要求：茶话会里她说「第五人格？没玩过」，伙伴回「啊我串台了…那两条平衡调整我先撤下，不拿它烦你了哈」。她问：这类滑跪之前修过，为什么这次还是。
+- **她的本意（第二轮澄清）**：她要的不是「我不喜欢的就别推送给我」，而是**回应时的姿态**——她说没玩过/不喜欢时，伙伴可以嘲讽、可以耐心解释、可以拉她入坑，而不是光速道歉自我否定。第一轮我误读成「别再给我看这类内容」，往温度账与选材侧加了一整套降频（温度账 `drop` 档、`isDirectionPaused()`、视频候选过温度账），她否掉后已整块撤回，源文件与测试全部还原。
+- 现场证据：`app-data/chahuahui/v2/threads/hanako.json` 消息 491/497（02:53、07:43 两条第五人格平衡调整视频）、498（她那句）、499（滑跪那条）；`diagnostics.jsonl` 08:25:33 记 `reply.prompt.profile = compact-v1`、`systemChars 23308` → 纪律块都在场上，不是缺规则。
+- 改了什么（只改回应层与分享侧，不碰选材/频率）：
+  1. `lib/reply-rules-compact.js`（运行时真正生效的那块）、`lib/prompt.js`（旧版全量）：给活法——不懂就耐心用白话补上好玩在哪、讲到她也想试（可以把她拽进坑）；或者顶回去、损一句、抖机灵，把自己那份喜欢守住；实在没兴致才收着不提。「收着」定死为「不再往下讲」，不是撤回、不是道歉、不是认错。点名禁「我串台了」「我发错了」「我先撤下」「不拿它烦你了」这类撤回式收场；也禁拿「那我以后不说了」换她一句好话。对象从「你刚讲过的话」扩到「链接、视频、推荐的圈子」。
+  2. `lib/stance.js`：立场料同一层意思（想讲就讲到她自己也想试；收着不是撤回）。
+  3. `lib/compose.js` 视频分支：讲具体游戏/剧/圈子时先用一句白话说清那是什么，别用只有玩过的人才懂的行话——她可能压根没玩过。
+- 命令：`node --test tests/prompt.test.js tests/reply-rules-compact.test.js tests/compose.test.js tests/stance.test.js tests/familiar-tease.test.js tests/proactive.test.js tests/proactive-expression.test.js tests/topic-mood.test.js tests/video-sharing.test.js`；4 个源文件 `node --check`。
+- 结果：定向 9 文件 204/204 通过、0 失败；4 份 JS 语法通过。新增用例 2 项（compact 与 legacy 各一：活法在位、「收着」有定义、撤回式收场与讨好式承诺被点名禁、对象覆盖到链接/视频）。
+- 真机对照（用**旧**提示词，compact-v1，openai-codex/gpt-6-luna，体感台 5 个关系档 × 3 次 = 15 条，同一场景「第五人格？没玩过」）：15 条里 0 条滑跪；最好的一条是「我刚才直接默认你玩过第五人格了，没玩过很正常哈…下次我先把游戏名说清楚」。结论：纪律块本身大体拦得住，这一回的触发另有条件（真实那轮系统提示 23308 字，是体感台 14639 字的 1.6 倍；真实关系深过体感台最深档；真实那轮前面挂着两条同方向分享）。
+- 未全量、未改版本号、未改 README/简介；**reload 未生效**（宿主要求她审阅新权限后重载）。新提示词的真机复验待重载后再跑；重载后若体感台仍拉不到数组参数，就在茶话会里直接发一句「第五人格？没玩过」看回复。
+
 ## 等回复茶杯分「在写 / 在说」两档（2026-10-21）
 
 - 她的要求：语音回复时等待态要跟文字回复不一样；她先想过整杯晃，最后定成「热气收起 + 茶面荡波 + 杯身轻颤」。

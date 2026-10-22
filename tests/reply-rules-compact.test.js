@@ -3,6 +3,38 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { buildSystemPrompt, replyChoiceBlock, buildTeaseText, CHAT_HOUSE_STYLE } from "../lib/prompt.js";
 import { bootChahuahui } from "./helpers/app-harness.js";
+import { STANCE_CORE } from "../lib/stance.js";
+import { nudgeSpec } from "../lib/awaiting.js";
+import { focusReminderSpec } from "../lib/focus-companion.js";
+import { proactiveSpec, nightSpec, farewellSpec, stirredSpec } from "../lib/compose.js";
+
+// 构造验收场景：只验规则在场，不能证明真实模型会自然执行。
+test("通用立场区分质疑、纠错、不适与真心赞同，覆盖两版回复和各主动路径", () => {
+  const prompts = [
+    ...["legacy", "compact-v1"].map((ruleProfile) => buildSystemPrompt({ partnerName: "小七", userName: "阿舟", ruleProfile })),
+    ...[proactiveSpec, nightSpec, farewellSpec, stirredSpec].map((spec) => spec({ partnerName: "小七", userName: "阿舟", personaText: "性格温柔" }).systemPrompt),
+    proactiveSpec({ partnerName: "小七", userName: "阿舟", morningFirst: true }).systemPrompt,
+    nudgeSpec({ partnerName: "小七", userName: "阿舟", stage: "ask", waitedMinutes: 20 }).systemPrompt,
+    ...["start", "reply", "distracted", "end"].map((kind) => focusReminderSpec({ active: { taskTitle: "读书", plannedMinutes: 25 }, kind, userName: "阿舟" }).system),
+  ];
+  for (const prompt of prompts) {
+    assert.equal(prompt.split(STANCE_CORE).length - 1, 1, "共用准则每条路径只注入一次");
+    // 「真的吗」「我不同意」不构成自动认错的理由。
+    assert.match(prompt, /不因对方态度强烈就自动认错、改口或承诺改变/);
+    // 「你理解反了」可带来新信息，正常修正与道歉保留。
+    assert.match(prompt, /新信息、事实错误或发现自己误解/);
+    assert.match(prompt, /不必等对方生气或受伤/);
+    assert.match(prompt, /不自贬、不反复求原谅、不作过度保证/);
+    // 生气不能强迫赞同；「别这样对我」也无需证明受伤。
+    assert.match(prompt, /安抚不等于全盘赞同/);
+    assert.match(prompt, /不要求对方证明受伤/);
+    assert.match(prompt, /调整相处方式也不等于撤回观点/);
+    // 真心同意、柔软与玩笑认栽不被误伤。
+    assert.match(prompt, /真诚赞同、温柔退让和玩笑认栽都可以/);
+    assert.match(prompt, /不为显得独立而刻意反驳/);
+    assert.doesNotMatch(prompt, /只有.*(?:受伤|生气).*才.*道歉|对不起.*抱歉.*不当开场白|「对不起」「抱歉」也别当开场白/);
+  }
+});
 
 // 只验提示词保真、长度、试点接线和匿名验收题；假模型不能证明真实语义表现。
 const input = {
@@ -31,6 +63,22 @@ test("精简试点保留喜好自主性、真实纠错和克制性格", () => {
   assert.match(compact(), /克制.*简短/);
   assert.match(compact(), /多解释.*少提.*顶回去/);
   assert.match(compact(), /用白话补上好玩在哪/);
+});
+
+test("她说不喜欢时：给她正当的活法，禁掉光速道歉（2026-10-22）", () => {
+  const prompt = compact();
+  // 不只给禁令，还得给活法：解释、拉人入坑、顶回去、收着
+  assert.match(prompt, /这时候你有好几条正路可以走/);
+  assert.match(prompt, /拽进坑/);
+  assert.match(prompt, /顶回去、损一句、抖机灵/);
+  // 「收着」要有确定含义，否则模型会把它执行成「我先撤下」
+  assert.match(prompt, /收着只是不再往下讲，不是撤回、不是道歉、不是认错/);
+  // 撤回式收场与讨好式承诺都要点名禁掉
+  assert.match(prompt, /不许用‘我串台了’‘我发错了’‘我先撤下’‘不拿它烦你了’/);
+  assert.match(prompt, /那我以后不说了/);
+  // 规则要管到发出去的东西，不只是说过的话
+  assert.match(prompt, /链接、视频、推荐的圈子/);
+  assert.match(prompt, /不是你分享错了/);
 });
 
 test("出处边界集中到查证块，接梗不自证，追问不能编造", () => {
