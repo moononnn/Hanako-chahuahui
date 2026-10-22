@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { CHAT_HOUSE_STYLE, buildSystemPrompt, buildTeaseText, identityBlock, isClosingSignal, replyChoiceBlock, shouldQuietClose, threadToMessages } from "../lib/prompt.js";
+import { CHAT_HOUSE_STYLE, VOICE_REQUEST_TEXT, buildSystemPrompt, buildTeaseText, identityBlock, isClosingSignal, replyChoiceBlock, shouldQuietClose, threadToMessages } from "../lib/prompt.js";
 
 test('伙伴历史quote残片只在模型副本清理，用户字面标签和原账本保留', () => {
   const rows = [{ role: 'user', text: '我说 [quote] 这个标签' },
@@ -13,6 +13,48 @@ test('伙伴历史quote残片只在模型副本清理，用户字面标签和原
   assert.equal(messages[1].content[0].text, '来了~\n靠过来');
   assert.equal(messages[2].content[0].text, '原话\n回话');
   assert.equal(JSON.stringify(rows), before);
+});
+
+test("她要听声音的一轮，伙伴得知道自己能发语音", () => {
+  // 2026-10-22 实机：她发「给我发条语音呗」，那条真的配上了语音，
+  // 正文里却写着「我在这个聊天框里发不了语音」。
+  assert.match(CHAT_HOUSE_STYLE, /有时会被念成语音发过去/);
+  assert.match(CHAT_HOUSE_STYLE, /别解释自己能不能发语音/);
+  const withVoice = buildSystemPrompt({ partnerName: "小花", userName: "阿岚", personaText: "", ruleProfile: "legacy", voiceText: VOICE_REQUEST_TEXT });
+  assert.ok(withVoice.includes(VOICE_REQUEST_TEXT));
+  assert.match(VOICE_REQUEST_TEXT, /她刚明确要你发语音/);
+  assert.match(VOICE_REQUEST_TEXT, /就回一两句你此刻想跟她说的/);
+  assert.match(VOICE_REQUEST_TEXT, /不用解释你能不能发语音/);
+  // 平时不塞这块，免得每一轮都在提醒它“我会发语音”
+  const plain = buildSystemPrompt({ partnerName: "小花", userName: "阿岚", personaText: "", ruleProfile: "legacy" });
+  assert.equal(plain.includes(VOICE_REQUEST_TEXT), false);
+});
+
+test("闲聊里说话有底气：不先垫免责声明，讲错了再改", () => {
+  // 2026-10-21 实测：分享视频后主动补一句「我前面只看了字幕，画面没看过呢」，
+  // 新闻也爱先声明「数据可能不准」。闲聊不需要这种自证。
+  assert.match(CHAT_HOUSE_STYLE, /说得有底气/);
+  assert.match(CHAT_HOUSE_STYLE, /自己的看法、猜测、印象直接说出来/);
+  assert.match(CHAT_HOUSE_STYLE, /不用主动交代自己没读到什么、没看过什么/);
+  assert.match(CHAT_HOUSE_STYLE, /说错了就说错了，她指出来你再改一句/);
+  // 事实边界本身不能跟着被删：编造和真实边界仍要分开
+  assert.match(CHAT_HOUSE_STYLE, /分清事实、状态与联想/);
+});
+
+test("回应先接具体内容再选形式，不能用泛态度代替接话，也不强制文字互怼", () => {
+  const text = replyChoiceBlock({ userName: "阿舟" });
+  assert.match(text, /先看她递来的具体内容/);
+  assert.match(text, /玩笑.*挑逗/);
+  assert.match(text, /只表示.*笑.*收到.*附和.*不等于/);
+  assert.match(text, /图本身.*接招/);
+  assert.match(text, /不必每轮.*文字.*提问.*互怼/);
+  assert.ok(text.indexOf("拿不准就接") < text.indexOf("先看她递来的具体内容"), "先判回应价值，再决定接什么");
+  assert.ok(text.indexOf("先看她递来的具体内容") < text.indexOf("- 只回一张表情包"));
+  for (const ruleProfile of ["legacy", "compact-v1"]) {
+    const prompt = buildSystemPrompt({ partnerName: "小七", userName: "阿舟", ruleProfile, replyText: text });
+    assert.ok(prompt.includes(text));
+    assert.doesNotMatch(text, /码头|薯条|海鸥/);
+  }
 });
 
 test("每轮回应都有正常回复、只发表情包和安静收尾三个出口", () => {
@@ -492,4 +534,24 @@ test("喜好纪律跟查证、立场同一层相邻，排在人格之前，且�
   assert.ok(tasteAt > stanceAt, "喜好纪律跟立场同一层，接在后面");
   assert.ok(tasteAt < personaAt, "三条常驻纪律都在人格之前");
   assert.doesNotMatch(prompt, /sourceMessageId|claims|概率/, "纪律不带内部机制");
+});
+
+test("她引用的那一句要真的进上下文：ta 得知道她指的是哪条", () => {
+  const rows = threadToMessages([
+    { id: "m-news", role: "assistant", text: "今天有则新闻：某地天降橙雨" },
+    { id: "u1", role: "user", text: "再联网搜一下这条", quote: { messageId: "m-news", text: "今天有则新闻：某地天降橙雨" } },
+  ], 24, { userName: "她" });
+  const userRow = rows.find((row) => row.role === "user");
+  assert.ok(userRow, "那条用户消息得在上下文里");
+  assert.match(userRow.content, /引用了你之前的一条消息/);
+  assert.match(userRow.content, /天降橙雨/, "被引用的原文得给 ta 看");
+  assert.match(userRow.content, /再联网搜一下这条/, "她自己那句话也得在");
+});
+
+test("没有引用的消息不受影响：上下文里不许多出引用壳子", () => {
+  const rows = threadToMessages([
+    { id: "u1", role: "user", text: "就这一句" },
+  ], 24, { userName: "她" });
+  assert.doesNotMatch(rows[0].content, /引用了你之前的一条消息/);
+  assert.match(rows[0].content, /就这一句/);
 });

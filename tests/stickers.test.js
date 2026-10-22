@@ -209,6 +209,15 @@ test("参考词：按出现次数排，取前 N 个", () => {
   assert.deepEqual(referenceWords(catalog, 2), ["无语", "开心"]);
 });
 
+test("表情提示不鼓励省掉具体话头，保留能独立接招的斗图出口", () => {
+  const hint = buildStickerHint(buildCatalog(INDEX, "hanako"));
+  assert.match(hint, /具体话头.*先接/);
+  assert.match(hint, /图本身.*接招/);
+  assert.match(hint, /斗图/);
+  assert.doesNotMatch(hint, /图比字省事|你猜我今天睡到几点/);
+  assert.doesNotMatch(hint, /码头|薯条|海鸥/);
+});
+
 test("提示词：图库为空就不提这回事；有图时说清词从哪来、最多几张", () => {
   assert.equal(buildStickerHint(null), "");
   assert.equal(buildStickerHint({ stickers: [] }), "");

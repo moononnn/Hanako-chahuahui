@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
-import { bootChahuahui, reopenThread, fakeWavBase64 } from "./helpers/app-harness.js";
+import { bootChahuahui as bootHarness, reopenThread, fakeWavBase64 } from "./helpers/app-harness.js";
 import { createStore } from "../lib/store.js";
 
 /**
@@ -61,7 +61,7 @@ const post = (request, body) => request("POST", "/turns", {
 
 /**
  * 直接往 memory.json 里放条目，绕过 rollup。
- * rollup 那条路要驱动足量消息并等 utility，测的是另一件事（素材与批量整理）。
+ * rollup 那条路要驱动足量消息并等记忆 stream，测的是另一件事（素材与批量整理）。
  * 这里要固定的是「账上已经有条目时，生成路径怎么用它」。
  */
 function seedEntries(store, rows) {
@@ -180,7 +180,7 @@ const rollupRows = () => [
   { role: "assistant", text: "行，记得给我留一块" },
 ];
 
-/** 按 systemPrompt 区分 tidy 里串行跑的三次后台调用。 */
+/** 按 systemPrompt 区分记忆整理的各类后台调用。 */
 function utilityKind(systemPrompt) {
   const s = String(systemPrompt ?? "");
   if (s.includes("还没聊透的话题")) return "topics";
@@ -194,25 +194,40 @@ function utilityKind(systemPrompt) {
 const utilityTextOf = (entry) => String(entry?.request?.messages?.[0]?.content ?? "");
 
 /**
- * 可控的 utility 出口。
- * hold 里的那类会挂住，由测试决定什么时候放——后台请求在途时才能做撤回这类事。
- * 其余按 answers 立即回；空串会让宿主判空正文重试，所以这里一律给非空。
+ * 记忆整理已从 utility 改走 stream；保留原 helper 名，调用用例不挪动。
+ * hold 里的那类会挂住，由测试决定什么时候放，保留撤回期间的在途窗口。
+ * 普通聊天转交原 harness；utility 只观测，不能冒充记忆整理响应。
  */
 function stubUtility(app, { hold = [], answers = {} } = {}) {
   const held = new Set(hold);
   const calls = [];
-  app.ctx.models.utility = async (request) => {
+  const otherStreams = [];
+  const utility = watchUtility(app);
+  const originalStream = app.ctx.models.stream;
+  app.ctx.models.stream = async (request) => {
     const kind = utilityKind(request?.systemPrompt);
+    if (kind === "unknown") {
+      otherStreams.push({ kind, request });
+      return originalStream(request);
+    }
     const entry = { kind, request, answer: answers[kind] ?? "", pending: held.has(kind), resolve: null };
     calls.push(entry);
-    if (!entry.pending) return { requestId: `utility-${calls.length}`, text: entry.answer };
+    const response = () => ({
+      text: async () => [
+        { type: "text-delta", requestId: request.requestId, delta: entry.answer },
+        { type: "done", requestId: request.requestId, stopReason: "stop", assistant: { role: "assistant", content: [{ type: "text", text: entry.answer }] } },
+      ].map((event) => JSON.stringify(event)).join("\n") + "\n",
+    });
+    if (!entry.pending) return response();
     return new Promise((resolve) => {
-      entry.resolve = () => resolve({ requestId: `utility-${calls.length}`, text: entry.answer });
+      entry.resolve = () => resolve(response());
     });
   };
-  const ofKind = (kind) => calls.filter((row) => row.kind === kind);
+  const ofKind = (kind) => (kind === "unknown" ? otherStreams : calls.filter((row) => row.kind === kind));
   return {
     calls,
+    otherStreams,
+    utility,
     of: ofKind,
     /** 等这一类里第 from 次（从0起）调用挂住，返回那一条。 */
     async waitFor(kind, from = 0, timeoutMs = 4000) {
@@ -221,7 +236,7 @@ function stubUtility(app, { hold = [], answers = {} } = {}) {
         const hit = ofKind(kind)[from];
         if (hit) return hit;
         if (Date.now() > deadline) {
-          throw new Error(`等待 utility 的 ${kind}#${from} 超时（实际：${calls.map((row) => row.kind).join(",") || "无"}）`);
+          throw new Error(`等待记忆 stream 的 ${kind}#${from} 超时（实际：${calls.map((row) => row.kind).join(",") || "无"}）`);
         }
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
@@ -232,6 +247,15 @@ function stubUtility(app, { hold = [], answers = {} } = {}) {
       entry.resolve?.();
     },
   };
+}
+
+/** 普通聊天也会排后台记忆任务，不能让它们占用聊天 harness 的调用编号。 */
+async function bootChahuahui(options) {
+  const app = await bootHarness(options);
+  app.memoryStream = stubUtility(app, { answers: {
+    ...defaultAnswers, segment: SEGMENT_TEXT, longterm: '{"facts":[],"entries":[]}',
+  } });
+  return app;
 }
 
 const tidy = (request) => request("POST", `/memory/${AGENT}/tidy`, { json: {} });
@@ -509,6 +533,8 @@ test("整理：有效结果写入长期条目与摘要、整理水位推进，�
   assert.equal(util.of("segment").length, 1, "只压了一次摘要");
   assert.equal(util.of("longterm").length, 1, "事实与条目复用同一次调用，没有再抽一轮");
   assert.equal(util.of("unknown").length, 0, "不该有认不出来的后台调用");
+  assert.equal(util.utility.seen.length, 0, "记忆整理不应调用 utility 或借 utility 兜底");
+  assert.equal(app.models.calls.length, 0, "记忆整理不应混入普通聊天的调用队列");
 
   // 材料里确实是这一批消息。
   const material = utilityTextOf(util.of("longterm")[0]);

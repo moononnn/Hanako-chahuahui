@@ -95,7 +95,9 @@ test("公开源码即使只关闭DEV_TOOLS、不剥整块，也不能启用本�
   // 副本形态该验的是剥块后 pilot 为空，上面那条已经验了。这里如实跳过，不假装通过。
   if (!source.includes("// __CHAHUAHUI_DEV_ONLY_END__")) return;
   const start = source.indexOf('let compactReplyPilotId = ""');
-  const end = source.indexOf("// __CHAHUAHUI_DEV_ONLY_END__", start);
+  // 只执行本用例要验证的开关与试点赋值；后面的本机ESM钩子含import.meta/顶层await，不能交给Function。
+  const hooks = source.indexOf("\nlet localDevHooks =", start);
+  const end = hooks >= 0 ? hooks : source.indexOf("// __CHAHUAHUI_DEV_ONLY_END__", start);
   const block = source.slice(start, end);
   const enabled = block.replace(/const DEV_TOOLS = (?:true|false)/, "const DEV_TOOLS = true");
   assert.equal(new Function(`${enabled}\nreturn compactReplyPilotId;`)(), "hanako");
