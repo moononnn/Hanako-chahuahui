@@ -9,6 +9,7 @@
   "minAppVersion": "0.1020.0",
   "capabilities": [
     "app/models.infer",
+    "app/usage.read",
     "app/tools.expose-to-model",
     "app/agents.read",
     "app/resources.read",

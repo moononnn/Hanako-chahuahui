@@ -1,5 +1,14 @@
 # TESTING · 茶话会
 
+## 后台只读用量查询（2026-10-22）
+
+- 新增 `chahuahui_usage_query`，只在显式调用时经 `ctx.bus.request("usage:list", filter)` 查公开宿主账本。默认最近1小时、`attributionKind=plugin`、最多100条，可按带时区时间、宿主归因伙伴、provider/model、状态筛选；范围最多7天、单次最多200条。没有分页入参契约，不伪造翻页；有游标或达到上限均标部分统计。
+- 范围边界：公开契约没有 App 身份字段，结果明确是宿主插件调用，可能含其他 App；伙伴字段属于宿主账本归因，不保证是茶话会业务聊天对象。未实现视频关联或按业务用途拆分，不冒称茶话会专属总账。金额单位未核不展示，不额外调用模型，也不读底层账本/正文/密钥。
+- 用量规则：逐字段保留已知部分合计、已知请求数、未知请求数；无已知数据为null，真零保留0；各字段按宿主原值独立展示，思考和缓存不再自行加到总量。失败、usage_missing、无效回包、授权失败和成功空列表均不能当零消耗；任何结果都不承诺整个时间段完整。成功与错误输出均走字段白名单，排除会话标识、原始API、元数据、金额及宿主原始错误文本。
+- 验证命令：`node --check index.js`；`node --check lib/usage-query.js`；`node --test tests/usage-query.test.js tests/load.test.js`。
+- 结果：初验17/17通过；独立复核后补空列表含义、完整性声明、注册失败不阻断装载、错误文本白名单，最终相关两文件19/19通过（查询14项、装载5项），0失败/取消/跳过；两份JS语法与git diff --check通过。未全量、未发真实模型请求。
+- 运行时：已尝试正式reload，宿主要求审阅新增 `app/usage.read` 权限，尚未放行；代码已保存，真实账本接口与工具可见性须授权后再验。版本、README与简介未改，未上传。
+
 ## 通用立场准则（2026-10-22，CHF-20261022-04）
 
 - 最终补齐：独立复核发现专注陪读的独立生成路径漏接，在 `focusReminderSpec.system` 复用同一CORE，新增start/reply/distracted/end四种接线断言；不改专注行为。上列7文件命令追加 `tests/focus-companion.test.js tests/focus-routes.test.js`，最终9文件166/166通过，0失败/取消/跳过；focus-companion语法通过、git diff --check通过。补齐后再次正式reload成功，inspect为host=on/agent=on。以下138项为补齐前阶段结果，保留追溯。

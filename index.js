@@ -47,6 +47,7 @@ import {
   withModelDeadline,
 } from "./lib/model.js";
 import { createStore, createDiagnostics } from "./lib/store.js";
+import { registerUsageQuery } from "./lib/usage-query.js";
 import { createFocusCompanion, focusReminderSpec, focusChatText } from "./lib/focus-companion.js";
 import { composeWithSupersedeRetry, hasNewerUserMessage, isSpeechMessage } from "./lib/turn-window.js";
 import { createThreadRebuildScheduler } from "./lib/rebuild-queue.js";
@@ -478,6 +479,8 @@ export function videoLoginNoticeDue(login, noted, now = new Date()) {
 }
 
 export function apply(ctx) {
+  try { registerUsageQuery(ctx); }
+  catch { ctx.logger?.error?.("[chahuahui] 用量查询工具注册失败，其余功能继续装载"); }
   const diagnostics = createDiagnostics(ctx.dataDir);
   const store = createStore(ctx.dataDir);
   // 凭据仅供B站内部请求，公开状态不带凭据，且不进入设置、诊断或模型上下文。
