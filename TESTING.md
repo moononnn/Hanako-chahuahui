@@ -1,5 +1,382 @@
 # TESTING · 茶话会
 
+## 等回复茶杯分「在写 / 在说」两档（2026-10-21）
+
+- 她的要求：语音回复时等待态要跟文字回复不一样；她先想过整杯晃，最后定成「热气收起 + 茶面荡波 + 杯身轻颤」。
+- 选档依据：`POST /thread/:id/message` 的 turn 回包新增 `voiceRequested: isExplicitVoiceRequest(stored.text)`，前端 `typingIndicator(mode)` 据此选档。概率触发的语音算不出来，仍走文字档；语音到了气泡自带声波。
+- 改动：`cupOnTheTable(mode)` 给 `.wait-cup-slot` 加 `voice` 类；`waitingCupSvg` 补第三圈 `w-r3`（默认 display:none）；CSS 新增 `wQuiver`（0.4px / 0.42s）、`wTeaPulse`、`wRippleFast`（0.95s，三圈错开 0.32）；`resetWaitCup` 同时清掉 voice 类。
+- 命令：`node --test tests/ui.test.js tests/ui-loading.test.js`；`node --check index.js`、`node --check lib/voice.js`。
+- 结果：173/173 通过；两份 JS 语法通过。vm 沙箱里跑过 `typingIndicator("voice")`：slot 带到 `wait-cup-slot voice`、`w-r3` 在；`resetWaitCup` 后类名回到 `wait-cup-slot`、内容清空。
+- 未全量、未调真实模型；真机切换待发一句「发条语音给我」验证。
+
+## 消息「复制」真进剪贴板（2026-10-21）
+
+**她指出的问题（原话要点）**：点消息旁边的「复制」，文字进不了她的剪贴板。
+
+**查清的链路**：
+
+- 宿主 SDK 文档里写明过这一条（`📚 HanaAgent 知识库/05-插件系统/sdk-源码解析-v0.446.6/plugin-sdk-api.md`）：「iframe 受浏览器剪贴板权限策略限制，直接调 `navigator.clipboard` 常被拒，此方法绕到宿主进程侧执行」——`hana.clipboard.writeText()` 走宿主进程，才绕得开。
+- 旧 `copyMessage` 的写法是：`if (navigator.clipboard?.writeText) { await ... } else { textarea + execCommand }`。只要 `navigator.clipboard` 存在就走它，一旦被拒（正是 iframe 里的常态）就直接跳进 `catch` 收工，**execCommand 那层从没被试过**。
+- 宿主确实提供了这条能力：App UI SDK 里有 `hana.clipboard.writeText`（`ui/assets/hana-app-sdk-ui.js`，运行时能力名 `clipboard.writeText`），但要在 manifest 声明对应能力，官方市场里的 App 用的就是 `app/ui.clipboard-write`。茶话会 manifest 原先没声明。
+
+**改了什么**：
+
+- 新增 `writeClipboard(text)`：按可靠度逐层退——① 宿主进程侧 `hana.clipboard.writeText`；② 浏览器原生 `navigator.clipboard.writeText`；③ 老办法 textarea + `execCommand("copy")`（补上 `focus()` / `select()` / `setSelectionRange()`，并把 helper 缩到 1px 定位在左上而不是完全透明）。一层失败就记一笔继续下一层，全退完才算失败。
+- `copyMessage` 改成走 `writeClipboard`，只有真写进去才提示「复制好了」；全失败时提示改成「剪贴板没接住，长按选中文字自己复制吧」（给一个真能用的出路）。
+- `manifest.json` 的 `capabilities` 新增 `app/ui.clipboard-write`。
+
+**权限状态**：宿主对新增能力要求本人审阅——`extension_manager reload` 返回「needs the user's review for newly declared authority」，重载被拦在审阅前，新增能力要等她在宿主里点同意才生效。不点也能用（走 ②③ 两层老路），但 iframe 里被拦的概率仍在。**她已审阅通过并重载，能力生效。**
+
+**本轮自动测试**：
+
+- `tests/ui.test.js` 新增 1 项（静态契约）：manifest 声明了 `app/ui.clipboard-write`；三层依次出现；一层失败要记账继续退；只有真写进去才提示「复制好了」。
+- 相关三个文件（界面渲染 / 界面静态契约 / 上下文构建）**218/218 通过，0 失败**。
+- 范围说明：只跑直接受影响的三个文件，未跑全量。
+
+**实机确认（2026-10-21 晚）**：她审阅权限、重载后自己点了一次复制，粘出来有东西；引用块也确认好了。
+
+## 消息引用：引用的那句话得看得见（2026-10-21）
+
+**她指出的问题（原话要点）**：她在茶话会里引用伙伴发的那条新闻，想让 ta 再联网搜一遍；发出去以后屏幕上只有她自己那句话，引用的那条完全没显示。
+
+**查清的链路**：
+
+- 后端一直通：右键消息 →「引用」把原文放进输入框上方的待引用条 → 发送时随 `quote` 一起 POST → `index.js` 落库时 `...(quote ? { quote } : {})` 存进这条用户消息 → `lib/prompt.js` 的 `threadToMessages` 把引用注进伙伴上下文（「［对方引用了你之前的一条消息：…］」，原文上限 4000 字）。
+- 断的是界面这一层：`ui/panel.html` 里从头到尾没有任何一处读 `message.quote`（搜 `quote` 只有输入框上方那条待引用条），引用块从来没被画出来过。发出去后待引用条清掉，这条消息就彻底看不出引用过谁——她那头是「空引用」，ta 那头其实收到了。
+
+**改了什么**：
+
+- `ui/panel.html` 新增 `quoteBlock()`（左侧竖线 +「引用」标签 + 原文，最多三行，悬停看全文）与 `attachQuote()`（把引用块摆进消息列第一格，也就是气泡上方）。
+- 历史重画（`renderMessage`）和刚发出去那一刻（`send()` 里的乐观气泡）都摆：不能等回包才补上，那几秒里她也得看得见自己指的是哪条。
+- `ui/assets/panel.css` 加 `.message-quote` 样式：宽度收在气泡同一条 78% 线内，长新闻只露三行。
+
+**本轮自动测试**：
+
+- `tests/ui-loading.test.js` 新增 2 项（渲染级断言，跑的是 panel.html 里的真函数）：引用块跟着消息出现并站在气泡上方；没有引用的消息不多出引用块、空引用不画空壳。
+- `tests/ui.test.js` 新增 2 项（静态契约）：两处都画引用块、后端存 quote、历史接口把 quote 带回来；引用原文进伙伴上下文且有长度上限。
+- `tests/prompt.test.js` 新增 2 项（运行时断言）：被引用的原文真的进模型上下文；没有引用的消息不多出引用壳子。
+- 相关三个文件 **217/217 通过，0 失败/0 取消/0 跳过**；`ui/panel.html` 两段内联脚本 `node --check` 通过。
+- 范围说明：只跑了直接受影响的三个文件（界面渲染 + 界面静态契约 + 上下文构建），未跑全量。
+
+**实机确认（2026-10-21 晚）**：重载后她重开茶话会引用了一条新闻，引用块出现在自己气泡上方。
+
+## 伙伴自己发起的联网搜索：从「应用代搜」到「它自己动手」（2026-10-21）
+
+**她指出的问题（原话要点）**：她在茶话会里说「好好，你去找找，然后我们吃瓜」，伙伴上一句刚说「我去查」，下一句就改口「我这边现在没法直接搜网页，你把链接甩我嘛」。她要的是「联网功能得能让伙伴主动搜索，而不是现在这种后台搜了给她提供消息」。
+
+**查清的链路**（证据在 `app-data/chahuahui/v2/threads/hanako.json` 与 `diagnostics.jsonl`）：
+
+- 那一轮（2026-10-21 08:58 本地）应用侧的「回复前代搜」压根没触发：`isChatSearchCandidate` 要求出现「新闻/热搜/最新/帮我查/查一下」这类说法，「你去找找，然后我们吃瓜」一句都不沾（`瓜` 不在公开话题词表里），于是 `chat.search` 这条诊断整段不存在——不是搜了没结果，是压根没搜。
+- 搜索一直是「应用在回复前代为搜」：关键词规则先判定这句要不要查 → 规划模型出搜索词 → 应用去搜 → 结论塞进提示词的「这轮临时查到的公开消息」块。伙伴全程没有发起权，只能被动接收材料。
+- 它说「我去查」是句空话，下一轮被真实能力打脸，只能自己拆台。`DESIGN-topic-followup.md` 里那句「这仍是应用在回复前代为搜索，不是模型获得任意时刻可调用的自由联网工具」就是这条设计的自白。
+
+**改了什么**（机制改动，不是文案改动）：
+
+- 宿主模型契约本来就支持工具（`app-contract/models.d.ts`：`tools` 声明、`tool-call` 事件、`toolResult` 消息、`stopReason: "toolUse"`），宿主自己执行工具，App 只负责把工具声明交上去、把结果接回来。
+- `lib/model.js`：`parseNdjson` 认 `tool-call` 事件与 `done.assistant.content` 里的 `toolCall` 部件（正文空但有工具调用＝这一回合正常完成）；`generateReply` 增加工具回合——模型调工具 → 应用执行 → 结果作为 `toolResult` 消息回喂 → 模型再开口；一轮最多 2 次工具调用、2 个工具回合；最后一轮不给工具，逼出一句人话而不是停在工具调用上；provider 明说不接工具声明时，退回不带工具的普通回复（不换模型、不换嗓子）。
+- 新增 `lib/search-tool.js`：工具声明、搜索词处理（长度、私聊线索、联系方式、平台账号一律拦在门外）、结果排版（只给标题/摘要/来源，明说不是网页正文）。
+- `lib/chat-search.js` 导出 `containsPrivateStory`（私事出门那道门，工具这条新路沿用同一道）。
+- `lib/prompt.js` + `lib/reply-rules-compact.js`：新增「你能自己上网查」这一块（精简档位有对应短版）——想查就查、别先说「我去查」再改口、材料只是标题摘要、没查到照实说、搜索词里不许有私事。
+- `index.js`：聊天回复这一路，当应用侧这一轮**没拿到材料**时把 `web_search` 工具给伙伴（已经拿到材料的那一轮不给：一份材料够了，别两边各搜一次）；工具执行走既有引擎链（必应/各家付费层/熔断/记账/隐私门），`createWebSearchTool` 里记 `chat.tool.*` 诊断。
+- 内测面：新增 `/probe/tool` 路由与 `chahuahui_tool_probe` 工具（真机验一次宿主到底会不会发 `tool-call` 事件，工具结果是假的、不打真实搜索）；两处都在 `DEV_TOOLS` 哨兵内，发布副本照旧剥掉。
+
+**本轮自动测试**：
+
+- 全量 `node --test --test-concurrency=1 --test-reporter=tap`（tests/ 下全部文件）**2074/2074 通过，0 失败／0 取消／0 跳过**（最后一轮改动后再跑一遍，结果相同）。
+- 新增 `tests/search-tool.test.js`（8 项）：工具声明形状、正常查询放行、空词/过长词、名字与私事与联系方式与平台账号拦下、结果排版与长度上限、没查到/被拦下给的是人话不是内部状态码、接线静态契约。
+- `tests/model.test.js` 新增 6 项并改了 1 项：工具回合（模型自己发起 → 工具结果回喂 → 才给正文，含回喂消息形状断言）、工具 id 规整、assistant 与 toolResult 用同一个合法 id、搜索次数上限与最后一轮不给工具、provider 不接工具时退回普通回复、没有工具时不多花一次往返；`parseNdjson` 返回值多了 `toolCalls/assistantContent/stopReason`，空输入那条断言同步更新。
+- 改了 2 处既有契约测试（都是本轮改动直接引起的，意图不变）：`tests/load.test.js` 内测工具清单从 3 个变 4 个（新增的 `chahuahui_tool_probe` 必须包在 `DEV_TOOLS` 里）；`tests/proactive-news.test.js` 「用了 searchWeb 就得真 import」那条从 2 处调用变 3 处（取料、兴趣探索、工具）。
+- 过程中修掉两个自己造的问题：新增哨兵块时只加了 START 没加 END，发布剥离会报「哨兵不配对」（`tests/dev-thread-range.test.js` 抓住），已补齐；utility 兜底那条路不收工具结果消息（实机报 “Utility message content only accepts text entries”），退过去前先把对话洗成纯文字，且一条都不用动时原样交回原数组。
+
+**实机验证（真模型，openai-codex/gpt-6-luna）**：
+
+- 宿主**确实**会把工具调用发出来：模型自己发起了 `web_search`，查询词是它自己写的（「最近 科技新闻 …」），应用执行了工具，材料回到了它手里，它拿着材料开口讲话——不是「我这边没法搜，你把链接甩我嘛」。
+- 真实搜索那一轮（`real=1`，真打网络、真花额度）：`chat.tool.search` 记到 `ok:true, engine:tavily, results:8`（她自己的 Tavily Key 通的），模型拿到 1459 字材料后讲了**两条真新闻**（新华网的模拟计算芯片进展、印度 AI 与云基建投资），带来源链接，并自己加了一句「这些是搜索摘要里的信息，细节还得看原文和论文才能确认」——材料只是标题摘要、不能装成读过全文这条纪律，实机上是守住的。
+- 途中踩到并修掉的真问题（都是实机报的，不是推演）：
+  1. `APP_MODEL_INVALID_REQUEST: assistant.toolCall.id must be 1-128 ASCII identifier characters.`——宿主给的 toolCall id 不合法，回喂被拒。回放前把 id 规整成合法标识符，assistant 那条与 toolResult 那条用同一个。
+  2. openai-codex/gpt-6-luna 吃不下「带工具结果的那一轮」：`The model provider could not complete the request.`。于是加了三级降级：① 不带工具声明但保留工具结果 → ② 材料当一段文本块交给它 → ③ 都没有才退回没材料的普通回复；并且记住哪家 provider 吃不下这个形状，以后直接走 ②。
+  3. 降级链拖太长会把调用窗口耗光：工具调用有 30 秒上限，超了就报 `APP_CALL_TOKEN_INVALID`（后续模型调用发不出去）。所以带工具结果的那一轮不重试（一次就退），降级步骤也不重试。
+  4. 探针本身：把模型调用放到后台跑会被掐掉凭据（同一个 `APP_CALL_TOKEN_INVALID`），必须在调用期内同步跑完、结果先落盘。
+
+**未验证 / 待实机**：
+
+- 聊天里真实的那一路（应用侧代搜 + 伙伴自己动手）还**没有由她本人触发过一次**：本轮的真机验证走的是探针（同一条 `generateReply` + 同一个真实搜索工具），不是她那句「你去找找」。她试一句才知道自然度与等待时间。
+- 主动消息那条路（世界领域 → 应用拼词 → 池子 → 伙伴讲）本轮**没动**：它本来就是「应用替 ta 搜好」，跟这次说的「自己动手」是两种东西，要不要一起改见本轮交付里的问题。
+- 版本未改（按版本号纪律，开发中不碰 `manifest.version`），未提交、未发布。
+
+**回退**：`lib/model.js` 的工具回合、`lib/search-tool.js`、`index.js` 的接线与提示词块各自独立，回退即去掉 `tools/executeTool` 两个入参；聊天回复行为回到今天的「应用代搜」。
+
+
+## 等回复的茶杯搬出消息流（2026-10-21）
+
+- 她的反馈：等待时左边头像、右边茶杯，看着像「伙伴发来一条茶杯消息」。
+- 诊断：茶杯原来还是 `div.row.ta`，跟消息共用「头像 + 内容」的行骨架；去气泡壳救不回来，读成消息的是行结构，不是壳。
+- 改动：`cup` 形态不再进 stream，改住 stream 与 composer 之间的 `.wait-cup-layer`（高 0→30 过渡），无头像无气泡；杯口三个小点承担「正在输入」，蒸汽拿掉（和点讲同一件事）；`typingIndicator()` 两种形态统一返回 raise/remove 手柄，`playLiveTurn` 里 `el.stream.appendChild(dots)` 改成 `dots?.raise?.()`；重画、清空、换人三处补 `resetWaitCup()`——桌子在 stream 外，清空流不会顺手带走它。
+- 命令：`node --test tests/ui.test.js tests/ui-loading.test.js tests/load.test.js`。
+- 结果：`ui.test.js` 与 `ui-loading.test.js` 全通过（同步改了两处：raise 契约断言、测试桩补 `resetWaitCup`）。`load.test.js` 里「内测入口必须包在 DEV_TOOLS 开关里」失败：实际 4 个工具、期望 3 个（多出 `chahuahui_tool_probe`），属工作树既有状态，本次未碰 `index.js` 的工具注册。
+- 未全量、未调真实模型、未投递测试消息；动画实际手感待实机看一眼。
+
+## 视频双路取材：兴趣近期热度 + 兴趣外热门（2026-10-21）
+
+- 基线：0.10.2，HEAD 8e870c7，保留既有工作树；主链与数据层分别专项备份并核SHA-256，未复制生产聊天/凭据。
+- 最终命令：`node --test --test-concurrency=1 tests/video-source.test.js tests/video-selection.test.js tests/video-share-routes.test.js tests/video-sharing.test.js tests/proactive-context-history.test.js tests/proactive-reasons.test.js tests/video-share-voice.test.js tests/video-materials.test.js tests/interest-exploration.test.js`。
+- 最终结果：9文件196/196通过，0失败/取消/跳过；6份相关JS语法与定向diff空白检查通过。未全量、未调真实模型、未向生产聊天投递测试消息。
+- 覆盖：公开热门读取不带cookie、只读/坏回包/空结果、搜索日期参数、新旧来源兼容、近30天与热度排序、拒绝未知/无效/未来日期、重复与时长预筛、两路互相回退、无兴趣可取热门、陈年搜索结果补最新页、线程变化不存旧候选、总材料尝试<=10以及取材不扣发送额度。复核发现未知日期能混作近期，已收紧并补用例；旧搜索桩补真实pubdate以符合近期契约。
+- 真实匿名网络：热门接口code0，20条中13条<=15分钟；生产数据层适配器也返回20条。最初错误参数pubtime_begin/end被忽略（20条全旧），查SearXNG实现改用pubtime_begin_s/pubtime_end_s，最终经同一searchVideos WBI签名请求“游戏更新”返回20/20均近30天，本地选5条，样本播放约243万/146万/105万；只证明该词该次取列表与排序，不证明所有领域质量。
+- 普通未签名搜索尝试被HTTP412拒绝，未绕过风控；最终沿原签名搜索路线成功。无账号凭据外传，热门请求不带cookie。自动浏览保留原登录门禁与设置授权，公开列表可匿名不等于本次要开放未登录自动分享。
+- 独立只读复核：主链未知日期问题已修；数据层复核指出的无_s测试是较早快照，最终断言与调用均使用_s。未采纳解除自动登录门禁建议，因本次没有更改既有登录/分享边界。实际素材可读率、伙伴选择/口吻与最终发送来源比例仍待自然触发观察。
+- 版本/简介/README不改；未提交、上传或发布。
+
+## 视频分享：直接拿来聊，撤掉摘句点评提纲（2026-10-21）
+
+- 同问题账本：CHF-20261017-01；最新实机基线和原文只留本机证据，不入项目。
+- 新增 `tests/video-share-voice.test.js` 3项：视频拼装不再包含摘点再点评、首次介绍及兴趣system提纲；普通兴趣/关系由头隔离；人格、近期聊天、安静出口、系统附链接及字幕/弹幕边界仍在。旧码1通过/2失败，仅证明提示契约差异。
+- 命令：`node --test --test-concurrency=1 tests/video-share-voice.test.js tests/compose.test.js tests/video-materials.test.js tests/video-share-routes.test.js tests/proactive-context-history.test.js tests/proactive-clarity.test.js`。
+- 结果：123/123通过，0失败/取消/跳过；`node --check lib/compose.js`、`node --check lib/video-materials.js`及定向diff空白检查通过。未全量、未调真实模型、未投递测试消息；自然口吻和原素材的新输出待实机观察。
+
+## 主动消息配比调优：让新闻与视频真正占到位置（2026-10-21）
+
+**她的要求**：频率已经开到最大（小花 clingy，全局 30 条/天、相邻 30 分钟），但收到的主动消息里新闻和 B 站分享太少，希望多利用搜索。
+
+**查实时账本找到的四个阻塞点**：
+
+1. **素材被关系式由头吞掉**。每轮只要过了门，先抽“兴趣/共同经历/吐槽/搭话/想念”，抽中非兴趣的那几个时，后面的“非兴趣不带兴趣素材”会把新闻、视频整条丢掉。历史上最近 25 条主动消息里，contact/affection/shared 占了绝大多数，新闻 0 条。
+2. **新闻要过锚点门**。锚点门本来拦的是“ta 自己的观察写成小作文”（需要她那边有动静才算有资格开口），新闻和视频是外面真实存在的东西，被同一道门卡着，结果是一天不聊天就一条都收不到。
+3. **补给量不够**。新闻每 6~14 小时才取一趟、一次最多 3 条、池子封顶 6 条、每天封顶 2 条；视频补货间隔 6 小时，且要等 B 站字幕校验过。看完账本：视频候选池当时是 0 条（最新一次取料有 5 个候选被字幕校验筛掉，只成 1 条）。
+4. 上述三条叠在一起，即使有货也排不上。
+
+**改了什么**：
+
+- `index.js` 的 `reasonEligible` 加上 `!video && !news`：有新闻或视频时先把它们发出去，不再抽关系式由头（抽中会把素材吞掉）。素材发完、配额用完后，想念、搭话、共同经历、吐槽照旧。
+- 新闻与视频不再受锚点门限制（种子与探索发现仍受）。
+- `lib/news-feed.js`：每天封顶 2 → **4**，取料间隔 6/14 小时 → **3/8 小时**，一次收 3 → **4** 条，池子 6 → **10** 条。
+- `lib/interest-exploration.js`：视频补货间隔 6 → **3** 小时。
+
+**测试**：定向（新闻/由头/界面/探索/视频素材）**212/212**；**全量 2041/2041 通过，0 失败**。两条旧契约随新数值更新（取料节奏、配额封顶），意图不变。
+
+**未验证**：这些只改了配比与补给节拍，真实效果要等一天看账本（新闻发了几条、视频发了几条、她接不接）；另外视频能不能供得上仍取决于 B 站字幕校验的通过率，那是另一层的瓶颈。
+
+## 主动消息改造：世界领域 + 新闻那条路 + 小作文刹车（2026-10-20）
+
+
+**出发点（她的原话）**：最近的主动消息又是“小作文”——观察点太细，她完全不知道要回什么；想更多用上刚做的搜索，让伙伴分享自己感兴趣的新闻。
+
+**查下来的五处病根**（不是提示词一处）：
+
+1. 最近几条主动消息只有“我看见了什么 + 我的联想”，落点全在伙伴自己身上，对面没有可接的东西。
+2. 11 条兴趣点清一色是“我怎么注意世界”（attention style），一条“我爱聊哪片世界”都没有，从这种兴趣长出来的必然是“我注意到 XX”。
+3. 60 条种子里 19 条 stand、10 条 ask、10 条 exchange，题面是“A 还是 B”“先保动作还是先保构图”，模型拿到问句钩子只能写成“我选 A，因为 B”。
+4. 搜索在主动消息里一次都没用上：只挂在兴趣探索上，18~36 小时跑一次，产出的是冷门考据；当天 discoveries 已发、已拒或过期，为 0 条。
+5. 清晰度核查只判“说不说得清”，自洽但没人接得住的观察照样放行。
+
+**改了什么**：
+
+- 新增 `lib/world-interests.js`：每伙伴 2~4 片世界领域（追什么 + 从哪儿看），id 由名字派生，重复养护不会长出两条；同批伙伴已占的领域会避开（不全员八卦号）；太泛的领域名（“科技”“娱乐”这种）直接拦掉。
+- 新增 `lib/news-feed.js`：短期新闻池（最多 6 条、5 天过期）、取料间隔（空池 6 小时／有货 14 小时）、讲过冷却（6 小时）、每日上限 2 条与视频分开计、标题去重、被拒理由入账、领域轮换与降权。`newsText()` 给伙伴的材料块里写明“这是外面真在发生的事”、外部内容边界、以及“不要写成新闻播报或摘要”。
+- `index.js`：`maybeTendWorldInterests()`（领域不够才长，失败 24 小时后再试，绝不写空）、`maybeFetchNews()`（查询词由领域确定性拼，不让模型现编）、主动那轮把 news 当成与 seed／discovery／video 并列的一路素材，三选一；发出去才记 `markNewsShared`，配额走 GlobalRuntime。新增的诊断事件：`knowing.world.ready`、`news.fetch.ready`、`news.fetch.failed`、`news.share.ok`、`news.share.stale`、`proactive.observation-capped`。
+- 三道刹车：`OBSERVATION_MAX_PER_DAY = 1`（种子／发现这类观察式一天最多一条，关系式由头、想念、搭话、共同经历不受限）；`SEED_ASK_CAP`／`SEED_EXCHANGE_CAP` 各 1（提示词说配额，解析层再硬卡一道，超了就丢）；`CLARITY_SYSTEM` 新增一条“接不接得住也是判据”，并给 scope 加了 `news`。
+- `lib/store.js`：knowing 新增 `worldInterests`（与母题／癖好分开存放，互不顶替）；`normalizeWorldInterests` 处理旧数据为空。**不动任何旧字段、不迁移旧数据、不碰人格。**
+
+**改前基线**：本轮开工前只跑过定向（373/373、142/142、108/108 那一批），没有留全量基线数字；就不事后凑一个。
+
+**改后全量**：`node --test --test-concurrency=1 --test-reporter=tap`（tests/ 下全部文件）**2041/2041 通过，0 失败／0 取消／0 跳过**（实机修复与语言筛之后又跑了一遍）。新增 `tests/proactive-news.test.js` 28 项（取料节奏、去重、过期、领域轮换与被拒降权、写材料块的口径、配额与按天重置、语言筛、摘要截短、`searchWeb` 必须被 import 的静态契约），`tests/proactive-reasons.test.js` 新增一条真装载跑巡检的用例（观察式用满后新闻照样能发），并在 `tests/proactive-clarity.test.js`、`tests/ui.test.js`、`tests/model.test.js` 里跟着实现改了契约断言。未改动模型调用、宿主 RPC、路由这类需要真实宿主的边界。
+
+**验收前自查又抓出两个接线漏洞（已修，各补了用例）**：
+
+1. `candidateNews` 多挂了一个 `observationLeft === 0`：当天发过一条观察式之后，新闻整天都死了，跟“一天两条”直接打架。改为只受新闻自己的配额和“未回跟进/视频”的互斥约束。端到端用例「观察式今天已经用满，新闻照样轮得到」钉住。
+2. `form` 和关系式那边的 `interestAvailable` 只认 seed／discovery／video：新闻单独在场时会被当成“没料”，要么落到戳一下，要么按“非兴趣不带兴趣素材”整条丢掉。两处补上 news，`greetingOnly` 的排除表也补上。
+
+这两个都是“模块单测全绿、接线处才露”的问题——光看函数层过不了，所以新加的用例走的是真装载跑一轮巡检。
+
+**顺手查出来的三处测试账目问题（不是实现 bug）**：
+- `tests/video-share-routes.test.js` 与 `tests/reply-supersede-routes.test.js` 数的是“总共发了几次模型请求”，但第一轮对话后后台会顺手跑一次关系档案，把 1 数成 2、2 数成 3。这是之前误判成“多话／旧稿没丢”的那条长期红灯，真因是计数口径。测试桩新增 `models.replyCalls()`（按 `PROFILE_SYSTEM`／`DAILY_SYSTEM`／`SEGMENT_SYSTEM` 排除记忆维护），两条用例改用它；`tests/proactive-reasons.test.js` 里“第一条非核查调用就是生成”的取法同样改成按凭据原文认领。
+- `tests/model.test.js` 一条静态契约仍钉着探索问句预算 `videoEnabled ? 1000 : 180`，而实现已在今天早些时候改成 `800`（180 被思考吃干净、整趟取不到料）。按现实现更新契约。
+- 两处代码被挤在同一行（`lib/topic-seeds.js` 的空回复判断、`lib/store.js` 的 `messageRefine` 注释），只是格式，已分开。
+
+**实机第一跑（2026-10-21 早上，重载后）**：
+
+- 不需要新的权限弹窗，重载就直接生效了。后台账本里能看到 `knowing.world.ready`：小花长出 4 片领域（数码新工具、热梗与社区吵什么、书影剧讨论、游戏改动与考据）。
+- **第一轮取料全挂**：`news.fetch.failed（ReferenceError: searchWeb is not defined）`。`index.js` 用了 `searchWeb`，但没写进那份 import。语法检查、全量单测都拦不住，因为没有任何用例真的走到取料那一步。补上 import，并加了一条静态契约（`searchWeb` 必须在那份 import 块里、两处调用都在），此种“用了没 import”的错下次会被测试拦住。
+- **第一次搜回来什么**：“数码新工具”那一片 3 条里两条是日语和意大利语，“Perplexity”这种只有一个词的标题也混进来了；“热梗与社区吵什么”那一片 3 条全是中文（山姆风波、热搜争议、Token 算力之争），明显能用。同一个搜索层，不同领域词的命中质量差很远。
+- 因此补了两条硬筛（不只靠提示词劝）：标题必须有中文、不能带假名，否则不进池；摘要从 600 字收到 300 字，别把搜回来的全文往提示词里塞。库里已有的旧条目在读取时也走同一道筛，之前那两条外语不会被端出去。
+- 当前状态：池子里 3 条都是中文，新闻那条路已经走到“有货待讲”，**但还没真的发出去过一条**。到点开口时的语气与结构依然未验收。
+- 本轮为了看到真实取料，手动把 `state.json` 里这位伙伴的 `newsBook.lastFetchAt` 往前推了 8 小时（只改了这一个时间戳，没改别的账）；验证完已停手。下次真取料仍按 6~14 小时的节拍自然发生。
+
+**未验证 / 风险**：
+
+- **真实搜索质量只看到一小面**：默认搜索链真的能返回东西（上面那次成功取料 10 条、入池 3 条），但同一个引擎对“数码新工具”搜回外语、“微博热搜里的争议话题”搜回中文，说明命中不稳定；现在靠语言筛兜底，不是靠查询词变好。换成别的引擎或填了 Key 之后的质量仍然未知。
+- **真实模型成文没验过**：提示词在场不等于模型会照做；新闻那条路能不能真写成“一句事实 + 自己那一下”，要等实机第一条。
+- **节奏没验过**：一天两条新闻 + 一条观察 + 视频，总量会不会反而变多、会不会变成刷屏，只能实机看。
+- **没有界面（这是有意的）**：领域怎么长出来的、长了哪几片，界面上不展示也不给改。她 2026-10-21 把它定成茶话会的设计理念：能随手改的偏好不叫偏好，叫参数。已写进 `DESIGN-精神内核.md` 第 6 条与 `DESIGN-product-definition.md` 第九节，以后新功能先过这一条。
+- App 正式 reload 仍停在上游那轮的域名权限确认上（新增 `api.tavily.com`），本轮没碰权限。
+
+## 搜索增强：可自选的搜索服务（2026-10-20，三轮：Tavily → 多引擎）
+
+- 目标：把宿主 web_search 里的 t 开头那家（Tavily，专为 AI 准备的搜索）接进茶话会，让伙伴找内容时能走更准的那条路。默认不变：用户不填 Key 就仍然是原来的必应 + 热榜，行为一模一样。
+- 新增 `lib/search-engine.js`：Tavily 适配（POST api.tavily.com/search，Bearer Key，body 带 include_published_date）、字段归一（title/snippet/url/publishedAt）、`searchWeb` 统一出口（先 Tavily，401/超时/空结果一律静默退回必应）、按自然月记用量。隐私门复用 `topic-search.js` 的 `isSafeSearchQuery`，在换引擎之前先过，不让私聊线索跟着新引擎出门。
+- 改动落点：`lib/chat-search.js`（searchForChat 接受 enhancement、改走 searchWeb；新增 isFreshEnough，必应老规矩“日期解析不出就丢”保持，Tavily 允许无日期；上下文不再写死“必应”）、`lib/store.js`（全局设置新增 searchEnhancement）、`index.js`（POST /settings/search-engine 保存、POST /settings/search-engine/test 真发一次查询、globalSettingsView 只回 hasKey/status/usageThisMonth、聊天搜索与兴趣探索两处接入并记账）、`ui/settings.html`（新增「搜索」栏：引擎下拉、Key 输入、保存、测试一下、状态与本月用量）、`manifest.json`（allowedHosts 加 api.tavily.com）。
+- Key 生命周期：存盘前 `protectKey` 加密（DPAPI 优先、退回本机锁），页面与回包只给 hasKey 状态；使用时 `unprotectKey` 解开。诊断日志不记 Key。
+- 契约变动一条：`tests/ui.test.js` 里“探索由稳定兴趣生成新角度；已知称呼外发前过滤”的静态断言，原先钉的是 `searchTimelyTopic(...)`，改为钉 `searchWeb(... privateTerms: [USER_NAME, partnerName] )`——意图（外发前过滤称呼）不变，只是搜索改走统一层。
+- 改前基线：`node --test --test-concurrency=1 --test-reporter=tap tests/chat-search.test.js tests/topic-search.test.js tests/interest-exploration.test.js tests/store.test.js` **108/108 通过**。改后新增用例 16 + 路由用例 6，合计 22 项均通过。
+- 最终定向命令：`node --test --test-concurrency=1 --test-reporter=tap tests/search-engine.test.js tests/search-engine-routes.test.js tests/chat-search.test.js tests/topic-search.test.js tests/interest-exploration.test.js tests/store.test.js tests/ui.test.js tests/ui-loading.test.js tests/load.test.js tests/proactive.test.js tests/proactive-reasons.test.js tests/reply.test.js`，**397/397 通过，0 失败/取消/跳过**。未跑全量。
+- 覆盖到：引擎归一、坏用量不认、Tavily 请求真的打到了 api.tavily.com 且带 Key、没有 Key 不发请求、配了 Tavily 就不碰必应、Tavily 挂了静默回退必应、私聊线索不外发、无日期结果的两种规矩、聊天链路里拿到的是 Tavily 的料且上下文不写死引擎名、用量按月记；路由层：Key 落盘是密文、回包无明文、留空保持已保存的那把、换回默认搜索仍留着 Key、测试连通记已验证并计一次额度、Key 不通如实报失败、没填 Key 先拦住。
+- 中途两次失败都是我自己写错，已改测试不是改实现：用例一“私聊线索”原本选的句子不在拦截名单里（改用带微信号的句子）；用例二误以为跨月会抹掉上月用量（跨月是另起一格，旧月份保留）。另有一条失败是既有的 `tests/ui.test.js` 静态契约随实现变更而更新，见上。
+- 未做 / 待验证：**没有真实 Tavily Key，全程没发过一次真实 Tavily 请求**（用的是假 fetcher 与 harness 网络桩）；因此「Key 有效时返回结构与实际字段」「额度真实扣减」「中英文与时效内容的实际质量」均未实机验证。App 正式 reload 因新增 `api.tavily.com` 属新增对外域名，停在宿主权限确认，未加载。设置页新栏的实机外观待人工看一眼。版本仍 0.10.2，README 与简介未动，未提交未发布。
+
+### 交叉审查与修补（同一轮，2026-10-20）
+
+交叉审查（只读复核）提出 5 条必须修、6 条建议，均已处理：
+
+- **必须修 1（真 bug，最严重）**：`PUT /settings/global` 这条路会把 Tavily Key **明文写进数据文件**。`normalizeGlobalSettingsPatch` 里直接用了明文 `nextKey`，而 `unprotectKey` 对没前缀的字符串原样返回——明文落盘后一切照常工作、测试全绿，问题彻底静默。修法：在该路由的 handler 里照 voiceProfiles 的做法 `await protectKey`，加密失败拒绝落盘。
+- **必须修 2**：`GET /proactive` 把整个 global 包原样回给页面，绕过了 `globalSettingsView()` 的投影（里面有凭据）。改为只把 `searchEnhancement` 换成状态投影，其余字段不动。
+- **必须修 3（漏记）**：一次聊天最多 3 个候选，每个候选各发一次 Tavily，原来只记 1 次，账面会比 Tavily 后台少记。改为 `searchWeb` 返回 `enhancedCalls`（真发出去才计 1）、`searchForChat` 累加、调用方按次数记账。
+- **必须修 4（状态不同步）**：用输入框里那把**没保存**的新 Key 测试，却把 `status=verified` 写进已保存的配置——页面显示「测试通过」，聊天其实还在用那把旧的、可能已失效的 Key。改为：测已保存的 Key 才更新它的状态；测新 Key 只回包提示，不改已保存配置。
+- **必须修 5（体感坏）**：Key 被吊销/过期后，每条要搜的消息都先白吃一次 Tavily 超时（8s），候选循环最坏 24s 挂在回复前面。改为：上次的失败原因属鉴权/额度类（401/403/429/quota）时直接跳过 Tavily 走必应；单次搜索内 Tavily 试过一次不顺，后面的候选不再重复付这次超时。
+- **建议项**：跨 await 的读-改-写会覆盖别人刚记的计数（保存与测试两处都在写回前重读一次）；没真发出包的请求也记账（`searchTavily` 早退分支带 `sent:false`，只有真调了 fetcher 才算）；必应也失败时报的是 Tavily 的原因（主 reason 改用必应的，Tavily 的留在 `fallbackReason`）；页面测试失败时不刷新状态与用量（`apiWith` 把回包挂到 error 上，catch 里接住 `error.data.global`）；页面没告诉她 Key 到底加密了没有（投影加 `keyEncrypted`，如实区分系统锁与本机锁）；文案补一句「换过去之后搜的词会发给 Tavily 这家第三方」。
+- 修补后新增用例 18 条（`tests/search-engine.test.js` 16 → 24，`tests/search-engine-routes.test.js` 6 → 10），覆盖：全局设置那条路不落明文、主动那页响应不带出 Key、传「********」保持已保存的那把、用未保存的 Key 测不改已保存状态、三个候选各发一次记三笔、没发出去的请求不记额度、Key 失效直接走必应、必应也失败时报必应的原因、配了 Tavily 但没填 Key 时两条路逐字段相同。
+- 修补后最终定向命令（同上 13 个文件）：**434/435 通过**。唯一失败项 `tests/video-share-routes.test.js` 「实际普通回复召回视频…删反馈来源失效」断言模型调用次数 2!==1：**不是本轮引入**——把本轮接线（`enhancement: await searchEnhancementConfig()`）摘掉后同样失败。诊断显示第 2 次调用是「我认识的她」画像重建，属 2026-10-20 上午那轮记忆跟模型改动的遗留（那轮本身还在模型通道排查中），本轮未触碰、未修复，如实留待那一轮收尾。
+- 本轮仍**没有真实 Tavily Key**，未发过一次真实请求；App 正式 reload 仍停在宿主的域名权限确认上。
+
+
+### 第二轮复核与再修补（2026-10-20）
+
+交叉审查复核确认：明文落盘、`/proactive` 绕过投影、记账次数、测试状态不同步四条**已修到位**；**熔断只修了一半**——同轮内的重复超时解决了，跨轮熔断没上膛：全仓唯一写 `status=failed` 的地方是「测试一下」路由，运行中撞上 401 照样每轮先白吃一次 8 秒超时（候选循环最坏 24s）。根因是 `fallbackReason` 断在半路：搜索层生成了它，但 `searchForChat` 的三个 return 没往上带，调用方既看不见原因、也没东西据此写状态。
+
+- 修：① `lib/chat-search.js` 把 `fallbackReason` 从循环带到三个 return；② `index.js` 新增 `markSearchEngineFailed(reason)`，聊天与兴趣探索两处遇到鉴权/额度类失败就写一次 `status=failed`（只改状态、不碰 Key），诊断里也带上 `fallbackReason`；③ 熔断分长期与瞬时——401/402/433（额度用尽 Tavily 实际常回这两个码）与缺 Key 长期拦，429（限流）拦十分钟放行重试；④ 降级判断从「结果来自哪」改成「失败原因命中故障类」，`no-results` 不再被误当成 Tavily 挂了；⑤ `PUT /settings/global` 的跨 await 覆盖补上（protectKey 后重读 usage）；⑥ 页面失败路径也提示「已保存的配置没动」；⑦ `/proactive` 那句注释改准（搜索 Key 走投影，语音 Key 仍是密文原样带着，属既有行为）。
+- 补测试：`tavilyBlocked` 直接单测（verified/untested 不拦、401 长期拦、429 冷却后放行）；**降级分支**新增一条锁「Tavily 恒不通时三个候选只试它一次，bing 走三次，enhancedCalls=1」——这是「不会三个候选各等 8 秒」的唯一保障；删掉一条名不副实的重复用例；「回包里给的 Key 是掩码」改名为「投影里没有 apiKey 字段」（搜索这条没有 `********` 掩码，断言与名字要对得上）；新增静态契约钉住「运行中 401 要写状态」。
+- 最终定向命令（12 个文件）：**411/411 通过，0 失败/取消/跳过**。`tests/video-share-routes.test.js` 那条历史失败按前一轮的结论排除在本轮范围外（摘掉本轮接线仍红，属上一轮记忆画像改动的遗留）。未跑全量。
+- 仍未验证：没有真实 Tavily Key，未发过一次真实请求；设置页新栏的实机外观待人工看；新增对外域名的权限确认仍需用户点。
+
+### 第三轮：多引擎（2026-10-20，要求「对标 Hana」并试试 DeepSeek 的搜索）
+
+- 反馈三条：① 选了 Tavily 但**没出现填 Key 的地方**（实为我的疏忽：Key 框的显隐只绑在初始化那次渲染上，下拉换了值没触发重绘）——已绑 `change` 事件，切换即显隐并改提示文案；② 多加几个搜索商，对标 Hana；③ 「听说 DS 也推出搜索了」，想试试。
+- 引擎清单：`bing`（默认，必应 RSS 那条老路）/ `anysearch`（免 Key 匿名层，填了走付费层）/ `tavily` / `serper`（Google）/ `brave` / `deepseek`。对标 Hana 内置 web_search 的 provider（anysearch / tavily / brave / serper），再加 DeepSeek 新开的 Search API。
+- DeepSeek 官方文档核实（2026-10-19 开放）：`POST https://api.deepseek.com/v1/tools/search`，`Authorization: Bearer`，body `{query, count(1-50), need_content}`，返回 `results[].title/url/snippet/summary/content/site_name/date(RFC3339)/authority/rerank_score`；Search 5 元/千次成功请求，**只有 200 且 results 非空才计费**，Search QPS 100，错误码含 401/402（余额不足）/429/433。取 `summary`（给模型读的长摘要）优先、`date` 当发布日期。`ori_question` 字段故意不传——那是用户原话，传出去等于外发聊天内容。
+- 架构变化：配置从「一把 Key」改成「**每家一把**」——`searchEnhancement = { engine, keys:{引擎:密文}, states:{引擎:{status,testedAt,error}}, usage, usageByEngine }`。换引擎不清别家的 Key；熔断状态按引擎隔离（不会因 Tavily 401 把 DeepSeek 也拦掉）；用量总数与按引擎分开记。旧数据（单数 `apiKey`）自动搬进 `keys.tavily`。
+- 另外把「通用设置那条路能改搜索 Key」的口子直接堵上：`PUT /settings/global` 现在遇到 `searchEnhancement` 字段就 400 拒绝，搜索设置只走自己那两条路由。（上一轮靠给通用路补加密，这次改成**不给第二条路**。）
+- 测试重写为 39 项（`tests/search-engine.test.js` 24 + `tests/search-engine-routes.test.js` 15），新增覆盖：五家适配器的请求形状（URL/方法/认证头/body/返回字段映射）、免 Key 的 AnySearch、每家一把 Key 的隔离、旧数据迁移、按引擎的熔断与冷却、通用路拒绝改搜索设置。
+- 修 UI 反馈：下拉换了引擎不弹 Key 框（已修，见上）。
+- 最终定向命令（12 个文件）：**414/414 通过，0 失败/取消/跳过**。未跑全量。
+- 仍待：宿主对新增 4 个域名（api.deepseek.com / google.serper.dev / api.search.brave.com / api.anysearch.com）的权限确认未点，App 正式 reload 停在确认上；仍**没有真 Key**，未发过一次真实请求；设置页新栏的实机外观仍待人工看。
+
+### 第四轮：交叉审查后的修补（2026-10-20）
+
+交叉审查复核确认：五家适配器的请求形状逐字段对得上（DeepSeek 与 AnySearch 拉了官方文档核）、Key 隔离没串、通用路由封口无副作用、隐私面没扩大。指出四条必须修，均已处理：
+
+- **必须修 1（明文搬家）**：旧数据迁移那行「把单数 `apiKey` 搬进 `keys.tavily`」是纯同步函数里做的，而 `protectKey` 是 async——**等于把可能还是明文的旧 Key 复制到新字段，然后再也不加密**。改为：归一只把旧值原样带出（`legacyApiKey`），加密与搬迁交给 `index.js` 的 `migrateLegacySearchKey()`（async，聊天/保存/测试三条路都会经过它），搬完丢掉旧字段。新增路由层回归锁：seed 阶段写旧结构 → 保存一次 → 落盘必须是密文且 `legacyApiKey` 清空。
+- **必须修 2（402 一刀切）**：AnySearch 匿名层的 402 是「今天的免费额度用完了」，第二天就回来；付费 Key 的 402 才是余额耗尽。原先一律当长期故障 → 匿名层用满后当天全被拦、第二天还拦。改为：付费 402 长期拦；匿名 402 当天拦（20 小时窗口）；429 限流拦十分钟放行。
+- **必须修 3（文案骗人）**：页面写「这个月这家用了 N 次」，但 `usageByEngine` 是**按引擎的累计值**（`usage` 才是按自然月）。改为「这一家累计用了 N 次」，两个维度不再混说。
+- **必须修 4（默认引擎下要你填 Key）**：默认那档不需要 Key，界面把 Key 框藏了，但「测试一下」按钮没跟着藏——什么都不动点一下就被要求填 Key。改为默认那档禁用测试按钮。
+- 建议项一并处理：切下拉不刷新状态文案（现在连同 Key 框一起重刷）；`keyEncrypted` 字段这轮重写时丢了（补回，每家各自标）；DeepSeek 查询词按文档裁到 128 字、AnySearch 条数裁到 10（各有各的上限，超了 400）；Brave 的 `page_age` 没用上（现在用上，别把老文章当今天的）；429 在运行中不写状态导致冷却形同虚设（现在写状态、且只刷新冷却时钟不覆盖原因）。
+- 测试补到 43 项：新增 402 两态、每家查询长度上限、旧数据迁移的落盘回归锁；顺手修掉一条「其实没测到」的用例（harness 的 seed 是对象属性，我一开始按位置参数传，那条迁移测试等于没跑——已纠正，现在真的在跑）。
+- 最终定向命令（12 个文件）：**418/418 通过，0 失败/取消/跳过**。未跑全量。
+- 仍待：权限确认未点、reload 未完成、仍无真 Key、设置页实机外观待人工看。
+
+### 第五轮：实机反馈（保存无效）· 三个 UI bug（2026-10-20）
+
+实机反馈：选了 Tavily、填了 Key，点「保存」后直接跳回默认搜索，Key 也没存上；先点「测试一下」能通（搜到 3 条）。
+
+- 证据链（宿主诊断 `v2/diagnostics.jsonl`）：同一秒内 `search.engine.test` 收到 `engine:"tavily"` 且 `ok:true results:3`（body 完整），而紧跟着的 `search.engine.save` 收到 `engine:"bing" hadKey:false`（body 是空的）；账本 `state.json` 被写成 `{engine:"bing", keys:{}, usageByEngine:{tavily:1}}`。
+- 根因（两个 UI bug 叠加，顺序刚好对上她的操作）：
+  1. **测试成功后清空了输入框里的 Key**（`keyInput.value = ""`）——测试并不改变已保存的 Key，这一步多余。已删。
+  2. **每次重绘都把引擎下拉整个重建**（`host.replaceChildren()` + 新建 select），用户刚选的那家被重置回「默认搜索」。已改为**只建一次、后续复用同一个 select**（beautify-select 的壳也不会重复套：它靠 `dataset.ddReady` 自我保护）。
+- 顺带修：保存请求超时从 8 秒放宽到 30 秒（实测本机加密只要 0.5 秒，超时不是主因，但留余量）；保存前自检（没选引擎/该填 Key 却没填 → 当场提示，不发空请求）；后端保存诊断（记收到的字段名、引擎、有没有 Key、加密成没成、耗时）；设置页自报版本号（后端算 `settings.html` 的 sha1 前 8 位，页面显示在左上角，附「重新载入这一页」链接）——宿主给静态文件挂了长缓存，这一行能一眼看出页面是不是旧的。
+- 注意：宿主给静态文件挂了长缓存（页面自己代码注释里就写了），但**设置页在聊天页里是 iframe 加载的，带 `?t=${Date.now()}`，所以不是缓存问题**——别再往那个方向猜。
+- 测试：211/211 通过（search-engine 43 + ui 88 + ui-loading）。未跑全量。
+- 仍待：这一版的实机复验（她再走一遍：选 Tavily → 填 Key → 可先测试 → 保存）；DeepSeek 的 Fetch 接口未接。
+
+### 第六轮：存好的 Key 切回来显示成「没填」（2026-10-20 实机反馈）
+
+反馈：保存了 Tavily 的 Key，切到别的引擎再切回来，看着跟没填一样；但直接点「测试一下」能通。
+
+- 先核真实状态：`state.json` 里 `engine:"tavily"`、`keys.tavily` 有密文（`local1:` 本机锁），`states.tavily=verified`；诊断 `search.engine.test` 最后一次带 `usedSavedKey:true` 且 `ok:true`。**后端一直是对的，Key 早存好了。**
+- 根因（真 bug）：下拉的 `change` 处理器只挂一次，而它是在 `paintSearchEngine` 内部声明的函数，**闭包攥住了「第一次绘制」那版 `engines`**——那时候她还没存 Key，`hasKey` 是 false。保存后重绘只换了外层数据，监听器还指着第一版：切走再切回来，Key 框的占位与状态行都按旧账说「还没填」，而状态行那句「现在其实还是走默认搜索」正是她看到的「跟没填一样」。
+- 修法：把「这一家是谁 / Key 存没存 / 测得怎么样 / 用了多少次」收进模块级 `searchEngineSnapshot`，`searchEngineSpecOf`、`paintSearchNote`、`refreshSearchKeyField` 全部提到模块级、每次读最新快照；重绘只更新快照。`change` 处理器与输入框的 `input` 都指向这一个函数，闭包陷阱消失。
+- 顺带：清单没变就不再重建 `<option>`（每画一次都重建会让自定义下拉的触发栏抖一下）；新增「上面选的这家还没保存」，选了没点保存时明说。
+- 显示（她要的那句）：Key 标题右边加一枚常驻小胶囊，复用语音那套 `field-state` 样式——`已保存` / `已保存 · 未加密` / `还没填` / `待保存` / `会覆盖已保存的`；状态行补上「Key 已经存好，只存在这台电脑上、页面不回显」；已存的那家把输入框描边和占位文字染成薄荷色，空框也不再像没填。不再只靠两秒就散的 toast。
+- 顺手修掉上一轮遗留：`tests/video-settings-ui.test.js` 里那条按切片跑的 apiWith 超时用例，被上一轮加的「重新载入这一页」顶层 `document` 接线撞红了（上一轮只跑了三份测试，没覆盖到）。给它补上空 `document`/`window` 桩，用例恢复。
+- 已知残留（未处理，等她决定）：`keys.bing` 里躺着一把 11:40 那次 bug 误存的 Key（当时下拉已跳回默认搜索）。默认那档从不使用 Key，功能上无害。
+- 验证：`node --test --test-concurrency=1 --test-reporter=tap tests/search-engine.test.js tests/search-engine-routes.test.js tests/ui.test.js tests/ui-loading.test.js tests/video-settings-ui.test.js tests/dev-thread-range.test.js tests/load.test.js` → **267/267 通过，0 失败/取消/跳过**。新增回归锁：`refreshSearchKeyField` 必须在 `paintSearchEngine` 之前声明（防止处理器再被钉在画那一刻的快照上）、重绘要推快照、状态行要有「Key 已经存好」、要有常驻胶囊。未跑全量。
+- 待实机复验：她再走一遍「选 Tavily → 填 Key → 保存 → 切别家 → 切回来」，应看到胶囊一直是「已保存」、状态行写着 Key 已经存好；页面若还是旧的，点左上角「重新载入这一页」。
+
+### 第七轮：按顺序降级（2026-10-20，拍板「只做降级那一层」）
+
+她提的是「像 Hana 一样按顺序搜」，讨论后把两件事拆开：失败/额度/冷却时按她排的顺序往下试（纯收益，失败本来就不计费），与「结果不够优质就换别家再搜」（要花钱、要有人判“优质”）。**这一轮只做前者**，判定门槛是“真的不通”，不是“我觉得不够好”。
+
+- 配置：`searchEnhancement` 新增 `backups: [id...]`（有序，最多四家）。默认搜索不占位——它永远由代码兜在最后；首选就是默认搜索时链为空，她没让排就不自作主张。旧数据无这一项 = 空链，行为跟以前一模一样。
+- 执行：`searchWeb` 改走 `searchChain`（首选 → 备选）逐家试。只有在“真不通”（http-4xx/5xx、request-failed、bad-response、network-unavailable）时才往下走；**`no-results` 不算故障**，不拿别家付费重问一遍（那就是为了质量多掏钱，本轮不做）。冷却中或本轮已确定不通的直接跳级。没填 Key 的备选只跳过，不写入 failures（不会给人家记一笔冤枉账）。
+- 预算与时长：新增 `createSearchSession`（总 16 秒 / 付费 3 次）。一条回复里三个候选共用同一份预，链再长也拖不死回复；到顶了剩下的候选直接走免费的。每次单家超时取 `min(8s, 剩余-300ms)`，不会再逐家各等 8 秒。
+- 记账与熔断：`searchWeb` 返回 `calls`（真发出去的包，按引擎分）与 `failures`（按顺序每家的原因）。`index.js` 新增 `bookSearchOutcome(search)` 统一做两件事：按 call 逐引擎记用量、按 failure 逐引擎写熔断状态；探索与聊天两条路都走它，不再只能记一家。
+- 降级记忆：从“改一份 enhancement.engine=bing”改成会话里的 `markDown`，聊天层不再自己拿正则判故障，两处口径合一（`isEngineFault`）。
+- `chat-search` 的 `lastFallbackReason` 不再被 “engine-disabled” 覆盖：跳级不是新事实，第一次真原因（如 http-401）得留住，熔断才上得了膛。
+- 设置页：搜索卡片新增“备选顺序”列表，参与的那几家排前面（带 ↑↓），没参与的排在后面（虚线行、点“加入”）；每行自带 Key 状态胶囊（已存 Key / 没 Key / 免 Key）；改了没保存会写一句“顺序改过了，点上面的保存才生效”；首选切回默认搜索时整块隐起来。
+- 文案：卡片说明改成“排了备选的话，首选不通时也会发给备选那几家”，隐私上不能骗人。
+- 新增用例 11 条：顺序回退到第二家、没 Key 的备选不发请求也不算故障、冷却中跳级、no-results 不换付费家、付费预算到顶、总时长用尽、首选为默认搜索时链为空、备选归一（去首选/去重/上限）、一条回复三个候选共用预算。路由层两条：备选能存能回且归一后落盘、换首选时它从备选退出但不弄丢其他家。UI 一条：设置页有这块且保存带 backups。
+- 验证：`node --test --test-concurrency=1 --test-reporter=tap tests/search-engine.test.js tests/search-engine-routes.test.js tests/chat-search.test.js tests/topic-search.test.js tests/interest-exploration.test.js tests/store.test.js tests/ui.test.js tests/ui-loading.test.js tests/video-settings-ui.test.js tests/load.test.js tests/proactive.test.js` → **427/427 通过，0 失败/取消/跳过**。未跑全量。
+- 未做（按她拍板）：结果“不够优质”就换家再搜的第二层；合并多家结果去重；Fetch 接口。
+- 实机反馈修正（同一轮）：换首选时整个备选列表都跟着变。原因是 `others` 把“当前选中的那家”直接掉了，那一行消失后剩下的跟着上提，看着像顺序自己变了。改为：名单只排除默认搜索，选中的那家留在原位、胶囊改成「现在是首选」、不给箭头和开关；“参与 N 家”与“顺序改过了”都把它剔开再算（只换首选、没动顺序不喊改过了）；保存时也不把它发上去（后端本来就剔）。
+- 新增回归锁：不再按 `sel.value` 筛名单、名单只排除默认搜索、选中的那家要标成「现在是首选」、算数时把首选剔开。
+- 旧页面识别：实机反馈后才发现旧的“设置页版本”哈希戳是后端算的，页面旧了它照样显示新值，根本证明不了她眼前是哪一版（第二轮裁在此）。现改为页面里写死 `UI_BUILD`，后端从同一个 `settings.html` 里读同一个值，对不上就在版本那行直接写「这一页是旧版本，关掉设置页再进来一次」。自本版起才生效（旧页面里没这个检测代码）。
+- 仍待：实机复验（先给 Tavily 排一家备选，把首选 Key 故意改坏看是否自动接到下一家）；没有真 Key，真实额度扣减未验。
+
+### 第八轮：改成“一条顺序”（2026-10-20 拍板推翻上一版模型）
+
+反馈：“不能是首选不能当备选，这样会很绕；统一改成使用搜索商的顺序，按用户选择的顺序依次尝试”。上一版用“首选下拉 + 备选名单”两个概念表达同一件事，还得额外解释“首选为什么不能当备选”——那是设计在让她学规则，不是她想表达的东西。
+
+- 数据模型：只剩一份 `searchEnhancement.order`（含默认搜索）。`engine` 降为兼容字段，恒等于 `order[0]`，不再单独赋值（`normalizeSearchEnhancement` 里由 order 推出，所以永不漂）。旧数据 `engine + backups` 自动搬成一条顺序：engine 打头、backups 后缀、默认搜索兜尾；搬过之后只认 order。
+- 执行：链子就是 order，逐格试。轮到“默认搜索”那一格就真走它——她可以把默认搜索排第一（那就只用它），也可以排中间（两家付费都不行才用）。仍然只在“真不通”时往下走，`no-results` 不拿别家付费重问（上一轮的范围不变）；名单里没排到默认搜索、或者轮到它时时间不够，最后还是会走它，聊天不能断。
+- 接口：`order` 与 `keyEngine` 分开传。调顺序不碰任何 Key、也不重置别家的测试状态；老客户端（只传 engine）仍按“把它当顺序第一位”处理，行为跟以前一致。
+- 设置页：下拉框退了（两处控制同一件事只会绕），改成一条列表：序号 + 名字（只摆名字，不挂长描述）+ Key 胶囊 + ↑↓ + 加入/移除；默认搜索那行移不掉（标“兜底”）。点某一行 = 切到那一家填 Key / 测它（不是改变顺序）；顺序摘要单独一行写清“现在依次尝试：A → B → C”；状态行只讲正在填的那一家。
+- `UI_BUILD` 升到 `20261020.4`。规矩：以后每次动 settings.html 都升一位，不然旧页面会误判成新的。
+- 测试改写：顺序归一（认不得的剔掉、去重、没排默认搜索就兜尾、她真把默认搜索排第一就听她的）、老数据搬迁、order 优先于旧 engine、默认搜索排第一时不去问下一家、存顺序不动 Key 也不重置别家状态。路由里原来那两条“备选”用例已随模型下线。
+- 验证：`node --test --test-concurrency=1 --test-reporter=tap tests/search-engine.test.js tests/search-engine-routes.test.js tests/chat-search.test.js tests/topic-search.test.js tests/interest-exploration.test.js tests/store.test.js tests/ui.test.js tests/ui-loading.test.js tests/video-settings-ui.test.js tests/load.test.js tests/proactive.test.js` → **429/429 通过，0 失败/取消/跳过**。未跑全量。
+- 实机反馈修正（同轮）：一打开搜索栏，“填 Key” 那块整块不见了。原因是 `searchEditId` 初值写死成 `bing`，而默认搜索本来就不需要 Key，于是 Key 栏一上来就是 `hidden`。改为初值为空、每次重画时指向顺序第一行（只有那家不在了才回退到 `bing`）。同时把行改成可换行 + 工具区 `flex: 0 0 auto`，窄面板下 `移除` 不会再被擅出卡片右边。`UI_BUILD` → `20261020.5`。
+- 仍待：实机复验（把顺序排成 Tavily → DeepSeek → 默认搜索，把 Tavily 的 Key 改错，看是否自己接到第二家）；真实额度扣减仍无真 Key 可验。
+
+## 记忆跟随伙伴模型与删除后重建（2026-10-20）
+
+- 仅记忆路径新增窄入口，复用既有伙伴→应用默认→伙伴在宿主的默认→目录当前模型解析；固定本任务模型，`allowUtilityFallback:false`、单次无内部重试、`strictOutput:true`。整理包含日账、摘要/长期条目、关系档案和话题；其他utility用途及普通聊天默认行为不变。短正文仍留8192总输出预算，避免思考占完正文额度。
+- 严格流需正常done(stop)，拒绝任何error、无done、length/toolUse/deferred；不提交半截画像、日账或摘要，不推进对应水位。画像、日账、话题等待期间若原文或来源状态改变，旧结果不落盘；滚动摘要继续使用逐条来源校验。
+- 重建状态保存pending/running/failed/succeeded、日期、代际、尝试数与错误；默认延后45秒合并，失败最多追加60秒/300秒两次重试，重载不重置预算。业务队列吞异常时也必须返回明确失败，不能由undefined兼容逻辑误判成功。删除与重建分别报告；私有维护接线与测试继续Git忽略、双发布排除，不新增公开页面。
+- 删除重建画像只取剩余有效聊天，不引用旧画像、宿主事实或无逐条来源的旧判断；空材料清空旧画像和刷新时间。未知日账范围先取消旧排程，再保留新代际failed与人工核对阻断；普通重建和后续正常删除都不能解除该阻断。无逐条来源的综合话题及累计关系仍不承诺精准回滚。
+- 修前基线：严格流新增用例45项中43通过/2失败；原队列新增契约11项中4通过/7失败；修前入口暂存副本上的新记忆集成6项全失败，未回滚正式源码。队列二次复核新增3项在旧实现13通过/3失败后修正。交叉审查发现的两项P1补丁有新增回归，未单独实跑其旧码基线。中途191项中189通过/2失败为测试用旧store设置快照等待App内部落盘状态导致，改用磁盘新实例读取后恢复。
+- 首轮相关9文件211/211通过。补正式自服务与取消后，最终定向命令：`node --test --test-concurrency=1 --test-reporter=tap tests/model.test.js tests/rebuild-queue.test.js tests/memory-pipeline.test.js tests/memory.test.js tests/topics.test.js tests/dev-thread-range.test.js tests/loading-store.test.js tests/compose.test.js tests/longterm-routes.test.js tests/load.test.js`，**222/222通过，0失败/取消/跳过**。相关8份JS语法与定向diff空白检查通过；私有测试含真实DEV_ONLY剥离装载检查。全树diff另有既有panel.css末尾空行，未动无关文件。未全量。
+- 测试宿主的成功流补真实done(stop)事件，并提供可选entryUrl以测试备份入口；长期记忆路由用例改拦记忆stream，普通聊天/utility观测独立，原证据与水位断言保留。独立复核两项P1修补后无源码阻断，不替代实机验证。
+- 首次实机选模正确，但延后任务继承失效工具调用凭证，立即遇`APP_CALL_TOKEN_INVALID`，日账与画像没有假报成功。当前1.1.35-beta官方APPS.md及实际源码确认无token的App自有推理、正式self RPC入口；stream不支持scope字段，未手拼令牌。只将记忆模型调用包进本App的memory-generate服务，业务队列不重复进入，RPC超时180秒，服务内传取消信号。模拟宿主用独立AsyncResource覆盖旧上下文隔离，另测外部调用身份拒绝。取消新用例在旧模型层4项失败；另有旧静态测试截取范围把服务注册带进VM的问题，收紧边界且保留原断言；最终模型文件50/50通过，包含在222项内。
+- 第二次正式reload成功且inspect开启。真实self RPC已进入App作用域模型推理，usage ledger确认仍为既有伙伴选定模型；不再是调用凭证错误，但提供方返回`APP_MODEL_PROVIDER_ERROR`，usage为空，无有效正文。同时间宿主对chatgpt.com记录HTTP/2 Extended CONNECT不支持告警，未获逐请求底层原因，不能据此说模型本体损坏。画像仍0字、失效日账未补回；线程及性格关系文件与验证前SHA-256相同。**生产重建成功路径仍未验收，当前被模型通道错误阻塞**；最终读回generation2、failed、attempt3，已停止本轮自动重试；线程及性格关系文件最终hash仍与验证前相同。不换模型、不回退utility。
+- 2026-10-20午后Luna单变量诊断：原生、App最小带0.4/省略温度、self RPC最小、工具返回后后台最小、中文输入以及正式日账提示词+虚构材料均有成功；真实剩余日账材料通过同探针/self RPC仍失败。只能定位材料或其请求表达相关触发，不能认定具体敏感词/审核/鉴权/网络为根因。宿主将原始errorMessage丢弃后统一APP_MODEL_PROVIDER_ERROR；HTTP2 Extended CONNECT存在HTTP1.1回退，时间邻近不足归因。
+- 本轮仅改Git忽略且双发布排除的local-dev.js及私有测试；探针fixture改按真实顶层done.stopReason，生产解析原本正确。最终`node --test --test-reporter=tap tests/dev-thread-range.test.js`为19/19通过，0失败/取消/跳过，包含发布剥离；语法通过，未重跑上午222项或全量。真实重建generation3最终failed/attempt3，画像仍0字、目标日账缺失，线程/knowing哈希与复验前相同。真实最小成功不等于生产恢复。详见工作台《CHF-20261020-04-Luna调用链排查.md》及同目录runtime.json、probe-tests.tap。
+- 未新增删除、未回灌备份画像；版本仍0.10.2、README/简介及Hana共享模型配置未动、未提交上传。成功生成后的自然度、真实取消与真实reload中断恢复尚未实机覆盖；模拟覆盖不能替代这些边界。
+
+## 通用接话选择与本机探针（2026-10-19）
+
+- 延续 CHF-20261019-02，仅联动替换 `replyChoiceBlock` 与 `buildStickerHint` 既有文字。先判断自然收尾和回应价值，再针对具体内容选择表达；泛笑/收到/附和不足的约束仅限话头仍需回应。保留单图独立接招、认真求助与不适边界、纯温柔性格，不强制文字、互怼、提问或续聊。未再改互损性格块。
+- 先保留工作台专项备份并核 SHA-256；新增两条文字契约在旧实现0/2通过，仅证明旧文字契约不符。首轮定向173项172通过1失败：既有试点测试把含 import.meta/顶层 await 的本机钩子交给 Function；修改前备份同样复现该错误。测试缩到实际待验开关与赋值，ESM由装载测试覆盖；随后173项通过。审查补强后最终结果如下，不抹去中间失败。
+- 最终命令：`node --test --test-reporter=spec --test-concurrency=1 tests/prompt.test.js tests/stickers.test.js tests/familiar-tease.test.js tests/reply-rules-compact.test.js tests/reply-rule-probe.test.js tests/taste-probe-context.test.js tests/compose.test.js tests/proactive-context-history.test.js tests/proactive-expression.test.js tests/load.test.js`，**174/174通过，0失败/取消/跳过**。相关三份源码语法、定向diff空白、DEV_ONLY剥离后的模块语法通过；全树diff空白另有既有panel.css末尾空行，未改无关文件。未跑全量。
+- 为实测最小扩展现有私有taste探针：显式legacy/compact-v1、最多24条role/text历史，校验后投影；记录实际profile/history/stickerHintIncluded。模拟用例验证两规则实际进入请求、额外quote/visionNote等不透传、坏参数零调用、不写聊天关系。仍在既有DEV_ONLY段；新增私有测试Git忽略并双发布排除，未新增公开入口。独立只读复核修补后无阻断。
+- 正式reload回执成功，inspect为host=on/agent=on。计划4个固定情境、每个单档一次；实际仅发起第1次即失败，未继续或换模型。usage-ledger原错误为当前opencode-go/deepseek-v4.1-flash通道缺少x-opencode-session，非空正文/思考预算问题；与今天早些时候原样本的openai-codex/gpt-6-luna不同，未强行沿用过时模型假设。失败结果没有profile和提示标志，不能确认成功请求中的这两项，不能称真实效果通过。
+- 详细证据见本机工作台《CHF-20261019-02-通用接话实施验证.md》。当前仅完成实现、相关模拟验证与正式重载；固定情境真实回复、旧新配对、其他性格/模型自然度仍未验收。版本0.10.2、README/简介未动，未commit/push/release。
+
+## 熟悉后的互损偏好（2026-10-19）
+
+- 对应 CHF-20261019-02。只改普通回复两版现有互损纪律、关系档位与主动tease分支成文句，不改性格档案、关系计算或主动频率。陌生轻、熟悉后更偏爱互损；纯温柔保留，温柔又爱打趣不排除；认真纠错先核对、确错就改。
+- 先留基线：相关原文件专项目录备份并核SHA-256；新增3条静态契约在旧码3/3失败，仅证明文字契约未满足。中途测试断言问题及过宽主动断言撤回见反馈账本，不冒充历史产品故障。
+- 最终定向：`node --test --test-reporter=spec --test-concurrency=1 tests/familiar-tease.test.js tests/prompt.test.js tests/reply-rules-compact.test.js tests/reply-rule-probe.test.js tests/compose.test.js tests/proactive-context-history.test.js tests/proactive-expression.test.js tests/proactive-reasons.test.js`，**159/159通过，0失败/取消/跳过**，4.36秒。相关5份JS语法检查、3份源码diff空白检查通过；未跑全量。
+- 新增4条规则/拼装用例：两版偏好及认真纠错、三档与完整性格、主动tease与其他由头隔离。affection/contact/shared为有效隔离对照；interest在现有分流中不成关系式reason，仅为常规非tease输入对照，不冒称独立兴趣分支已验。既有App harness同时验证普通回复两伙伴与主动utility/视频请求历史接线。配对探针字符差由写死780改成逐份实际构造长度核对，避免合法文案更新导致无关失败。
+- 独立只读交叉复核无阻断，未替代真实模型自然度验收。未找到本会话可调用且能固定当前profile/原场景的正式模型测试入口；未绕过宿主直接请求Provider，未调真实/付费模型。原样本旧新配对、认真纠错不乱怼、纯温柔/陌生真实表现均待实机观察；不得凭静态规则推断模型行为已解决。
+- 正式reload成功，随后inspect为host=on/agent=on。源码已加载，不等于真实聊天效果已验收。版本仍0.10.2，README/简介未改，未提交或发布；既有杯中动效等工作树改动保留。
+
+## 等回复的动效可选「杯中有话」（2026-10-19）
+
+- 来处：她想要把等待回复时那三个点换成一盏茶的动效（参考 Hana 新版 thinking-bloom 的“永远有东西在动”那套）。明确要求：原版三个点不能丢，不喜欢要能退回。
+- 实现：新全局设置 `typingIndicator`，`"dots"`（默认，原样）/ `"cup"`。三
+  个点那段代码一字未动，只在 `typingIndicator()` 里加一条分支；关掉开关就是完全原来的行为。设置页「聊天显示」加一个开关，按轮询生效，不用重开窗。
+- 杯子几何来自一个独立的 120×120 候选图（她认为好看的版本），一个形状没重画。颜色全部改成 `color-mix(--cup-ink, --cup-paper)` 插值，浅色主题重现原版的绿阶，深色主题自动翻成暗杯身亮描边。
+- 动效按「永不空白」重新排相位：杯身 7.3s、茶面 6.1s、涟漪 2.9/3.1/3.35s 三圈错开、叶子 5.6s、蒸汽 3.3/3.7s、金光 4.3s。公共周期几十秒，任取一帧都有东西在动。原版那条 9.6s 单时间线后半段完全静止，不能直接用。
+- 踩到的坑（已修）：`getGlobalSettings` 里值归一写在了 `...state.settings` 展开**之前**，展开把它原样盖回去，导致不认识的值得能穿到前端。已把 `typingIndicator` 的归一移到展开之后，并把原因写进注释。
+- 测试：新增 2 条（默认是三个点、改成 cup 后重启记得住且能改回 dots；不认识的值得退回 dots，不能让聊天窗空着）。全量 `node --test --test-concurrency=1 <tests/*.test.js>` **1873/1873 通过**（109 个文件，111 秒）。两个页面的内联 module 用 `vm.SourceTextModule` 语法检查通过。
+- 未做：真实聊天里挂一整个回复回合的实际观感（蒸汽快慢、杯子在真实气泡里是否过大）没亲眼验过，只验了静态渲染和参数。未跑真实/付费模型。未改 manifest 版本/简介/README，未提交或发布。
+
 ## 专注联动用例改按场景认领模型调用（2026-10-19）
 
 - 来处：v0.10.2 定版后 CI（run 39196529662，提交 `dc620f0`）在 windows-latest 上挂 1 项：`tests/focus-routes.test.js` 的「真apply联动」。全量 1859 项，1858 过 1 失败，同一提交的云构建成功。

@@ -4,7 +4,7 @@
     "id": "chahuahui",
     "name": "茶话会",
     "kind": "app",
-    "version": "0.10.2",
+    "version": "0.11.0",
     "repoUrl": "moononnn/Hanako-chahuahui"
   },
   "publisher": "moononnn & 小花",
@@ -40,6 +40,16 @@
       "PROMPT_OPTIMIZATION.md",
       "lib/reply-rule-probe.js",
       "tests/reply-rule-probe.test.js",
+      "tests/taste-probe-context.test.js",
+      "lib/local-dev.js",
+      "lib/dev-thread-range.js",
+      "lib/dev-thread-range-store.js",
+      "lib/dev-thread-range-backup.js",
+      "ui/local-dev.js",
+      "tests/dev-thread-range.test.js",
+      "tests/dev-thread-range-store.test.js",
+      "tests/dev-thread-range-backup.test.js",
+      "DEV_THREAD_RANGE.md",
       ".gitignore",
       ".gitattributes",
       ".installed-by.json",
@@ -60,7 +70,8 @@
   },
   "devOnly": {
     "targets": [
-      "index.js"
+      "index.js",
+      "lib/store.js"
     ],
     "startMark": "// __CHAHUAHUI_DEV_ONLY__",
     "endMark": "// __CHAHUAHUI_DEV_ONLY_END__",
@@ -74,9 +85,26 @@
       "analyzePersonalityOnce",
       "startPersonalityAnalysis",
       "chahuahui_ping",
-      "chahuahui_taste_probe"
+      "chahuahui_taste_probe",
+      "chahuahui_tool_probe",
+      "localDevHooks",
+      "probe/local-status",
+      "local-dev.js",
+      "devRemoveThreadRange",
+      "devSetRolledWatermark",
+      "chahuahui_thread_range_admin"
     ],
     "replacements": [
+      {
+        "file": "manifest.json",
+        "from": "    \"app/tools.expose-to-model\",",
+        "to": ""
+      },
+      {
+        "file": "manifest.json",
+        "from": "    \"app/resources.write\",",
+        "to": ""
+      },
       {
         "file": "CHANGELOG.md",
         "from": "DEV_TOOLS",
@@ -128,14 +156,14 @@
     "pin": {
       "channel": "beta",
       "channelManifest": "https://dl.openhanako.com/channels/beta.json",
-      "version": "1.1.24-beta",
+      "version": "1.1.35-beta",
       "platform": "win32-x64",
-      "file": "server-1.1.24-beta-win32-x64.tar.gz",
-      "sha256": "421f6bcbc5dfce7fa2d85416848cb75d8828820342a6d44d51e52e0ec23a5b2c",
-      "size": 253302845,
+      "file": "server-1.1.35-beta-win32-x64.tar.gz",
+      "sha256": "5bc0635ad404daea19a22f79bff0efbd86cda4b4ac76e8df079c429492b5c2fb",
+      "size": 253325882,
       "mirrors": [
         "https://dl.openhanako.com",
-        "https://github.com/liliMozi/openhanako/releases/download/train-beta-39"
+        "https://github.com/liliMozi/openhanako/releases/download/train-beta-40"
       ]
     }
   }
