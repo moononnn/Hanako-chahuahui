@@ -113,6 +113,7 @@ test("视频设置默认关闭、六档合法回显、拒绝非法值", { skip: 
 
 for (const loggedIn of [false, true]) {
   test(`真实探索接线：${loggedIn ? "已登录只搜索B站并保存字幕候选" : "未登录不请求B站"}`, { skip: SKIP_DEV }, async (t) => {
+    t.mock.method(Math, 'random', () => 0.9);
     const app = await boot(t, (store) => {
       seed(store);
       store.saveVideoBook(AGENT, { pending: [], shares: [] });
@@ -126,7 +127,7 @@ for (const loggedIn of [false, true]) {
       calls.push({ url: u, options });
       let json = null;
       if (u.pathname.endsWith("/nav")) json = { code: 0, data: { isLogin: true, wbi_img: { img_url: "https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png", sub_url: "https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png" } } };
-      else if (u.pathname.includes("/search/type")) json = { code: 0, data: { result: [{ bvid: "BV1bXt9z9ESP", title: "半岛铁盒石膏手作", author: "手作频道" }] } };
+      else if (u.pathname.includes("/search/type")) json = { code: 0, data: { result: [{ bvid: "BV1bXt9z9ESP", title: "半岛铁盒石膏手作", author: "手作频道", pubdate: Math.floor(Date.now() / 1000) - 86400, play: 1000 }] } };
       else if (u.pathname.endsWith("/view")) json = { code: 0, data: { bvid: "BV1bXt9z9ESP", aid: 123, cid: 456, duration: 100, title: "半岛铁盒石膏手作", desc: "半岛铁盒石膏浇筑", owner: { name: "手作频道" }, pages: [{ page: 1, cid: 456, duration: 100 }] } };
       else if (u.pathname.includes("/player/")) json = { code: 0, data: { aid: 123, cid: 456, subtitle: { subtitles: [{ id: 1, lan: "zh-CN", subtitle_url: "https://aisubtitle.hdslb.com/subtitle/test.json" }] } } };
       else if (u.hostname === "aisubtitle.hdslb.com") json = { body: Array.from({ length: 12 }, (_, i) => ({ from: i * 8, to: i * 8 + 8, content: "半岛铁盒用石膏浇筑，泡沫板做模具。" })) };
@@ -142,14 +143,18 @@ for (const loggedIn of [false, true]) {
     else {
       assert.equal(disk(app).getVideoBook(AGENT).pending.length, 1);
       assert.ok(calls.some((row) => row.url.pathname.includes("/search/type")));
-      assert.ok(calls.every((row) => ["api.bilibili.com", "aisubtitle.hdslb.com"].includes(row.url.hostname)));
-      assert.ok(calls.filter((row) => row.url.hostname !== "api.bilibili.com").every((row) => !row.options.headers.Cookie));
+      assert.ok(calls.every((row) => ["api.bilibili.com", "aisubtitle.hdslb.com", "comment.bilibili.com"].includes(row.url.hostname)),
+        `DEBUG hosts: ${[...new Set(calls.map((row) => row.url.hostname))].join(", ")}`);
+      // 2026-10-20：弹幕改成可降级候选后，会多打一次 comment.bilibili.com 取弹幕。
+      // 仍然是 B 站自己的域名，所以登录 Cookie 照发；站外一家都不许带。
+      assert.ok(calls.filter((row) => !row.url.hostname.endsWith("bilibili.com")).every((row) => !row.options.headers.Cookie));
       assert.ok(!JSON.stringify(disk(app).readMemory(AGENT)).includes("test-login-session"));
     }
   });
 }
 
 test("探索计划等待期间线程变化，搜索前门禁挡住B站请求", { skip: SKIP_DEV }, async (t) => {
+  t.mock.method(Math, 'random', () => 0.9);
   const app = await boot(t, (store) => {
     seed(store);
     store.saveVideoBook(AGENT, { pending: [], shares: [] });
@@ -369,7 +374,8 @@ test("实际普通回复召回视频、复用记忆反馈存认知、用户具�
   assert.equal(saved.renewals.length, 1);
   assert.equal(saved.renewals[0].kind, "user");
   assert.ok(!reopenThread(app.dataDir, AGENT).find((m) => m.id === done.replyMessageId).text.includes("memory-update"));
-  assert.equal(app.models.calls.length, 1);
+  // 2026-10-20：后台会顺手跑一次关系档案，只数回复生成。
+  assert.equal(app.models.replyCalls().length, 1);
   disk(app).removeFactsBySource(AGENT, turn.body.messageId);
   assert.equal(disk(app).getVideoBook(AGENT).shares.length, 0);
 });
@@ -513,6 +519,75 @@ test("提醒生成期间重新登录时旧的过期提醒不发", { skip: SKIP_D
   assert.equal(reopenThread(app.dataDir, AGENT).filter((row) => row.videoLoginNotice).length, 0);
   assert.equal(disk(app).getGlobalRuntime().videoLoginNotice, undefined);
 });
+
+for (const mode of ['popular', 'interest', 'popular-fails', 'interest-fails', 'date-ignored', 'stale', 'budget']) {
+  test(`两路视频真实接线：${mode}`, { skip: SKIP_DEV }, async (t) => {
+    t.mock.method(Math, 'random', () => ['interest', 'interest-fails', 'date-ignored'].includes(mode) ? 0.9 : 0);
+    const app = await boot(t, store => {
+      seed(store);
+      store.saveVideoBook(AGENT, { pending: [], shares: [] });
+      const knowing = store.getKnowing(AGENT);
+      store.saveKnowing(AGENT, { ...knowing, worldInterests: mode === 'popular' ? [] : [
+        { id: 'wi_craft', name: '石膏手作', domains: ['石膏手作'], sources: ['B站'] },
+      ], hobbies: [] });
+      store.setProactiveState(AGENT, { nextDueAt: new Date(Date.now() + 3600000).toISOString(),
+        interestLearning: { curiosity: { startedAt: new Date(Date.now() - 40 * 3600000).toISOString(), thresholdMs: 18 * 3600000 } } });
+    });
+    const calls = [];
+    const oldStamp = Math.floor(Date.now() / 1000) - 60 * 86400;
+    const stamp = Math.floor(Date.now() / 1000) - 86400;
+    const ids = Array.from({ length: 12 }, (_, i) => `BV1abcdefg${String(i).padStart(2, '0')}`);
+    app.ctx.network.fetch = async (raw, options) => {
+      const u = new URL(raw);
+      calls.push({ u, options });
+      let json;
+      if (u.pathname.endsWith('/nav')) json = { code: 0, data: { isLogin: true, wbi_img: { img_url: 'https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png', sub_url: 'https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png' } } };
+      else if (u.pathname.endsWith('/popular')) {
+        assert.equal(options.headers.Cookie, undefined, '公共热门请求不带登录凭据');
+        if (mode === 'stale') app.store.appendMessage(AGENT, { role: 'user', text: '取热门时换了话题', at: now() });
+        json = mode === 'popular-fails' ? { code: -412 } : { code: 0, data: { list: ids.slice(0, 6).map(bvid => ({ bvid, title: '趣味手作', duration: 100, pubdate: stamp, stat: { view: 1000 }, owner: { name: '频道' } })) } };
+      } else if (u.pathname.includes('/search/type')) {
+        assert.ok(['click', 'pubdate'].includes(u.searchParams.get('order')));
+        assert.ok(Number(u.searchParams.get('pubtime_begin_s')) >= stamp - 30 * 86400);
+        assert.ok(Number(u.searchParams.get('pubtime_end_s')) <= Math.floor(Date.now() / 1000));
+        json = mode === 'date-ignored' && u.searchParams.get('order') === 'click'
+          ? { code: 0, data: { result: [{ bvid: ids[10], title: '陈年热门', play: 9999999, pubdate: oldStamp }] } }
+          : { code: mode === 'interest-fails' ? -412 : 0, data: { result: [
+          { bvid: ids[10], title: '陈年热门', play: 9999999, pubdate: oldStamp },
+          { bvid: ids[11], title: '刚发布冷门', play: 10, pubdate: stamp + 10 },
+          ...ids.slice(6, 12).map((bvid, i) => ({ bvid, title: '石膏手作', play: 10000 - i, pubdate: stamp, duration: '01:40' })),
+        ] } };
+      } else if (u.pathname.endsWith('/view')) {
+        const bvid = u.searchParams.get('bvid');
+        json = { code: 0, data: { bvid, aid: 123, cid: 456, duration: mode === 'budget' ? 1000 : 100, title: '半岛铁盒石膏手作', desc: '半岛铁盒石膏浇筑', owner: { name: '手作频道' }, pages: [{ page: 1, cid: 456, duration: mode === 'budget' ? 1000 : 100 }] } };
+      } else if (u.pathname.includes('/player/')) json = { code: 0, data: { aid: 123, cid: 456, subtitle: { subtitles: [{ id: 1, lan: 'zh-CN', subtitle_url: 'https://aisubtitle.hdslb.com/subtitle/test.json' }] } } };
+      else if (u.hostname === 'aisubtitle.hdslb.com') json = { body: Array.from({ length: 12 }, (_, i) => ({ from: i * 8, to: i * 8 + 8, content: '半岛铁盒用石膏浇筑，泡沫板做模具。' })) };
+      else if (u.hostname === 'comment.bilibili.com') return { ok: true, status: 200, url: u.href, text: async () => '<i></i>' };
+      else if (u.pathname.includes('/reply')) json = { code: 0, data: { replies: [] } };
+      assert.ok(json, `不该请求 ${u.pathname}`);
+      return { ok: true, status: 200, url: u.href, json: async () => json };
+    };
+    app.ctx.models.utility = async () => ({ requestId: 'test-plan', text: '{}' });
+    app.ctx.models.stream = async () => ({ text: async () => JSON.stringify({ type: 'text-delta', delta: '[不回]' }) + '\n' });
+    await app.request('POST', '/video/login', { json: { sessdata: 'test-session', persist: false } });
+    calls.length = 0;
+    await app.request('POST', '/proactive/tick', { json: {} });
+    const pending = disk(app).getVideoBook(AGENT).pending;
+    if (['stale', 'budget'].includes(mode)) {
+      assert.equal(pending.length, 0);
+      assert.equal(calls.filter(x => x.u.pathname.endsWith('/view')).length, mode === 'stale' ? 0 : 10);
+    } else {
+      assert.equal(pending.length, 1);
+      const source = ['interest', 'popular-fails', 'date-ignored'].includes(mode) ? 'interest' : 'popular';
+      assert.equal(pending[0].source, source);
+      assert.equal(pending[0].video.bvid, source === 'interest' ? ids[6] : ids[0]);
+      if (source === 'popular') assert.equal(pending[0].interestId, '');
+      if (mode === 'date-ignored') assert.deepEqual(calls.filter(x => x.u.pathname.includes('/search/type')).map(x => x.u.searchParams.get('order')), ['click', 'pubdate']);
+      if (mode === 'popular') assert.equal(calls.filter(x => x.u.pathname.includes('/search/type')).length, 0, '没有兴趣仍可逛热门');
+    }
+    assert.equal(disk(app).getGlobalRuntime().videoSentToday || 0, 0, '取材不扣发送额度');
+  });
+}
 
 test("明说以后别分享视频会关闭全局上限，普通不喜欢某类不误关", async (t) => {
   const app = await boot(t);

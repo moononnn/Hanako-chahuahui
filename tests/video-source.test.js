@@ -16,6 +16,7 @@ import {
   clearVideoCredential,
   collectVideoMaterials,
   fetchDanmaku,
+  fetchPopularVideos,
   fetchSubtitle,
   fetchTopReplies,
   fetchVideoMeta,
@@ -329,6 +330,137 @@ test("搜索空词直接拒绝，不发请求", async () => {
   }, "   ");
   assert.equal(res.ok, false);
   assert.equal(called, false);
+});
+
+// ── 热门入口与发布时间区间 ─────────────────────────────────────
+
+/** 搜索要两次请求：先取 wbi 密钥，再取结果。searchJson 可以换掉搜索那次的返回形状。 */
+function wbiFetcher(onUrl, searchJson) {
+  return async (url, options) => {
+    onUrl?.(url, options);
+    if (url.includes("/x/web-interface/nav")) {
+      return {
+        ok: true,
+        async json() {
+          return {
+            code: 0,
+            data: { wbi_img: { img_url: "https://i0.hdslb.com/bfs/wbi/aaa.png", sub_url: "https://i0.hdslb.com/bfs/wbi/bbb.png" } },
+          };
+        },
+      };
+    }
+    return { ok: true, async json() { return searchJson ?? { code: 0, data: { result: [] } }; } };
+  };
+}
+
+test("热门入口只读 GET，字段规范到与搜索相近的一组", async () => {
+  let seenUrl = "";
+  let seenMethod = "";
+  const res = await fetchPopularVideos(async (url, options) => {
+    seenUrl = String(url);
+    seenMethod = options?.method;
+    return {
+      ok: true,
+      async json() {
+        return {
+          code: 0,
+          data: {
+            list: [
+              {
+                bvid: "BV1n7JU69EQA",
+                title: "<em class=\"keyword\">实木</em>菜板修复",
+                desc: "把开裂的菜板重新刨平",
+                owner: { name: "木作阿青" },
+                duration: 214,
+                stat: { view: 320000 },
+                pubdate: 1710000000,
+                tname: "手工",
+              },
+              { bvid: "不是BV号", title: "形状不对的条目", duration: 10 },
+            ],
+          },
+        };
+      },
+    };
+  });
+  assert.equal(res.ok, true);
+  assert.equal(seenMethod, "GET");
+  assert.match(seenUrl, /^https:\/\/api\.bilibili\.com\/x\/web-interface\/popular\?pn=1&ps=20$/u);
+  assert.equal(res.results.length, 1, "bvid 不合规的条目不进结果");
+  const row = res.results[0];
+  assert.equal(row.bvid, "BV1n7JU69EQA");
+  assert.equal(row.title, "实木菜板修复", "标题里的高亮标签要剥掉");
+  assert.equal(row.desc, "把开裂的菜板重新刨平");
+  assert.equal(row.author, "木作阿青");
+  assert.equal(row.duration, 214, "时长是秒");
+  assert.equal(row.play, 320000);
+  assert.equal(row.pubdate, 1710000000);
+  assert.equal(row.tname, "手工");
+});
+
+test("热门接口空形状与错误码都拒绝，不返回半截数据", async () => {
+  const empty = await fetchPopularVideos(async () => ({
+    ok: true,
+    async json() { return { code: 0, data: {} }; },
+  }));
+  assert.equal(empty.ok, false);
+  assert.match(empty.reason, /没有可用/u);
+
+  const bad = await fetchPopularVideos(async () => ({
+    ok: true,
+    async json() { return { code: -412, message: "搜索被拦截" }; },
+  }));
+  assert.equal(bad.ok, false);
+  assert.match(bad.reason, /-412/u);
+});
+
+test("热门每页条数最多 50，页码从 1 起", async () => {
+  let seenUrl = "";
+  await fetchPopularVideos(async (url) => {
+    seenUrl = String(url);
+    return { ok: true, async json() { return { code: 0, data: { list: [{
+      bvid: "BV1n7JU69EQA", title: "一条", duration: 100, stat: { view: 1 }, pubdate: 1, tname: "手工", owner: { name: "A" },
+    }] } }; } };
+  }, { page: 0, pageSize: 200 });
+  assert.match(seenUrl, /pn=1&ps=50$/u);
+});
+
+test("搜索返回坏形状时拒绝，不把另一条取材路一起带崩", async () => {
+  const broken = await searchVideos(wbiFetcher(null, { code: 0, data: { result: "不是数组" } }), "手作");
+  assert.equal(broken.ok, false);
+  assert.deepEqual(broken.results, []);
+  assert.match(broken.reason, /形状/u);
+
+  const missing = await searchVideos(wbiFetcher(null, { code: 0, data: {} }), "手作");
+  assert.equal(missing.ok, false);
+  assert.deepEqual(missing.results, []);
+
+  // 形状对的空结果仍然是「取到了但没有」，不能当成失败。
+  const empty = await searchVideos(wbiFetcher(), "手作");
+  assert.equal(empty.ok, true);
+  assert.deepEqual(empty.results, []);
+});
+
+// 2026-10-21 实测：pubtime_begin / pubtime_end（不带 _s）不生效，order=click 返回 20 条全是陈年。
+// 正确的参数名是 pubtime_begin_s / pubtime_end_s（秒），参照 searxng 的 B 站引擎实现；
+// 真的认不认，由主线程拿真接口核。
+
+test("搜索带发布时间区间时带 pubtime_begin_s / pubtime_end_s，不带时保持原来的样子", async () => {
+  const urls = [];
+  await searchVideos(wbiFetcher((url) => urls.push(String(url))), "手作", {
+    publishedAfter: 1700000000, publishedBefore: 1710000000,
+  });
+  const searchUrl = urls.find((url) => url.includes("wbi/search/type"));
+  assert.ok(searchUrl, "要发出搜索请求");
+  assert.match(searchUrl, /pubtime_begin_s=1700000000/u);
+  assert.match(searchUrl, /pubtime_end_s=1710000000/u);
+  assert.doesNotMatch(searchUrl, /pubtime_begin=|pubtime_end=/u, "不带 _s 的旧参数名不发了");
+
+  const plain = [];
+  await searchVideos(wbiFetcher((url) => plain.push(String(url))), "手作");
+  const plainUrl = plain.find((url) => url.includes("wbi/search/type"));
+  assert.ok(plainUrl);
+  assert.doesNotMatch(plainUrl, /pubtime/u, "不给区间就不带这两个参数");
 });
 
 test("白名单常量里没有评论、点赞类域名", () => {
@@ -836,10 +968,11 @@ test("requireSubtitle 时没有字幕就失败，不拿弹幕档顶替", async (
   assert.equal(r.shareable, false);
 });
 
-test("默认档位下弹幕档拿得到，但不算可分享", async () => {
+test("默认档位下弹幕档拿得到，2026-10-20 起也算可分享", async () => {
   const { fetcher } = collectFetcher({ subtitles: [] });
   const r = await collectVideoMaterials(fetcher, "BV1n7JU69EQA", { cookie: "c" });
   assert.equal(r.ok, true);
   assert.equal(r.readKind, "danmaku");
-  assert.equal(r.shareable, false);
+  // 旧口径：只要字幕，弹幕不算；新口径：弹幕档也收（只标题仍不收）。
+  assert.equal(r.shareable, true);
 });

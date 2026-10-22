@@ -132,7 +132,7 @@ test("外部内容边界与分享说明即使在极小预算下也不被截掉",
   const segs = Array.from({ length: 400 }, (_, i) => ({ from: i, content: "很长的一句字幕".repeat(12) }));
   const text = packMaterials({ video: VIDEO, readKind: READ_KINDS.SUBTITLE, subtitle: segs }, { maxChars: 360 });
   assert.match(text, /已经读过字幕/);
-  assert.match(text, /分享文案：由系统附在消息最后/);
+  assert.match(text, /分享文案：由系统附上/);
   assert.match(text, /外部内容边界/);
   assert.match(text, /不是你觉得她想看/);
 });
@@ -186,7 +186,7 @@ test("默认上下文预算下，硬约束一条都不丢", () => {
   const text = packMaterials({ video: VIDEO, readKind: READ_KINDS.SUBTITLE, subtitle: segs });
   assert.ok(text.length <= 2400, `实际 ${text.length}`);
   assert.match(text, /已经读过字幕/);
-  assert.match(text, /分享文案：由系统附在消息最后/);
+  assert.match(text, /分享文案：由系统附上/);
   assert.match(text, /不设固定句型/);
 });
 
@@ -205,7 +205,9 @@ test("只有弹幕时如实说不知道视频讲了什么", () => {
   });
   assert.match(text, /没读过字幕/);
   assert.match(text, /并不知道/);
-  assert.match(text, /就说没看过/);
+  // 2026-10-21：不知道得保留，但不能变成主动报备；只在被追问时带过。
+  assert.match(text, /她真追问/);
+  assert.doesNotMatch(text, /就说没看过/);
 });
 
 test("三档互不混淆：subtitle 档不能说没看过", () => {
@@ -261,5 +263,5 @@ test("用户背景只作背景，不进成理由", () => {
 test("材料里不再塞裸链接，改由系统附分享文案", () => {
   const text = packMaterials({ video: VIDEO, readKind: READ_KINDS.TITLE_ONLY });
   assert.equal(/https:\/\/www\.bilibili\.com\/video\//.test(text), false, "模型看到链接就会照抄成一条裸链接");
-  assert.match(text, /分享文案：由系统附在消息最后/);
+  assert.match(text, /分享文案：由系统附上/);
 });

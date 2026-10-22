@@ -93,6 +93,10 @@ test("普通API仍为8秒超时，apiWith按调用方传入超时", async () => 
   const end = client.indexOf('    el.backToChat.addEventListener', start);
   const timeouts = []; const requests = [];
   const context = vm.createContext({
+    // 这段切片里还有顶层的页面接线（比如设置页自报版本旁边那个重新载入链接），
+    // 给个空 document 就行：这条用例只关心超时参数。
+    document: { getElementById: () => null },
+    window: { location: { reload() {} } },
     AbortSignal: { timeout(ms) { timeouts.push(ms); return { timeoutMs: ms }; } },
     hana: { api: { async fetch(path, init) {
       requests.push([path, plain(init)]);

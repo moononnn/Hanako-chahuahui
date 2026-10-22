@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   addVideoCandidate,
   applyVideoFeedback,
+  arrangeShareBubbles,
   hasVideoShareLink,
   makeVideoCandidate,
   matchVideoStop,
@@ -65,9 +66,16 @@ test("candidate only accepts usable subtitle materials and stores the packed con
   assert.deepEqual(item.cognition.sourceIds, []);
   assert.equal(item.expiresAt, new Date(now.getTime() + 7 * 86400000).toISOString());
 
-  assert.equal(candidate(now, { ...MATERIALS, readKind: "danmaku" }), null);
+  // 2026-10-20：以前字幕不可信就整条作废，于是 10-20 那天三条候选全灭、一整天没出货。
+  // 现在退一档也收：弹幕档是“真看过弹幕”，只是上下文里必须写明没读字幕。
+  const danmakuOnly = candidate(now, { ...MATERIALS, readKind: "danmaku" });
+  assert.ok(danmakuOnly, "字幕不可信时不该整条作废");
+  assert.equal(danmakuOnly.readKind, "danmaku");
+  assert.match(danmakuOnly.context, /你没读过字幕/);
+  assert.equal(danmakuOnly.context.includes("你已经读过字幕"), false);
   assert.equal(candidate(now, { ...MATERIALS, subtitle: [] }), null);
   assert.equal(candidate(now, { ...MATERIALS, subtitle: [{ content: "  " }] }), null);
+  assert.equal(candidate(now, { ...MATERIALS, readKind: "title-only" }), null, "只标题等于什么都没读，仍不收");
   for (const bad of [
     { ...VIDEO, bvid: "not-a-bvid" }, { ...VIDEO, cid: 0 }, { ...VIDEO, page: 0 },
     { ...VIDEO, duration: 0 }, { ...VIDEO, link: "http://www.bilibili.com/video/BV1n7JU69EQA" },
@@ -237,6 +245,27 @@ test("global quota is independent and stop matching requires an explicit global 
     "别再给我发这种视频", "以后不要再分享恐怖视频", "气死我了", "烦死了这些视频",
     "这个视频不好看", "我现在很烦",
   ]) assert.equal(matchVideoStop(value), false, value);
+});
+
+test("分享卡片有时在前有时在后，模型自己写的长链接不重复", () => {
+  // 2026-10-22：以前固定「先两句理解，再挂链接」，看久了像模板。
+  const video = {
+    link: "https://www.bilibili.com/video/BV1n7JU69EQA",
+    shareLink: "https://b23.tv/BV1n7JU69EQA",
+    shareText: "【实木菜板修复-哔哩哔哩】 https://b23.tv/BV1n7JU69EQA",
+  };
+  const bubbles = ["这菜板修得我服", "看这个 https://www.bilibili.com/video/BV1n7JU69EQA"];
+  assert.deepEqual(arrangeShareBubbles(bubbles, video, { linkFirst: false }),
+    ["这菜板修得我服", "看这个", video.shareText], "内容先、链接后");
+  assert.deepEqual(arrangeShareBubbles(bubbles, video, { linkFirst: true }),
+    [video.shareText, "这菜板修得我服", "看这个"], "卡片先、内容后");
+  // 两种顺序下正文都还认得出这条分享
+  for (const linkFirst of [false, true]) {
+    const merged = arrangeShareBubbles(bubbles, video, { linkFirst });
+    assert.equal(hasVideoShareLink(merged.join("\n"), video), true);
+  }
+  // 模型本来就只写了一句时也不会截空
+  assert.deepEqual(arrangeShareBubbles(["卡片先来"], video, { linkFirst: true }), [video.shareText, "卡片先来"]);
 });
 
 test("分享文案照 B 站客户端的样：标题 + 官方短链", () => {
