@@ -7,6 +7,7 @@ import {
   askUtility,
   classifyModelFailure,
   generateReply,
+  normalizeToolCallId,
   withModelDeadline,
   parseNdjson,
   pickFromCatalog,
@@ -127,7 +128,9 @@ test("utility：主入口统一传诊断，仅延长后台任务，前台搜索�
   const start = source.indexOf("  const askCheap =");
   assert.ok(start >= 0);
   const diagnostics = () => {};
-  const ask = vm.runInNewContext(source.slice(start, source.indexOf("  /**", start)) + "\naskCheap;", {
+  const end = source.indexOf("\n  });", start);
+  assert.ok(end > start);
+  const ask = vm.runInNewContext(source.slice(start, end + "\n  });".length) + "\naskCheap;", {
     ctx: {}, askUtility: (_ctx, input) => input, diagnostics,
   });
   for (const timeoutMs of [10000, 20000]) {
@@ -138,7 +141,8 @@ test("utility：主入口统一传诊断，仅延长后台任务，前台搜索�
   }
   assert.equal((await ask("", "", 400)).timeoutMs, 120000);
   assert.match(source, /raw = await askCheap\(spec\.systemPrompt, spec\.userText, 420, \{ timeoutMs: 60_000 \}\)/);
-  assert.match(source, /rawPlan = await askCheap\(spec\.systemPrompt, spec\.userText, videoEnabled \? 1000 : 180, \{ timeoutMs: 60_000 \}\)/);
+  // 2026-10-20：探索问句那步从 180 抬到 800（180 被思考吃干净，整天取不到料），契约跟着改。
+  assert.match(source, /rawPlan = await askCheap\(spec\.systemPrompt, spec\.userText, 800, \{ timeoutMs: 60_000 \}\)/);
   assert.match(source, /ask: \(prompt, text\) => askCheap\(prompt, text, 180, \{ timeoutMs: 10_000 \}\)/);
 });
 
@@ -240,8 +244,8 @@ test("整份都是纯文本时仍然当正文（兼容某些 provider）", () =>
 });
 
 test("空输入不炸", () => {
-  assert.deepEqual(parseNdjson(""), { text: "", events: 0, errorMessage: null });
-  assert.deepEqual(parseNdjson(null), { text: "", events: 0, errorMessage: null });
+  assert.deepEqual(parseNdjson(""), { text: "", events: 0, errorMessage: null, toolCalls: [], assistantContent: null, stopReason: null });
+  assert.deepEqual(parseNdjson(null), { text: "", events: 0, errorMessage: null, toolCalls: [], assistantContent: null, stopReason: null });
 });
 
 test("选模型优先取 current，其次第一条", () => {
@@ -425,6 +429,107 @@ test("回复的 utility 兜底重复空正文仍失败，不返回空答案", as
   assert.equal(ctx.requests.length, 2);
 });
 
+test("signal：预先取消的 generateReply 不列目录、不发模型、不走 utility", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const ctx = fakeCtx(ndjson({ type: "text-delta", delta: "不该成功" }, { type: "done", stopReason: "stop" }));
+  let lists = 0;
+  ctx.models.list = async () => { lists++; return { models: [{ provider: "test", model: "test" }] }; };
+  await assert.rejects(generateReply(ctx, {
+    systemPrompt: "", messages: [], signal: controller.signal,
+  }), { name: "AbortError" });
+  assert.equal(lists, 0);
+  assert.deepEqual(ctx.seen, { stream: 0, utility: 0 });
+});
+
+test("signal：withModelDeadline 预取消不执行 run，也不 cancel 未发出的请求", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let runs = 0;
+  let cancels = 0;
+  await assert.rejects(withModelDeadline({ models: { cancel: async () => { cancels++; } } }, {
+    requestId: "pre-aborted", timeoutMs: 100, signal: controller.signal,
+    run: async () => { runs++; return "不该执行"; },
+  }), { name: "AbortError" });
+  assert.equal(runs, 0);
+  assert.equal(cancels, 0);
+});
+
+test("signal：读取流正文期间取消会 cancel 同一请求，丢弃晚到正文且不重试不兜底", async () => {
+  const controller = new AbortController();
+  const ctx = fakeCtx("");
+  const cancelled = [];
+  const diagnostics = [];
+  let requestId;
+  let bodyRead = false;
+  ctx.models.cancel = async (id) => { cancelled.push(id); };
+  ctx.models.stream = async (request) => {
+    ctx.seen.stream++;
+    requestId = request.requestId;
+    return { text: async () => {
+      queueMicrotask(() => controller.abort());
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      bodyRead = true;
+      return ndjson({ type: "text-delta", delta: "取消后才读完的正文" }, { type: "done", stopReason: "stop" });
+    } };
+  };
+  await assert.rejects(generateReply(ctx, {
+    systemPrompt: "", messages: [], signal: controller.signal, strictOutput: true,
+    modelRef: { provider: "test", model: "test" }, catalog: [], retryDelaysMs: [0, 0],
+    diagnostics: (row) => diagnostics.push(row),
+  }), { name: "AbortError" });
+  assert.equal(bodyRead, false, "取消不应继续等待正文读完");
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(bodyRead, true, "假流确实在取消后返回了完整正文");
+  assert.deepEqual(cancelled, [requestId]);
+  assert.deepEqual(ctx.seen, { stream: 1, utility: 0 });
+  assert.equal(diagnostics.some((row) => ["models.stream.ok", "models.stream.retry"].includes(row.event)), false);
+});
+
+test("signal：deadline 取消不等待挂起的 cancel，并清理 abort 监听", async () => {
+  const controller = new AbortController();
+  const { signal } = controller;
+  let listeners = 0;
+  const add = signal.addEventListener.bind(signal);
+  const remove = signal.removeEventListener.bind(signal);
+  signal.addEventListener = (...args) => { if (args[0] === "abort") listeners++; return add(...args); };
+  signal.removeEventListener = (...args) => { if (args[0] === "abort") listeners--; return remove(...args); };
+  const cancelled = [];
+  const reason = new Error("宿主服务取消");
+  const result = withModelDeadline({ models: { cancel: async (id) => {
+    cancelled.push(id);
+    return new Promise(() => {});
+  } } }, {
+    requestId: "running-abort", timeoutMs: 100, signal,
+    run: async () => {
+      queueMicrotask(() => controller.abort(reason));
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return "晚到结果";
+    },
+  });
+  await assert.rejects(result, (error) => error === reason);
+  assert.deepEqual(cancelled, ["running-abort"]);
+  assert.equal(listeners, 0);
+});
+
+test("signal：正常完成会移除 abort 监听，之后取消不再 cancel 请求", async () => {
+  const controller = new AbortController();
+  const { signal } = controller;
+  let listeners = 0;
+  const add = signal.addEventListener.bind(signal);
+  const remove = signal.removeEventListener.bind(signal);
+  signal.addEventListener = (...args) => { if (args[0] === "abort") listeners++; return add(...args); };
+  signal.removeEventListener = (...args) => { if (args[0] === "abort") listeners--; return remove(...args); };
+  let cancels = 0;
+  assert.equal(await withModelDeadline({ models: { cancel: async () => { cancels++; } } }, {
+    requestId: "normal-signal", timeoutMs: 100, signal, run: async () => "完整正文",
+  }), "完整正文");
+  assert.equal(listeners, 0);
+  controller.abort();
+  await Promise.resolve();
+  assert.equal(cancels, 0);
+});
+
 test("陪读提醒严格路径：空正文不换utility、不重试", async () => {
   const ctx = fakeCtx("");
   await assert.rejects(generateReply(ctx, {
@@ -434,6 +539,88 @@ test("陪读提醒严格路径：空正文不换utility、不重试", async () =
   }), { code: "MODEL_UNAVAILABLE" });
   assert.equal(ctx.seen.stream, 1);
   assert.equal(ctx.seen.utility, 0);
+});
+
+test("strictOutput：带 error 的非空半截输出失败，即使随后有 done", async () => {
+  for (const error of [
+    { code: "APP_MODEL_PROVIDER_ERROR", message: "provider interrupted" },
+    { code: "X", message: "普通错误" },
+    { code: "X", message: "" },
+  ]) {
+    const ctx = fakeCtx(ndjson(
+      { type: "text-delta", delta: '{"memory":"半截' },
+      { type: "error", ...error },
+      { type: "done", stopReason: "stop" },
+    ));
+    await assert.rejects(generateReply(ctx, {
+      systemPrompt: "", messages: [], strictOutput: true,
+      retryDelaysMs: [], allowUtilityFallback: false,
+      modelRef: { provider: "test", model: "test" }, catalog: [],
+    }), { code: "MODEL_UNAVAILABLE" });
+    assert.equal(ctx.seen.stream, 1);
+    assert.equal(ctx.seen.utility, 0);
+  }
+});
+
+test("strictOutput：缺少正常完成标志的非空流失败", async () => {
+  for (const raw of [
+    ndjson({ type: "text-delta", delta: "半截正文" }),
+    "兼容纯文本也没有完成标志",
+    ...[undefined, "length", "toolUse", "deferred"].map((stopReason) => ndjson(
+      { type: "text-delta", delta: "非正常完成正文" },
+      { type: "done", stopReason },
+    )),
+  ]) {
+    const ctx = fakeCtx(raw);
+    await assert.rejects(generateReply(ctx, {
+      systemPrompt: "", messages: [], strictOutput: true,
+      retryDelaysMs: [], allowUtilityFallback: false,
+      modelRef: { provider: "test", model: "test" }, catalog: [],
+    }), { code: "MODEL_UNAVAILABLE" });
+    assert.equal(ctx.seen.stream, 1);
+    assert.equal(ctx.seen.utility, 0);
+  }
+});
+
+test("strictOutput：正常 stop 正文成功，支持 done assistant 回填并丢弃思考", async () => {
+  for (const raw of [
+    ndjson(
+      { type: "reasoning-delta", delta: "内部思考" },
+      { type: "text-delta", delta: "  完整正文  " },
+      { type: "done", stopReason: "stop", assistant: { role: "assistant", content: [] } },
+    ),
+    ndjson({ type: "done", stopReason: "stop", assistant: { role: "assistant", content: [{ type: "text", text: "完整正文" }] } }),
+  ]) {
+    const ctx = fakeCtx(raw);
+    const out = await generateReply(ctx, {
+      systemPrompt: "", messages: [], strictOutput: true,
+      retryDelaysMs: [], allowUtilityFallback: false,
+      modelRef: { provider: "test", model: "test" }, catalog: [],
+    });
+    assert.equal(out.text, "完整正文");
+    assert.equal(out.via, "stream:test/test");
+    assert.equal(ctx.seen.stream, 1);
+    assert.equal(ctx.seen.utility, 0);
+  }
+});
+
+test("strictOutput 默认关闭：普通聊天仍接受错误前正文和无 done 正文", async () => {
+  for (const strictOutput of [undefined, false]) {
+    for (const raw of [
+      ndjson({ type: "text-delta", delta: "保留正文" }, { type: "error", code: "APP_MODEL_PROVIDER_ERROR", message: "中断" }),
+      ndjson({ type: "text-delta", delta: "保留正文" }),
+      "保留正文",
+    ]) {
+      const ctx = fakeCtx(raw);
+      const out = await generateReply(ctx, {
+        systemPrompt: "", messages: [], ...(strictOutput === undefined ? {} : { strictOutput }),
+        modelRef: { provider: "test", model: "test" }, catalog: [],
+      });
+      assert.equal(out.text, "保留正文");
+      assert.equal(ctx.seen.stream, 1);
+      assert.equal(ctx.seen.utility, 0);
+    }
+  }
 });
 
 test("正常回包不碰 utility", async () => {
@@ -519,4 +706,170 @@ test("定模型：指定那个不在目录里（换掉了、删了）就往下�
 
 test("定模型：目录拉不到就先给 null，让上层走老路", () => {
   assert.equal(resolveModelChoice(null, { globalRef: { provider: "p", model: "m" } }), null);
+});
+
+// ── 工具回合（2026-10-21）：伙伴自己发起搜索，结果回喂后才开口 ──
+
+function toolCtx(turns, { onStream } = {}) {
+  const requests = [];
+  let turn = 0;
+  return {
+    requests,
+    models: {
+      list: async () => ({ models: [{ provider: "p", model: "m", isCurrent: true }] }),
+      cancel: async () => {},
+      utility: async () => { throw new Error("这条不该退到 utility"); },
+      stream: async (request) => {
+        requests.push(request);
+        onStream?.(request, turn);
+        const body = turns[Math.min(turn, turns.length - 1)];
+        turn += 1;
+        if (typeof body === "function") return body(request);
+        return { text: async () => body };
+      },
+    },
+  };
+}
+
+const TOOL_DECL = [{ name: "web_search", description: "搜", parameters: { type: "object", properties: { query: { type: "string" } } } }];
+
+test("工具回合：模型自己发起搜索，工具结果回喂之后才给正文", async () => {
+  const ctx = toolCtx([
+    ndjson(
+      { type: "tool-call", requestId: "r", id: "call_1", name: "web_search", arguments: { query: "PCL 我的世界 下载 争议" } },
+      { type: "done", requestId: "r", stopReason: "toolUse", assistant: { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "web_search", arguments: { query: "PCL 我的世界 下载 争议" } }] } },
+    ),
+    ndjson(
+      { type: "text-delta", requestId: "r", delta: "查到了，PCL 那边确实停了下载。" },
+      { type: "done", requestId: "r", stopReason: "stop", assistant: { role: "assistant", content: [] } },
+    ),
+  ]);
+  const calls = [];
+  const result = await generateReply(ctx, {
+    systemPrompt: "你是伙伴",
+    messages: [{ role: "user", content: "你去找找" }],
+    diagnostics: () => {},
+    modelRef: { provider: "p", model: "m" },
+    tools: TOOL_DECL,
+    executeTool: async (call) => {
+      calls.push(call);
+      return { isError: false, text: "【搜索结果】· PCL 停止下载" };
+    },
+  });
+  assert.equal(result.text, "查到了，PCL 那边确实停了下载。");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].name, "web_search");
+  assert.equal(calls[0].arguments.query, "PCL 我的世界 下载 争议");
+  assert.equal(ctx.requests.length, 2, "工具回合一共两轮模型请求");
+  assert.equal(ctx.requests[0].tools.length, 1, "第一轮带工具声明");
+  const second = ctx.requests[1].messages;
+  const toolResult = second[second.length - 1];
+  assert.equal(toolResult.role, "toolResult");
+  assert.equal(toolResult.toolCallId, "call_1");
+  assert.equal(toolResult.toolName, "web_search");
+  assert.equal(toolResult.isError, false);
+  assert.match(toolResult.content[0].text, /PCL 停止下载/);
+  const assistantTurn = second[second.length - 2];
+  assert.equal(assistantTurn.role, "assistant");
+  assert.equal(assistantTurn.content[0].type, "toolCall");
+});
+
+test("工具回合：搜索次数有上限，超了就停手并如实说", async () => {
+  const callBody = () => ({ text: async () => ndjson(
+    { type: "tool-call", requestId: "r", id: "call_x", name: "web_search", arguments: { query: "热搜" } },
+    { type: "done", requestId: "r", stopReason: "toolUse", assistant: { role: "assistant", content: [] } },
+  ) });
+  const ctx = toolCtx([callBody]);
+  const calls = [];
+  const result = await generateReply(ctx, {
+    systemPrompt: "你是伙伴",
+    messages: [{ role: "user", content: "你查查" }],
+    diagnostics: () => {},
+    modelRef: { provider: "p", model: "m" },
+    tools: TOOL_DECL,
+    executeTool: async (call) => {
+      calls.push(call);
+      return { isError: false, text: "【搜索结果】· 某条消息" };
+    },
+    maxToolCalls: 2,
+    maxToolRounds: 2,
+  });
+  assert.equal(calls.length, 2, "一轮最多两次搜索");
+  const last = ctx.requests[ctx.requests.length - 1];
+  assert.equal(last.tools, undefined, "最后一轮不给工具：逼出一句人话");
+});
+
+test("工具回合：模型不接工具声明时，退回不带工具的普通回复", async () => {
+  let turn = 0;
+  const ctx = toolCtx([
+    () => { throw new Error("tools are not supported by this provider"); },
+    ndjson(
+      { type: "text-delta", requestId: "r", delta: "那我只能按我手头说的讲。" },
+      { type: "done", requestId: "r", stopReason: "stop", assistant: { role: "assistant", content: [] } },
+    ),
+  ]);
+  const seen = [];
+  const result = await generateReply(ctx, {
+    systemPrompt: "你是伙伴",
+    messages: [{ role: "user", content: "你查查" }],
+    diagnostics: (row) => seen.push(row),
+    modelRef: { provider: "p", model: "m" },
+    tools: TOOL_DECL,
+    executeTool: async () => ({ isError: false, text: "不该被执行" }),
+  });
+  assert.equal(result.text, "那我只能按我手头说的讲。");
+  assert.ok(seen.some((row) => row.event === "models.tools.unsupported"));
+});
+
+test("工具回合：没有工具时就是普通回复，不多花一次往返", async () => {  const ctx = toolCtx([
+    ndjson(
+      { type: "text-delta", requestId: "r", delta: "在呢" },
+      { type: "done", requestId: "r", stopReason: "stop", assistant: { role: "assistant", content: [] } },
+    ),
+  ]);
+  const result = await generateReply(ctx, {
+    systemPrompt: "你是伙伴",
+    messages: [{ role: "user", content: "在吗" }],
+    diagnostics: () => {},
+    modelRef: { provider: "p", model: "m" },
+  });
+  assert.equal(result.text, "在呢");
+  assert.equal(ctx.requests.length, 1);
+  assert.equal(ctx.requests[0].tools, undefined);
+});
+
+test("工具 id 规整：不合法的 id 换成能用的标识符", () => {
+  // 2026-10-21 实机踩过：原样回放 provider 给的 id 会被宿主拒（APP_MODEL_INVALID_REQUEST）。
+  assert.equal(normalizeToolCallId("call_abc123"), "call_abc123", "本来就合法的别动");
+  assert.equal(normalizeToolCallId(""), "call_1", "空串也要有个能用的");
+  assert.equal(normalizeToolCallId("call.abc/123"), "callabc123", "非法字符去掉");
+  assert.equal(normalizeToolCallId("工具一"), "call_1", "中文 id 换成一个能用的");
+  assert.equal(normalizeToolCallId(null, 3), "call_4");
+});
+
+test("工具回合：回喂时 assistant 与 toolResult 用同一个合法 id", async () => {
+  const ctx = toolCtx([
+    ndjson(
+      { type: "tool-call", requestId: "r", id: "call.有斜杠/和点", name: "web_search", arguments: { query: "热搜" } },
+      { type: "done", requestId: "r", stopReason: "toolUse", assistant: { role: "assistant", content: [{ type: "toolCall", id: "call.有斜杠/和点", name: "web_search", arguments: { query: "热搜" } }] } },
+    ),
+    ndjson(
+      { type: "text-delta", requestId: "r", delta: "查到了，趁着热。" },
+      { type: "done", requestId: "r", stopReason: "stop", assistant: { role: "assistant", content: [] } },
+    ),
+  ]);
+  const result = await generateReply(ctx, {
+    systemPrompt: "你是伙伴",
+    messages: [{ role: "user", content: "你去查查" }],
+    diagnostics: () => {},
+    modelRef: { provider: "p", model: "m" },
+    tools: TOOL_DECL,
+    executeTool: async () => ({ isError: false, text: "【搜索结果】· 某条消息" }),
+  });
+  assert.equal(result.text, "查到了，趁着热。");
+  const second = ctx.requests[1].messages;
+  const assistantTurn = second[second.length - 2];
+  const toolResult = second[second.length - 1];
+  assert.match(assistantTurn.content[0].id, /^[A-Za-z0-9_-]{1,128}$/, "回放的 toolCall id 必须是合法标识符");
+  assert.equal(toolResult.toolCallId, assistantTurn.content[0].id, "两边必须是同一个 id");
 });
