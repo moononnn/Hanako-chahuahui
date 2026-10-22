@@ -457,7 +457,61 @@ test("行为：有真凭据的共同经历能发出去，凭据直接进到生�
   const sent = lastProactive(store.getThread(AGENT).messages);
   assert.ok(sent, "凭据齐的时候能发出去");
   assert.equal(sent.proactiveContext.reason.kind, "shared");
-  const generation = calls.find((row) => !row.clarity);
-  assert.match(generation.prompt, /刚顺手改了个配色/, "电脑那边的原文进了生成，没被改写成别的");
+  // 2026-10-20：后台还会顺手养护一次世界领域（同一路 utility 通道），
+  // 所以不能按“第一条非核查调用”取生成，按凭据原文认那一条。
+  const generation = calls.find((row) => !row.clarity && /刚顺手改了个配色/.test(row.prompt));
+  assert.ok(generation, "凭据直接进到生成里");
   assert.equal(diskState(app).topicSeeds.seeds[0].usedAt, null, "这一轮也不消耗兴趣种子");
+});
+
+test("行为：观察式今天已经用满，新闻照样轮得到", { skip: SKIP_DEV }, async (t) => {
+  // 世界领域和新闻池得在装载前写：应用开机时把账本读进内存，
+  // 开机后再用另一个 store 实例改盘不会同步过去（这一点在数据层测试里也踩过）。
+  const app = await bootChahuahui({
+    seed: (store) => {
+      seedWorld(store);
+      const nowIso = new Date().toISOString();
+      store.saveKnowing(AGENT, {
+        ...store.getKnowing(AGENT),
+        worldInterests: [
+          { id: "wi_shuma", name: "数码更新", domains: ["新手机 评测"], createdAt: nowIso },
+          { id: "wi_yule", name: "娱乐圈吃瓜", domains: ["内娱 热搜"], createdAt: nowIso },
+        ],
+      });
+      // 新闻池里有一条现成的，且刚到过货：这一轮不会再出去搜。
+      store.setProactiveState(AGENT, {
+        ...store.getProactiveState(AGENT),
+        newsBook: {
+          lastFetchAt: nowIso,
+          lastDomainId: "wi_shuma",
+          items: [{
+            id: "news_test_1", domainId: "wi_shuma", domainName: "数码更新",
+            title: "某家手机把耳机孔又塞回来了", snippet: "新款把 3.5mm 接口装回去了，评论区在吵。",
+            createdAt: nowIso, expiresAt: new Date(Date.now() + 3 * 24 * HOUR).toISOString(),
+          }],
+          history: [],
+        },
+      });
+    },
+  });
+  cleanupOn(t, app);
+  const store = app.store;
+  const nowIso = new Date().toISOString();
+
+  store.appendMessage(AGENT, { role: "user", text: "你那个台灯还亮着吗", readAt: nowIso, at: nowIso });
+  // 今天已经发过一条带种子的观察式：剩下的一天里观察这类就不能再占位。
+  store.appendMessage(AGENT, {
+    role: "assistant", text: "我总觉得那盏灯搁窗台才顺眼", proactive: true,
+    seedId: "seed_test_1", at: nowIso,
+  });
+
+  const calls = stubUtility(app, "刚看到某家手机把耳机孔塞回来了，评论区已经在怀旧");
+  const next = store.getKnowing(AGENT);
+  const rnd = rndForKind(next.relationship, next.personality, "interest", { interestAvailable: true, hasContext: false });
+  await withRandom(rnd, () => app.request("POST", "/proactive/tick", { json: {} }));
+
+  const sent = lastProactive(store.getThread(AGENT).messages);
+  assert.ok(sent, "观察式名额用满并不影响这一条发出去");
+  assert.equal(sent.newsId, "news_test_1", "这一条带的是新闻，不是第二条观察式");
+  assert.ok(calls.some((row) => !row.clarity), "真的调了一次生成");
 });

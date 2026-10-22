@@ -55,6 +55,30 @@ function seedWorld(store, { base = new Date(), video = false } = {}) {
   const knowing = store.getKnowing(AGENT);
   store.saveKnowing(AGENT, {
     ...knowing,
+    // 世界领域已经长出来了（2026-10-20）：测试里的伙伴不该在 tick 里再去生成一批，
+    // 否则多出来的那次后台调用会打乱这些用例对模型调用次数的计数。
+    worldInterests: [
+      {
+        id: "wi_手作与旧物",
+        name: "手作与旧物",
+        domains: ["旧物修复与手作"],
+        sources: ["B站"],
+        note: "",
+        muted: false,
+        createdAt: clockAt(0),
+        updatedAt: clockAt(0),
+      },
+      {
+        id: "wi_数码更新",
+        name: "数码更新",
+        domains: ["数码与模型更新"],
+        sources: ["科技媒体"],
+        note: "",
+        muted: false,
+        createdAt: clockAt(0),
+        updatedAt: clockAt(0),
+      },
+    ],
     relationship: {
       ...knowing.relationship,
       familiarity: { ...knowing.relationship.familiarity, turns: 120, activeDays: 50 },
@@ -67,6 +91,8 @@ function seedWorld(store, { base = new Date(), video = false } = {}) {
     lastSentAt: clockAt(-0.2 * HOUR),
     interestLearning: { curiosity: { startedAt: clockAt(0), thresholdMs: 7 * 24 * HOUR } },
     topicSeeds: { lastGrowAt: clockAt(0), seeds: [] },
+    // 新闻刚取过料：这一轮不去搜，池子也是空的，省得用例里多出一次网络动作。
+    newsBook: { lastFetchAt: clockAt(0), lastDomainId: "", items: [], history: [] },
   });
   if (video) {
     store.saveVideoBook(AGENT, addVideoCandidate(store.getVideoBook(AGENT), makeVideoCandidate({

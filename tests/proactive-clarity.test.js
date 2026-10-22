@@ -95,8 +95,9 @@ test('拒绝种子持久化后不再被挑中，不伪记成已发送，不影�
 
 test('核查提示所有格式示例都能解析成合法JSON', () => {
   const examples = [...CLARITY_SYSTEM.matchAll(/\{[^\n{}]+\}/gu)].map(match => JSON.parse(match[0]));
-  assert.equal(examples.length, 4);
-  assert.deepEqual(examples.map(row => row.scope).filter(Boolean), ['message', 'seed', 'discovery']);
+  // 2026-10-20：新增 news 这一档（那条消息本身就不该端给她），示例从 4 个变 5 个。
+  assert.equal(examples.length, 5);
+  assert.deepEqual(examples.map(row => row.scope).filter(Boolean), ['message', 'seed', 'discovery', 'news']);
 });
 
 test('真实store集成：拒绝写运行账，重开后种子与探索均不再选，也不伪记已发送', async () => {
