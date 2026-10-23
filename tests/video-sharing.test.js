@@ -151,7 +151,9 @@ test("video cognition uses the longterm shape; recall includes complete boundari
   ].sort());
   assert.equal(cognitions[0].sourceIds[0], "share-1");
 
-  const recalled = selectVideoShares(book, "菜板修复");
+  // 时间显式传进去：默认 now 是真实当前时间，账本里那一条是 2026-10-16 的，
+  // 隔几天跑就滑出保留窗口了（2026-10-24 撞到：这组用例被真实时间拖垮）。
+  const recalled = selectVideoShares(book, "菜板修复", { now });
   assert.equal(recalled.length, 1);
   const text = videoRecallText(recalled);
   assert.match(text, /原链接：https:\/\/www\.bilibili\.com\/video\/BV1n7JU69EQA/u);
@@ -160,8 +162,8 @@ test("video cognition uses the longterm shape; recall includes complete boundari
   assert.match(text, /边缘开裂/u);
   assert.match(text, /当时实际发出/u);
   assert.ok(text.length <= 3000);
-  assert.deepEqual(selectVideoShares(book, "完全无关"), []);
-  assert.equal(selectVideoShares(book, "完全无关", { recentMessageIds: ["share-1"] }).length, 1);
+  assert.deepEqual(selectVideoShares(book, "完全无关", { now }), []);
+  assert.equal(selectVideoShares(book, "完全无关", { recentMessageIds: ["share-1"], now }).length, 1);
 
   const huge = { ...book.shares[0], context: "材料".repeat(2400) };
   assert.equal(videoRecallText([huge]), "");
@@ -359,7 +361,7 @@ test("回忆块按真实来源写：看过局部就写局部，不写没看画�
     addVideoCandidate({ pending: [], shares: [] }, item, now), item,
     { id: "share-visual", role: "assistant", text: `看这个 ${item.video.link}` }, now,
   );
-  const recalled = selectVideoShares(book, "菜板修复");
+  const recalled = selectVideoShares(book, "菜板修复", { now });
   assert.equal(recalled.length, 1);
   const text = videoRecallText(recalled);
   assert.match(text, /全片 4 个时间点/);

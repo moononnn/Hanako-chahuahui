@@ -668,3 +668,60 @@ test("晚安之后又被薅起来：基调是生气，不是又温柔地陪聊",
   assert.match(spec.userText, /又被她拉到电脑那头干活/);
   assert.doesNotMatch(spec.userText, /去睡了本身就是理由/, "这条不是入睡道别");
 });
+
+// ── 公共事件：节日与天气（2026-10-24）──
+
+test("节日祝福：说的是这个日子，不当追问，也不套四字贺词", () => {
+  const spec = proactiveSpec({
+    partnerName: "小花",
+    userName: "小林",
+    personaText: "我是小花。",
+    reason: { kind: "festival", contextText: "" },
+  });
+  assert.match(spec.userText, /这次联系的由头是今天这个节日/);
+  assert.match(spec.userText, /按你自己的性格说/);
+  assert.match(spec.userText, /不问她怎么过、和谁过/);
+  assert.match(spec.userText, /不说“大家都在”/);
+  // 不跑关系式由头那套通用尾巴：节日不该去追问。
+  assert.doesNotMatch(spec.userText, /可以自然提一个轻问题/);
+  assert.doesNotMatch(spec.userText, /这次可用的依据/);
+});
+
+test("节日祝福：不会因为赶上清晨第一条就被降级成「可选背景」", () => {
+  const spec = proactiveSpec({
+    partnerName: "小花",
+    userName: "小林",
+    personaText: "我是小花。",
+    morningFirst: true,
+    reason: { kind: "festival", contextText: "" },
+  });
+  assert.match(spec.userText, /这次联系的由头是今天这个节日/);
+  assert.doesNotMatch(spec.userText, /这次可选的共同背景/);
+});
+
+test("天气提醒：带着真实事实去说，不说成客服腔，也不念预报", () => {
+  const spec = proactiveSpec({
+    partnerName: "小花",
+    userName: "小林",
+    personaText: "我是小花。",
+    reason: { kind: "weather", contextText: "今天下午会到 18°C，比现在高 9°C" },
+  });
+  assert.match(spec.userText, /今天下午会到 18°C，比现在高 9°C/);
+  assert.match(spec.userText, /这次联系的由头就是这件事/);
+  assert.match(spec.userText, /不写“请注意添衣保暖”“出行请带伞”这种客服腔/);
+  assert.match(spec.userText, /只说这一件，不把别的天气一起倒出来/);
+  assert.doesNotMatch(spec.userText, /可以自然提一个轻问题/);
+});
+
+test("公共事件占住这一轮时，兴趣素材和种子都让位", () => {
+  const seed = { motifId: "walk", motifName: "走路歇脚", hook: "偏给每一小段都留个能坐的地方", kind: "motif" };
+  const spec = proactiveSpec({
+    partnerName: "小花",
+    userName: "小林",
+    personaText: "我是小花。",
+    seed,
+    reason: { kind: "weather", contextText: "明天上午降水概率 70%" },
+  });
+  assert.match(spec.userText, /明天上午降水概率 70%/);
+  assert.doesNotMatch(spec.userText, /这次你自己惦记着的那一面/);
+});

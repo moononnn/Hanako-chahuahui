@@ -375,6 +375,18 @@ import {
   pickReason,
 } from "./lib/proactive-reasons.js";
 import {
+  claimWeatherOwner,
+  dayOf as publicEventDayOf,
+  festivalOf,
+  intimacyWeight,
+  noteFestivalSent,
+  noteWeatherSent,
+  pickWeatherEvent,
+  readPublicAlerts,
+  shouldSendFestival,
+  weatherPendingFor,
+} from "./lib/public-events.js";
+import {
   correctionsFor,
   noteReview,
   noteTone,
@@ -891,6 +903,8 @@ export function apply(ctx) {
     "model", "recognitionModel", "vision", "userNameOverride", "daybookEnabled", "workfeedEnabled",
     "globalGate", "quiet", "actionStyle", "messageAvatars", "messageRefine", "typingIndicator", "myActionTail",
     "rhythmEnabled", "rhythmStyleEnabled", "rhythmProactiveEnabled", "rhythmResetAt", "voiceEnabled", "voiceDelivery", "voiceProfiles", "voiceProfile", "videoShareMaxPerDay",
+    // 公共事件（2026-10-24）：节目祝福与天气提醒各自一个开关，总闸关了两个都不发。
+    "publicEventsEnabled", "festivalGreetingEnabled", "weatherAlertEnabled",
   ]);
   const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "vision", "voice", "partnerFeedEnabled", "videoSharingEnabled"]);
 
@@ -2459,7 +2473,7 @@ export function apply(ctx) {
   }
 
   /** 把一条主动消息送进她那个窗（她不在也照发，显示未读）。 */
-  async function deliverProactive(agentId, { partnerName, topic, hobby, discovery, seed, video = null, news = null, videoLoginNotice = null, reason = null, reasonCandidates = [], exception, followup, wakeEcho, sceneEcho, kind = "proactive", activity = null, sleepStart = "", greetingOnly = false, morningFirst = false, todoNudge = "" }) {
+  async function deliverProactive(agentId, { partnerName, topic, hobby, discovery, seed, video = null, news = null, videoLoginNotice = null, reason = null, reasonCandidates = [], exception, followup, wakeEcho, sceneEcho, kind = "proactive", activity = null, sleepStart = "", greetingOnly = false, morningFirst = false, todoNudge = "", publicEvent = null }) {
     const videoStamp = video || videoLoginNotice ? threadStamp(agentId) : null;
     await loadUserName();
     const memoryQuery = [reason?.kind === "interest" ? topic : "", reason?.text, hobby?.name, discovery?.text, seed?.title, video?.video?.title, news?.title, followup?.text, sceneEcho?.text]
@@ -2593,7 +2607,11 @@ export function apply(ctx) {
     // 「已经介绍过什么」只认这位伙伴实际送出去的正文：后台的种子和探索不算，那只是备料，她还没听过。
     const introducedText = introducedTextFrom(threadRows);
     // 关系式由头的凭据到这一步才拼得全：同一位伙伴的近况正文，以及已经说过、别重复的话。
-    const reasonResolved = enrichReasonContext(reasonAllowed ? reason : null, { sceneEcho, workfeedText, sentTexts: recentAsks });
+    // 公共事件不跑这一步（2026-10-24）：它手上的事实是拾光记摊的天气事件或节日名，
+    // 不是“你们最近聊过什么”，让 enrichReasonContext 重拼一遍会把事实直接换掉。
+    const reasonResolved = publicEvent
+      ? { reason: publicEvent.reason, dropped: false }
+      : enrichReasonContext(reasonAllowed ? reason : null, { sceneEcho, workfeedText, sentTexts: recentAsks });
     if (reasonResolved.dropped) {
       // 候选时说有凭据，到出站那一步却拿不出来（电脑那边的动静刚好没了、或只剩去重段）。
       // 这不是时机不合适，暂存的意图得留着：不标 preserveIntent，通用失败分支会把「想找你」丢掉。
@@ -3382,6 +3400,61 @@ export function apply(ctx) {
     return { agentId, key, text: todoNudgeText(todos, { userName: USER_NAME }) };
   }
 
+  /**
+   * 公共事件（2026-10-24 玥儿定）：节日与天气这种「今天确实发生的事」，比普通由头更该开口。
+   *
+   *   节日：开了主动消息的伙伴各自说一句，一人一条。人情味来自差异，不来自统一口径。
+   *   天气：一件事只归一位。按亲密度加权抽，抽完当天定死，别人一概不提。
+   *
+   * 两种都不占每日额度，但都照旧睡着不说、照旧卡相邻间隔。
+   * 拾光记没装、快照读不到、开关关了，都当今天没这回事，聊天照常。
+   *
+   * @returns {{kind:string, reason:object, festival?:string, event?:object, day:string}|null}
+   */
+  async function resolvePublicEventFor(agentId, { now = new Date(), partners = [], blocked = false } = {}) {
+    if (blocked || !agentId) return null;
+    const globalSettings = store.getGlobalSettings();
+    if (globalSettings.publicEventsEnabled === false) return null;
+    const day = publicEventDayOf(now);
+    if (!day) return null;
+
+    // 节日：一天一人一条，谁说过谁就不再提。
+    if (globalSettings.festivalGreetingEnabled !== false && daybookOn()) {
+      try {
+        const snapshot = await readDaybook(ctx);
+        const festival = festivalOf(snapshot);
+        if (festival && shouldSendFestival({ festival, day, agentId, state: store.getGlobalRuntime() })) {
+          diagnostics({ event: "public-event.festival", agentId, festival });
+          return { kind: "festival", festival, day, reason: { kind: "festival", contextText: "" } };
+        }
+      } catch (error) {
+        diagnostics({ event: "public-event.festival.failed", agentId, error: describeError(error) });
+      }
+    }
+
+    // 天气：抽一位负责人，抽到谁就是谁，别人这一轮不碰。
+    if (globalSettings.weatherAlertEnabled !== false) {
+      try {
+        const alerts = await readPublicAlerts(ctx);
+        const event = pickWeatherEvent(alerts, now);
+        if (!event) return null;
+        const weights = {};
+        for (const row of partners) {
+          weights[row.id] = intimacyWeight(effectiveRelationship(store.getKnowing(row.id)));
+        }
+        const before = store.getGlobalRuntime();
+        const claimed = claimWeatherOwner({ day, eventKey: event.key, partners, weights, state: before, now });
+        if (claimed.state !== before) store.setGlobalRuntime(claimed.state);
+        if (!weatherPendingFor({ day, eventKey: event.key, agentId, state: store.getGlobalRuntime() })) return null;
+        diagnostics({ event: "public-event.weather", agentId, key: event.key, owner: claimed.ownerId, reused: claimed.reused });
+        return { kind: "weather", event, day, reason: { kind: "weather", contextText: event.facts.join("；") } };
+      } catch (error) {
+        diagnostics({ event: "public-event.weather.failed", agentId, error: describeError(error) });
+      }
+    }
+    return null;
+  }
+
   let proactiveTickPromise = null;
   // __CHAHUAHUI_DEV_ONLY__
   // 内测：强制某一轮走「兴趣」由头，用来直接验证视频分享那条路。
@@ -3638,7 +3711,15 @@ export function apply(ctx) {
       });
       const farewellSend = Boolean(farewellPlan.due) && !followup?.read && shouldSendFarewell(state, farewellPlan.night);
       const contactPolicy = contactPolicyFor(agentId, now, "proactive");
+      // 公共事件（2026-10-24）：节日与天气这种今天确实发生的事，优先于普通由头。
+      // 这一轮已经带着到点待办、等回音、睡前收尾、新闻视频时就不插队。
+      let publicEvent = await resolvePublicEventFor(agentId, {
+        now,
+        partners,
+        blocked: Boolean(todoHere || followup || farewellSend || candidateVideo || candidateNews),
+      });
       // 这轮是不是由到点待办托着：由的话，日上限和相邻间隔都不算在它头上（2026-10-09）。
+      // 节日祝福和天气提醒同理不占每日额度（2026-10-24），但相邻间隔照旧拦。
       const gate = gateCheck({
         now,
         // ta今天的睡觉窗口先算好再递进去：主睡加可能的午觉，而且每天时长还会浮动
@@ -3648,10 +3729,14 @@ export function apply(ctx) {
         globalState: store.getGlobalRuntime(),
         relationalPolicy: contactPolicy,
         todoReminder: todoHere,
+        freeOfQuota: Boolean(publicEvent),
       });
       const wakeEcho = gate.ok && !gate.exception && !followup?.read
         ? wakeEchoFor(thread.messages, { now: now.getTime(), consumedId: settings.wakeEcho?.sourceId ?? null })
         : null;
+      // 公共事件不搭夜间例外那班车（留言有自己一套说法），也不抢醒来回声的位置：
+      // 睡醒了、话说过去了，这一天剩下的时间照样还会再说。
+      if (publicEvent && (gate.exception || wakeEcho)) publicEvent = null;
       const sceneEcho = gate.ok && !gate.exception && !followup?.read && !wakeEcho
         ? recentSceneFor(thread.messages, { now: now.getTime() })
         : null;
@@ -3736,6 +3821,8 @@ export function apply(ctx) {
         && !followup
         && !gate.exception
         && !videoLoginNotice
+        // 公共事件已经把这一条占住了，不再另抽关系式由头（两条由头一起给反而互相削弱）。
+        && !publicEvent
         // 有新闻或视频就先把它们发出去（2026-10-21）：关系式由头一旦抽中，
         // 下面的“非兴趣不带兴趣素材”会把素材整条吞掉，结果就是搜回来的东西全白攒了。
         && !video
@@ -3746,6 +3833,9 @@ export function apply(ctx) {
           ? { reason: { kind: "interest" }, candidates: [], basis: null, temperament: null }
           :
         // __CHAHUAHUI_DEV_ONLY_END__
+        publicEvent
+          ? { reason: publicEvent.reason, candidates: [], basis: null, temperament: null }
+          :
         reasonEligible
           ? pickReason({
               relationship: effectiveRelationship(knowing),
@@ -3784,10 +3874,11 @@ export function apply(ctx) {
         && !news
         && !videoLoginNotice
         && !gate.exception
+        && !publicEvent
         && morningOpening({ tier: settings.tier, workActive: workActivity.active });
       // 纯招呼已经占住这一轮时就不叠关系式由头：两条由头一起给反而互相削弱。
       const reasonForSend = greetingOnly ? null : reason;
-      const form = todoHere || videoLoginNotice
+      const form = publicEvent || todoHere || videoLoginNotice
         ? "word"
         : wakeEcho || followup?.read || farewellSend
         ? "word"
@@ -3846,7 +3937,7 @@ export function apply(ctx) {
       const stamp = threadStamp(agentId);
       const sent = await withAutonomousLane(agentId, () => withGlobalAutonomousLane(async () => {
         if (hasReplyInFlight(agentId) || threadStamp(agentId) !== stamp) return { ok: false, reason: "reply-in-flight" };
-        const finalGate = autonomousGateNow(agentId, "proactive", { todoReminder: todoHere });
+        const finalGate = autonomousGateNow(agentId, "proactive", { todoReminder: todoHere, freeOfQuota: Boolean(publicEvent) });
         if (!finalGate.ok) return { ok: false, reason: finalGate.reason, gateBlocked: true };
         // 这一轮到底有没有把那段由头带出去：只有真带了才记「今天说过了」，
         // 否则被 farewell 或夜间例外占掉的那一轮会把待办默默标记为已说过，今天不再来。
@@ -3872,15 +3963,26 @@ export function apply(ctx) {
           greetingOnly,
           morningFirst,
           todoNudge: carriedTodo ? todoNudge.text : "",
+          publicEvent,
         });
         if (!delivered.ok) return delivered;
         const sentAt = new Date();
         const noted = noteSent(
           { state: { ...store.getProactiveState(agentId), staged: pending.rest }, globalState: store.getGlobalRuntime(), now: sentAt },
-          { exception: Boolean(finalGate.exception), quiet: store.getGlobalSettings().quiet, freeOfQuota: todoHere && carriedTodo },
+          { exception: Boolean(finalGate.exception), quiet: store.getGlobalSettings().quiet, freeOfQuota: (todoHere && carriedTodo) || Boolean(publicEvent) },
         );
         store.setProactiveState(agentId, noted.state);
         store.setGlobalRuntime(noted.globalState);
+        // 公共事件说出口才算数：节日一人一条、天气一件事一个人，都在这里落账。
+        if (publicEvent?.kind === "festival") {
+          store.setGlobalRuntime(noteFestivalSent(store.getGlobalRuntime(), {
+            festival: publicEvent.festival, day: publicEvent.day, agentId, at: sentAt,
+          }));
+        } else if (publicEvent?.kind === "weather") {
+          store.setGlobalRuntime(noteWeatherSent(store.getGlobalRuntime(), {
+            day: publicEvent.day, eventKey: publicEvent.event.key, agentId, at: sentAt,
+          }));
+        }
         return { ...delivered, sentAt, carriedTodo };
       }));
       if (!sent.ok) {
@@ -5679,7 +5781,7 @@ export function apply(ctx) {
     });
   }
 
-  function autonomousGateNow(agentId, kind = "proactive", { ignoreSleep = false, todoReminder = false } = {}) {
+  function autonomousGateNow(agentId, kind = "proactive", { ignoreSleep = false, todoReminder = false, freeOfQuota = false } = {}) {
     if (focusCompanion.active()) return { ok: false, reason: 'focus', now: new Date() };
     const now = new Date();
     const settings = store.getPartnerSettings(agentId);
@@ -5695,6 +5797,7 @@ export function apply(ctx) {
         relationalPolicy: contactPolicy,
         ignoreSleep,
         todoReminder,
+        freeOfQuota,
       }),
       contactPolicy,
       now,
