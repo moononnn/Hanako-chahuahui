@@ -64,6 +64,18 @@ test("超预算时按时间均匀取样，保住首尾", () => {
   assert.match(out.text, /句子499/);
 });
 
+test("长句子素材取样也盖满全片，不能只覆盖前半段", () => {
+  // 2026-10-23 实机踩到：420 段十几字的 AI 字幕，旧步长算出来的量远超预算，
+  // 被 slice 一剪，中间后半段整段消失，只剩开头一段加最后一句。
+  const segs = Array.from({ length: 420 }, (_, i) => ({ from: i * 4, content: `第${i}句 这里是拉片讲解的一个镜头细节说明` }));
+  const out = condenseSubtitle(segs, { maxChars: 1700 });
+  assert.ok(out.chars <= 1700);
+  assert.equal(out.sampled, true);
+  // 后半段必须有代表句，否则她问后头那个镜头时伙伴只能干瞪眼。
+  assert.match(out.text, /第3[0-9]0句/);
+  assert.match(out.text, /第41[0-9]句/);
+});
+
 test("空字幕返回空，不塞东西", () => {
   const out = condenseSubtitle([]);
   assert.equal(out.text, "");
@@ -264,4 +276,93 @@ test("材料里不再塞裸链接，改由系统附分享文案", () => {
   const text = packMaterials({ video: VIDEO, readKind: READ_KINDS.TITLE_ONLY });
   assert.equal(/https:\/\/www\.bilibili\.com\/video\//.test(text), false, "模型看到链接就会照抄成一条裸链接");
   assert.match(text, /分享文案：由系统附上/);
+});
+
+// ── 画面材料（2026-10-22）────────────────────────────────
+
+const VISUAL = {
+  status: "ok",
+  summary: "他先把木板夹上台面，用刨子从左往右推，木屑卷着落下来。",
+  model: { provider: "openai-codex-oauth", model: "gpt-5.6-luna" },
+  imageCount: 5,
+  coverSeen: true,
+  sampleTimes: [12, 12.5, 13, 13.5],
+  clip: { from: 12, to: 13.5 },
+  observedAt: "2026-10-22T15:00:00.000Z",
+};
+
+test("看过一小段画面时能讲画面，并写明局部、不补未覆盖、封面不当正片", () => {
+  const text = packMaterials({
+    video: VIDEO,
+    readKind: READ_KINDS.SUBTITLE,
+    subtitle: [{ from: 0, content: "这里讲的是乌檀木" }],
+    visual: VISUAL,
+  });
+  assert.match(text, /【画面记录】/);
+  assert.match(text, /木屑卷着落下来/);
+  assert.match(text, /全片 4 个时间点/);
+  assert.match(text, /局部连续画面（4 张）/);
+  assert.match(text, /没覆盖的地方不要补/);
+  assert.match(text, /没有声音/);
+  assert.match(text, /另有一张封面，只用来认出是哪条/);
+  // 原有的硬约束不能因为多了画面而被挤掉
+  assert.match(text, /外部内容边界/);
+  assert.match(text, /不是你觉得她想看/);
+  assert.match(text, /已经读过字幕/);
+  assert.ok(text.length <= 2400, `实际 ${text.length}`);
+});
+
+test("只有一张封面时不产出画面正文，也不许拿封面当正片", () => {
+  const text = packMaterials({
+    video: VIDEO,
+    readKind: READ_KINDS.TITLE_ONLY,
+    visual: { ...VISUAL, imageCount: 1, coverSeen: true, sampleTimes: [], clip: null },
+  });
+  assert.equal(/【画面记录】/.test(text), false, "封面不能当画面记录塞进正文");
+  assert.equal(/木屑/.test(text), false);
+  assert.match(text, /只有一张封面/);
+  assert.match(text, /只知道标题/);
+});
+
+test("画面档是换掉「没看过」那几句，不是叠加", () => {
+  const title = packMaterials({ video: VIDEO, readKind: READ_KINDS.TITLE_ONLY, visual: VISUAL });
+  assert.match(title, /没读过字幕，只看到一小段画面/);
+  assert.equal(/只知道标题/.test(title), false);
+  assert.equal(/不要讲这个视频里发生了什么/.test(title), false);
+
+  const danmaku = packMaterials({
+    video: VIDEO,
+    readKind: READ_KINDS.DANMAKU,
+    danmakuHot: [{ text: "笑死我了", count: 3 }],
+    visual: VISUAL,
+  });
+  assert.match(danmaku, /没读过字幕，但看过其中一小段画面/);
+  assert.equal(/并不知道/.test(danmaku), false);
+  assert.match(danmaku, /观众反复刷/);
+});
+
+test("只有稀疏单张时不许说局部连续", () => {
+  const sparse = {
+    ...VISUAL,
+    imageCount: 4,
+    coverSeen: true,
+    sampleTimes: [2, 45, 88],
+    clip: null,
+  };
+  const text = packMaterials({ video: VIDEO, readKind: READ_KINDS.TITLE_ONLY, visual: sparse });
+  assert.match(text, /没有连续片段/);
+  assert.equal(/局部连续/.test(text), false);
+  assert.match(text, /别推断中间怎么变/);
+});
+
+test("visual 形状不对就当没有，退回旧行为", () => {
+  const text = packMaterials({
+    video: VIDEO,
+    readKind: READ_KINDS.SUBTITLE,
+    subtitle: [{ from: 0, content: "内容" }],
+    visual: { ...VISUAL, summary: "  " },
+  });
+  assert.equal(/【画面记录】/.test(text), false);
+  assert.equal(/只有一张封面/.test(text), false);
+  assert.match(text, /已经读过字幕/);
 });

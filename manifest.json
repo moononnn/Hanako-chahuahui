@@ -10,6 +10,7 @@
   "capabilities": [
     "app/models.infer",
     "app/usage.read",
+    "app/process.spawn",
     "app/tools.expose-to-model",
     "app/agents.read",
     "app/resources.read",
@@ -27,6 +28,8 @@
       "passport.bilibili.com",
       "passport.biligame.com",
       "aisubtitle.hdslb.com",
+      "*.hdslb.com",
+      "*.bilivideo.com",
       "comment.bilibili.com",
       "www.bing.com",
       "api.tavily.com",
@@ -45,7 +48,7 @@
       "POST"
     ],
     "defaultTimeoutMs": 8000,
-    "maxResponseBytes": 2097152
+    "maxResponseBytes": 20971520
   },
   "contributes": {
     "cards": [

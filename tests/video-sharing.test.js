@@ -291,3 +291,95 @@ test("hasVideoShareLink 短链长链都认，脏文本不认", () => {
   assert.equal(hasVideoShareLink("只是聊聊天", item.video), false);
   assert.equal(hasVideoShareLink("", item.video), false);
 });
+
+// ── 画面材料（2026-10-22）───────────────────────────────
+
+const VISUAL = {
+  status: "ok",
+  summary: "他把夹具松开，边缘的旧胶被一点点刮下来。",
+  model: { provider: "openai-codex-oauth", model: "gpt-5.6-luna" },
+  imageCount: 5,
+  coverSeen: true,
+  sampleTimes: [2, 2.5, 3, 3.5],
+  clip: { from: 2, to: 3.5 },
+  observedAt: "2026-10-22T15:00:00.000Z",
+};
+
+test("真看过一小段画面就能成候选，哪怕一个字幕也没有", () => {
+  const item = candidate(now, { ...MATERIALS, readKind: "title-only", subtitle: [], visual: VISUAL });
+  assert.ok(item, "画面也是读到了东西，不该被字幕闸卡死");
+  assert.equal(item.readKind, "title-only");
+  assert.equal(item.visual.imageCount, 5);
+  assert.equal(item.visual.visibleFrames, 4);
+  assert.equal(item.visual.model.model, "gpt-5.6-luna");
+  assert.match(item.context, /【画面记录】/);
+  assert.match(item.context, /旧胶/);
+  assert.equal(/只知道标题/.test(item.context), false, "有画面时不能还说只知道标题");
+  assert.match(item.cognition.text, /全片 4 个时间点/);
+  assert.match(item.cognition.text, /局部连续画面（4 张）/);
+  assert.match(item.cognition.text, /未完整看过/);
+});
+
+test("单封面不得当视频内容成功", () => {
+  const coverOnly = { ...VISUAL, imageCount: 1, coverSeen: true, sampleTimes: [], clip: null };
+  assert.equal(candidate(now, { ...MATERIALS, readKind: "title-only", subtitle: [], visual: coverOnly }), null);
+  // 封面 + 单张正片：时刻只有 1 个，也不够
+  const coverOneFrame = { ...VISUAL, imageCount: 2, coverSeen: true, sampleTimes: [2], clip: null };
+  assert.equal(candidate(now, { ...MATERIALS, readKind: "title-only", subtitle: [], visual: coverOneFrame }), null);
+  // 有字幕时封面照样只是附带的：可以记下“看过封面”，但不产出画面正文
+  const withSubtitle = candidate(now, { ...MATERIALS, visual: coverOnly });
+  assert.ok(withSubtitle);
+  assert.equal(withSubtitle.visual.imageCount, 1);
+  assert.match(withSubtitle.context, /只有一张封面/);
+  assert.equal(/【画面记录】/.test(withSubtitle.context), false);
+  assert.match(withSubtitle.cognition.text, /仅读到字幕资料/);
+});
+
+test("弹幕档认知不再冒充读过字幕，旧数据不倒推已看画面", () => {
+  const danmakuOnly = candidate(now, { ...MATERIALS, readKind: "danmaku", subtitle: [] });
+  assert.ok(danmakuOnly);
+  assert.match(danmakuOnly.cognition.text, /只翻到标题和弹幕/);
+  assert.equal(/仅读到字幕资料/.test(danmakuOnly.cognition.text), false);
+  assert.equal(/局部画面/.test(danmakuOnly.cognition.text), false);
+
+  // 旧账本里没有 visual 字段：归一化后为 null，回忆不能因此变成看过画面
+  const legacyBook = recordVideoShare(
+    addVideoCandidate({ pending: [], shares: [] }, danmakuOnly, now), danmakuOnly,
+    { id: "share-legacy", role: "assistant", text: `看这个 ${danmakuOnly.video.link}` }, now,
+  );
+  const legacy = { ...legacyBook.shares[0], visual: null };
+  const recalled = videoRecallText([legacy]);
+  assert.match(recalled, /只看到标题和弹幕/);
+  assert.equal(/局部画面/.test(recalled), false);
+});
+
+test("回忆块按真实来源写：看过局部就写局部，不写没看画面", () => {
+  const item = candidate(now, { ...MATERIALS, visual: VISUAL });
+  const book = recordVideoShare(
+    addVideoCandidate({ pending: [], shares: [] }, item, now), item,
+    { id: "share-visual", role: "assistant", text: `看这个 ${item.video.link}` }, now,
+  );
+  const recalled = selectVideoShares(book, "菜板修复");
+  assert.equal(recalled.length, 1);
+  const text = videoRecallText(recalled);
+  assert.match(text, /全片 4 个时间点/);
+  assert.match(text, /局部连续（4 张）/);
+  assert.match(text, /也读过字幕/);
+  assert.equal(/没有看视频画面/.test(text), false);
+  assert.ok(text.length <= 3000);
+});
+
+test("visual 归一化后才进候选，但只存元信息不存图片字节", () => {
+  const item = candidate(now, {
+    ...MATERIALS,
+    visual: { ...VISUAL, bytes: "BASE64-BYTES", link: "https://example.invalid/tmp" },
+  });
+  const serialized = JSON.stringify(item);
+  assert.equal(serialized.includes("BASE64-BYTES"), false);
+  assert.equal(serialized.includes("example.invalid"), false);
+  assert.equal(serialized.includes("SESSDATA"), false);
+  assert.deepEqual(Object.keys(item.visual).sort(), [
+    "clip", "clipTimes", "coverSeen", "imageCount", "model", "observedAt", "sampleTimes",
+    "status", "summary", "summaryTruncated", "visibleFrames",
+  ].sort());
+});

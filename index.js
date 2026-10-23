@@ -155,7 +155,18 @@ import {
 import { cleanVoice, farewellSpec, hasOpenHook, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNighttimeSleepQuestion, isNoReply, isUsableVoice, nightSpec, proactiveSpec, stirredSpec } from "./lib/compose.js";
 import { formatSearchContext, isSafeSearchQuery } from "./lib/topic-search.js";
 import { searchVideos, fetchPopularVideos, collectVideoMaterials, readVideoCredential, writeVideoCredential, clearVideoCredential } from "./lib/video-source.js";
+import { packMaterials } from "./lib/video-materials.js";
+import { collectInboundVideo } from "./lib/video-inbound.js";
+import {
+  READ_VIDEO_TOOL,
+  READ_VIDEO_TOOL_NAME,
+  VIDEO_TOOL_EMPTY_TEXT,
+  VIDEO_TOOL_UNSUPPORTED_TEXT,
+  formatVideoShelf,
+  listVideoShelf,
+} from "./lib/video-tool.js";
 import { createVideoLogin } from "./lib/video-login.js";
+import { createVideoUnderstanding } from "./lib/video-understanding.js";
 import { normalizeVideoBook, makeVideoCandidate, addVideoCandidate, nextVideoCandidate, offerVideoCandidate, recordVideoShare,
   arrangeShareBubbles,
   selectVideoShares, videoRecallText, videoCognitions, applyVideoFeedback, videoShareLimit, videoQuotaAvailable, noteVideoSent, matchVideoStop,
@@ -482,6 +493,7 @@ export function apply(ctx) {
   try { registerUsageQuery(ctx); }
   catch { ctx.logger?.error?.("[chahuahui] 用量查询工具注册失败，其余功能继续装载"); }
   const diagnostics = createDiagnostics(ctx.dataDir);
+  const videoUnderstanding = createVideoUnderstanding(ctx, { diagnostics });
   const store = createStore(ctx.dataDir);
   // 凭据仅供B站内部请求，公开状态不带凭据，且不进入设置、诊断或模型上下文。
   // 扫码登录只保存经nav验证的SESSDATA；现有读写函数使用Windows DPAPI，网络未知时保留。
@@ -499,6 +511,22 @@ export function apply(ctx) {
   async function videoLogin(options) {
     const state = await videoLoginManager.status(options);
     return { ...state, ok: state.status === "loggedIn", cookie: await videoLoginManager.getCookie() };
+  }
+  // 她递过来的视频：同一条消息可能会被重跑（语音风险重试、模型空包重试），
+  // 材料取一次就够，不要因为重试再发一遍网络请求。十分钟内同一段文本直接复用。
+  const inboundVideoCache = new Map();
+  function cachedInboundVideo(key, produce) {
+    const hit = inboundVideoCache.get(key);
+    if (hit && Date.now() - hit.at < 10 * 60_000) return Promise.resolve(hit.value);
+    const work = produce();
+    work.then((value) => {
+      // 失败或超时不缓存：下一轮还得能再试一次。
+      if (!value?.ok) return;
+      inboundVideoCache.set(key, { at: Date.now(), value });
+      // 别让这张表长成漏子：只留最近八条。
+      while (inboundVideoCache.size > 8) inboundVideoCache.delete(inboundVideoCache.keys().next().value);
+    }).catch(() => { /* 失败不缓存，下一轮还能再试 */ });
+    return work;
   }
   function videoPartnerEnabled(agentId) {
     return isValidPartnerId(agentId) && store.getPartnerSettings(agentId).videoSharingEnabled === true
@@ -794,6 +822,44 @@ export function apply(ctx) {
       } catch (error) {
         diagnostics({ event: "chat.tool.failed", agentId, error: describeError(error) });
         return { isError: true, text: TOOL_EMPTY_TEXT };
+      }
+    };
+  }
+
+  /**
+   * 读她发过来的 B 站视频（工具执行器）。
+   *
+   * 2026-10-23 从「回复前自动取材料」改成「伙伴自己调」：
+   * 发起权交给 ta，不想看就不调；哪天想起来再调也不晚。
+   */
+  function createReadVideoTool({ agentId }) {
+    const fetcher = typeof ctx.network?.fetch === "function" ? ctx.network.fetch.bind(ctx.network) : null;
+    return async ({ name, arguments: args } = {}) => {
+      if (name !== READ_VIDEO_TOOL_NAME) {
+        return { isError: true, text: "这个工具不存在。就用手上已有的东西说话。" };
+      }
+      const raw = String(args?.url ?? args?.link ?? args?.bvid ?? "").trim();
+      if (!raw) return { isError: true, text: VIDEO_TOOL_EMPTY_TEXT };
+      if (!fetcher) return { isError: true, text: VIDEO_TOOL_EMPTY_TEXT };
+      try {
+        const login = await videoLogin();
+        // 同一个视频她可能反复提，十分钟内不重复抓一遍。
+        const inbound = await cachedInboundVideo(
+          `v:${raw.slice(0, 400)}`,
+          () => collectInboundVideo(fetcher, raw, { cookie: login.ok ? login.cookie : "" }),
+        );
+        if (!inbound.ok) {
+          diagnostics({ event: "chat.tool.video", agentId, ok: false,
+            reason: String(inbound.reason ?? "").slice(0, 120), unsupported: inbound.unsupported === true });
+          return { isError: true, text: inbound.unsupported ? VIDEO_TOOL_UNSUPPORTED_TEXT : VIDEO_TOOL_EMPTY_TEXT };
+        }
+        diagnostics({ event: "chat.tool.video", agentId, ok: true,
+          bvid: inbound.materials?.video?.bvid ?? null, readKind: inbound.materials?.readKind ?? null });
+        // origin=user：这批东西是她递过来的，不是伙伴自己刷到的。
+        return { isError: false, text: packMaterials(inbound.materials, { origin: "user", maxChars: 2200 }) };
+      } catch (error) {
+        diagnostics({ event: "chat.tool.video", agentId, ok: false, error: describeError(error) });
+        return { isError: true, text: VIDEO_TOOL_EMPTY_TEXT };
       }
     };
   }
@@ -4587,6 +4653,8 @@ export function apply(ctx) {
         const canContinue = () => videoPartnerEnabled(agentId) && videoQuota() && !focusCompanion.active() && threadStamp(agentId) === explorationStamp;
         const previous = normalizeVideoBook(store.getVideoBook(agentId), now);
         const seen = new Set([...previous.pending, ...previous.shares].map((row) => row.id));
+        // 每轮至多新取帧一次、识图一次；缓存可跨伙伴复用同模型的事实，不生成额外口吻。
+        let visualAttemptAvailable = true;
         for (const source of sources) {
           let topic = "";
           let interest = null;
@@ -4640,7 +4708,14 @@ export function apply(ctx) {
           for (const result of fresh) {
             if (!canContinue()) return retryLater("video-exploration-stale");
             seen.add(`${result.bvid}:1`);
-            const materials = await collectVideoMaterials(fetcher, result.bvid, { cookie: login.cookie, requireSubtitle: false });
+            let materials = await collectVideoMaterials(fetcher, result.bvid, { cookie: login.cookie, requireSubtitle: false });
+            if (!canContinue()) return retryLater("video-exploration-stale");
+            const enhanced = await videoUnderstanding.enhance(materials, {
+              vision: effectiveVisionConfig(store.getGlobalSettings().vision, store.getPartnerSettings(agentId).vision),
+              cookie: login.cookie, allowNewRequest: visualAttemptAvailable, canContinue,
+            });
+            if (enhanced.attempted) visualAttemptAvailable = false;
+            materials = enhanced.materials;
             if (!canContinue()) return retryLater("video-exploration-stale");
             if (!materials.ok || !materials.shareable) {
               diagnostics({ event: "video.exploration.unusable", agentId, bvid: result.bvid,
@@ -4652,7 +4727,8 @@ export function apply(ctx) {
             store.saveVideoBook(agentId, addVideoCandidate(store.getVideoBook(agentId), candidate));
             store.setProactiveState(agentId, { interestLearning: scheduleExploration(store.getProactiveState(agentId).interestLearning, new Date()) });
             diagnostics({ event: "video.exploration.ready", agentId, source, bvid: materials.video.bvid, page: materials.video.page ?? 1,
-              readKind: candidate.readKind, domain: interest?.name ?? null });
+              readKind: candidate.readKind, visual: Boolean(candidate.visual), visualSource: enhanced.reason,
+              domain: interest?.name ?? null });
             return { explored: true, source: "bilibili" };
           }
         }
@@ -5024,6 +5100,8 @@ export function apply(ctx) {
     // 后台没搜到（或者压根没触发）→ 给，让伙伴自己能发起一次。
     // 以前它没有这个发起权：说「我去查」是句空话，下一轮只能改口「你把链接给我」。
     const offerSearchTool = !chatSearch.context;
+    // 给了没给、给了用没用，得分开能查：以前只看到 toolCalls:0，分不清是没给还是给了不用。
+    diagnostics({ event: "chat.tool.offered", agentId, offered: offerSearchTool, hasPresearch: Boolean(chatSearch.context) });
     const webSearchTool = offerSearchTool
       ? createWebSearchTool({ agentId, partnerName: partner?.name ?? agentId })
       : null;
@@ -5062,6 +5140,18 @@ export function apply(ctx) {
     const voiceAsk = isExplicitVoiceRequest(
       replyTargetId ? threadMessages.find((row) => row.id === replyTargetId)?.text : latestUser?.text,
     );
+    // ── 她发过来的视频（2026-10-23）─────────────────────────────
+    // 这里只列出手边有哪些，**不替她去读**。想看哪条、什么时候看，都是 ta 自己的事——
+    // 觉得没劲就压根不调，回一句「不看」或者甩个表情包，那才是真的拒绝。
+    // 只扫文本，不取任何内容，零成本。
+    const videoShelf = listVideoShelf({ messages: threadMessages });
+    const videoText = formatVideoShelf(videoShelf);
+    if (videoShelf.length) {
+      diagnostics({ event: "chat.tool.video.offered", agentId, count: videoShelf.length });
+      diagnostics({ event: "video.inbound.scan", agentId,
+        hasSource: true, matched: true, replyTarget: replyTargetId ?? null,
+        sourceHead: videoShelf[0]?.bvid ?? "" });
+    }
     const systemPrompt = buildSystemPrompt({
       ruleProfile: agentId === compactReplyPilotId ? "compact-v1" : "legacy",
       partnerId: agentId,
@@ -5081,6 +5171,8 @@ export function apply(ctx) {
       todoDoneText,
       workfeedText,
       searchText: chatSearch.context,
+      // 她这一轮递了一个视频过来：材料摆在她那句话旁边。
+      videoText,
       // 自己上网查的工具：后台这一轮没搜到东西时，就把工具给 ta，
       // 让它能自己发起一次（以前它只有张嘴的份儿）。
       // 后台已经拿到材料的那一轮不给：一份材料够了，别两边各搜一次。
@@ -5129,6 +5221,19 @@ export function apply(ctx) {
     });
 
     let generated = null;
+    // 这一轮给哪些工具：搜索和读视频各自独立，有几个给几个。
+    // 读视频的工具只在「她手边真有视频」时才给：没有可点开的东西时不拿工具吊者 ta。
+    const readVideoTool = createReadVideoTool({ agentId });
+    const chatTools = [];
+    if (offerSearchTool) chatTools.push(SEARCH_TOOL);
+    if (videoShelf.length) chatTools.push(READ_VIDEO_TOOL);
+    const runChatTool = chatTools.length
+      ? async (payload) => {
+        if (payload?.name === READ_VIDEO_TOOL_NAME) return readVideoTool(payload);
+        if (payload?.name === SEARCH_TOOL_NAME && webSearchTool) return webSearchTool(payload);
+        return { isError: true, text: "这个工具不存在。就用手上已有的东西说话。" };
+      }
+      : null;
     // 「模型这会儿用不了」不是生成失败，是这一轮根本不该发生：
     // 不换模型顶嘴（那会换掉 ta 的嗓子和记性），也不当失败重试。
     const callModel = async (system = systemPrompt) => {
@@ -5145,10 +5250,11 @@ export function apply(ctx) {
           maxTokens: feedbackPrompt ? 1800 : 900,
           modelRef: choice ? { provider: choice.provider, model: choice.model } : null,
           catalog: modelCatalog,
-          // 工具回合：伙伴自己决定要不要查、自己写搜索词。
-          tools: offerSearchTool ? [SEARCH_TOOL] : null,
-          executeTool: offerSearchTool ? webSearchTool : null,
-          maxToolCalls: 2,
+          // 工具回合：伙伴自己决定要不要调、调哪个。搜索是查外面的事，
+          // 读视频是把她发过来的那条真看了——两个都由 ta 自己发起。
+          tools: chatTools.length ? chatTools : null,
+          executeTool: runChatTool,
+          maxToolCalls: 3,
           maxToolRounds: 2,
         });
       } catch (error) {
