@@ -1,5 +1,13 @@
 # TESTING · 茶话会
 
+## 近期上下文与连续插话（2026-10-23）
+
+- 范围：近期上下文选择/连续用户消息合并、取消与持续插话、实时/排期/恢复防重、后台摘要与日账退避。只使用假宿主及假模型跑真实App路由，不改生产聊天，不声称真实模型理解效果已验收。
+- 命令：`node --check index.js`；`node --test --test-timeout=30000 tests/reply-context-window.test.js tests/reply-interrupt.test.js tests/reply-cancel-model.test.js tests/reply-memory-latency.test.js tests/reply-supersede.test.js tests/reply-supersede-routes.test.js tests/memory.test.js tests/model.test.js tests/prompt.test.js tests/memory-pipeline.test.js tests/reply-action-target.test.js tests/thread-recovery.test.js tests/load.test.js`；`git diff --check`。
+- 最终相关13文件 **204/204通过，0失败、取消、跳过**，非全量。覆盖六次真实路由插话/七次协调器插话、突发合并、迟到废稿、取消确认失败不重开/不切模型、真实异常不吞、长消息首尾/12组往来/48行与12000字预算、硬撤回、小动作、摘要水位不遮原话、装载恢复不并发重启实时回复、旧日账慢/失败不挡眼前两轮且不逐条重试；既有图像/语音、目标存活、清空与未读回归。
+- 首轮203项202通过/1撤回用例30秒取消：定位为撤回队列前的假后台画像未释放，只在该用例按PROFILE_SYSTEM自动返回画像；产品断言保留，复跑及最后防重修正后204项通过。普通宿主abort仍快速返回；仅连续插话内部取消标记要求最多1秒确认释放，未知取消不冒充成功，也不继续开新生成。
+- 正式reload成功，inspect确认host=on/agent=on。代码已加载；未调用真实模型，纠正关系理解与聊天连贯自然度待实际聊天观察。后台原始渠道错误未查明，存量积压不宣称已清空；本次只隔离阻塞及失败热重试。版本、README、简介未改，未上传。
+
 ## Hana 对话修订性格工具（2026-10-23）
 
 - 正式 `chahuahui_personality` 的 read / preview / apply 不调用模型，只开放本App调色盘的色、行为、自画像与语料。省略区段保留、提供数组替换整个区段；先读版本、预览不落盘，具体修改获同意后应用。复用 commitChange/saveKnowing 历史，回读验证，原token重试幂等；未确认成功不宣称保存。token仅在本次进程内保留30分钟，重载后明确失效。

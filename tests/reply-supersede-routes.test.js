@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { bootChahuahui, reopenThread, fakeWavBase64 } from "./helpers/app-harness.js";
+import { PROFILE_SYSTEM } from "../lib/summarize.js";
 
 /**
  * 真装载的编排测试：走真的 apply(ctx)、真的路由、真的账本文件，
@@ -127,47 +128,32 @@ test("重新捕获目标后水位跟着走：过程里补的那句最终被读�
   assert.ok(rows.find((row) => row.text === "我准备睡觉了").readAt, "它前面那句也一并被读到");
 });
 
-test("一直追到上限：不发过期旧稿，把最新目标排进正常排期", async () => {
+test("连续插话六次仍留在同一回合：立即取消旧请求，只发最终完整回复", async () => {
   const app = await bootChahuahui({ seed: seedReady });
-
   const first = await post(app.request, { text: "第一句", clientMessageId: "m_first_000003" });
-  await app.models.waitForCall(0);
-
-  // 每一轮生成期间都再补一句，逼它一次都追不上。
-  const extras = ["第二句", "第三句", "第四句"];
-  for (const [index, text] of extras.entries()) {
-    await app.models.waitForCall(index);
-    await post(app.request, { text, clientMessageId: `m_extra_00000${index}` });
-    app.models.release(index, `按第${index}轮写的旧稿`);
+  let latestId = first.body.messageId;
+  for (let index = 0; index < 6; index += 1) {
+    const old = await app.models.waitForCall(index);
+    const extra = await post(app.request, { text: `补充第${index + 1}句`, clientMessageId: `m_extra_00000${index}` });
+    latestId = extra.body.messageId;
+    await app.models.waitForCall(index + 1);
+    assert.ok(app.models.cancelled.includes(old.request.requestId), "不用放行旧流，就应取消并重开");
+    app.models.release(index, "迟到的旧稿不得落盘");
+    assert.equal(reopenThread(app.dataDir, AGENT).filter((row) => row.role === "assistant").length, 0);
+    const current = await app.request("GET", `/turns/${first.body.turnId}`);
+    assert.equal(current.body.status, "generating", "不能到第三次就丢回排期");
   }
-
-  // 上限是 2 次重来：这条回合一共 3 次生成，随后放弃。
-  const settled = await waitTurn(app.request, first.body.turnId, (state) => state.status === "ready");
-  assert.equal(settled.replyMessageId, null, "明知过期的稿子一条都不许发出去");
-  assert.deepEqual(settled.items, [], "不该给前端任何气泡");
-
-  const rows = reopenThread(app.dataDir, AGENT);
-  assert.equal(rows.filter((row) => row.role === "assistant" && !row.proactive).length, 0, "线程里不能留下任何过期回复");
-  const latestId = rows.at(-1).id;
-
-  // 排期已经挂上：最新那条是待办目标，不是被丢在未读上没人管。
-  await new Promise((resolve) => setTimeout(resolve, 80));
-  const pending = app.store.getPendingReply(AGENT);
-  assert.ok(pending, "要把最新目标排进正常排期，不能晾着");
-  assert.equal(pending.messageId, latestId, "排期的目标是最新的那句");
-
-  // 排期那一轮正常跑完：补一条回复，覆盖到最新那句。
-  await app.models.waitForCall(3);
-  app.models.release(3, "都几点了，说完这句真去睡");
-  const deadline = Date.now() + 4000;
-  let replies = [];
-  for (;;) {
-    replies = reopenThread(app.dataDir, AGENT).filter((row) => row.role === "assistant" && !row.proactive);
-    if (replies.length || Date.now() > deadline) break;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  assert.equal(replies.length, 1, "整条链最后只应该有一份回复");
-  assert.equal(replies[0].repliedTo, latestId, "它覆盖到最新那句");
+  const final = app.models.calls[6];
+  const userContent = final.request.messages.filter((row) => row.role === "user").map((row) => row.content).join("\n");
+  for (let index = 1; index <= 6; index += 1) assert.ok(userContent.includes(`补充第${index}句`));
+  assert.ok(userContent.includes("第一句"));
+  app.models.release(6, "把这几句一起接住了");
+  const settled = await waitTurn(app.request, first.body.turnId, (state) => state.status === "ready" && state.replyMessageId);
+  assert.ok(settled.replyMessageId);
+  const replies = reopenThread(app.dataDir, AGENT).filter((row) => row.role === "assistant" && !row.proactive);
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].repliedTo, latestId);
+  assert.equal(replies[0].text, "把这几句一起接住了");
 });
 
 test("模型这会儿用不了又遇上追加：不能拿旧目标的失败把新话盖住，要按新目标重来", async () => {
@@ -263,6 +249,8 @@ test("语音合成等待期间追加：旧稿连同那份语音一起放掉，�
 
 test("撤回复退回未读：下一轮带上界的盖章能把欠下的补上", async () => {
   const app = await bootChahuahui({ seed: storeReadyWithRefine });
+  // 撤回要排业务串行队列；先放行独立的假后台画像，不能让未释放的模型桩锁死该用例。
+  app.models.answer((request) => request.systemPrompt === PROFILE_SYSTEM, "对方刚才说困了，彼此自然聊天。");
   await app.request("PUT", "/settings/global", { json: { messageRefine: true } });
 
   const first = await post(app.request, { text: "困了", clientMessageId: "m_first_000006" });

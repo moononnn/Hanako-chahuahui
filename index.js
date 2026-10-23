@@ -50,7 +50,7 @@ import { createStore, createDiagnostics } from "./lib/store.js";
 import { registerUsageQuery } from "./lib/usage-query.js";
 import { registerPersonalityTool } from "./lib/personality-tool.js";
 import { createFocusCompanion, focusReminderSpec, focusChatText } from "./lib/focus-companion.js";
-import { composeWithSupersedeRetry, hasNewerUserMessage, isSpeechMessage } from "./lib/turn-window.js";
+import { createInterruptibleComposer, hasNewerUserMessage, isSpeechMessage } from "./lib/turn-window.js";
 import { createThreadRebuildScheduler } from "./lib/rebuild-queue.js";
 import { protectKey, unprotectKey, isProtectedKey, encryptionStatus } from "./lib/crypto.js";
 import { listBackgrounds, readBackgroundBytes, writeBackground, removeBackgroundFile, normalizeOpacity, normalizeTone, isBackgroundFile, fileTypeOf } from "./lib/background.js";
@@ -66,6 +66,7 @@ import {
   planRollup,
   renderForSummary,
   splitForContext,
+  selectReplyContext,
 } from "./lib/memory.js";
 import { dailySpec, isProfileIdentitySafe, profileSpec, runSummary, segmentSpec } from "./lib/summarize.js";
 import { buildWorkfeedText, normalizeWorkEvent, recentWorkActivity } from "./lib/workfeed.js";
@@ -1634,6 +1635,7 @@ export function apply(ctx) {
   /** 清空聊天后递增；旧模型回包即使回来，也不能再写进新线程。 */
   const threadGenerations = new Map();
   const threadGeneration = (agentId) => threadGenerations.get(agentId) ?? 0;
+  const replyComposer = createInterruptibleComposer();
 
   // ─────────────────────────── 伙伴 ───────────────────────────
 
@@ -1862,6 +1864,8 @@ export function apply(ctx) {
   // 但每个伙伴一条串行链：分条发送和摘要都是慢活，串行才不会互相踩。
 
   const memoryChain = new Map();
+  const memoryRetryAt = new Map(); // 失败退避只管后台任务，不拦眼前聊天。
+  const memoryWorkScheduled = new Set();
 
   function queueMemoryJob(agentId, job) {
     const prev = memoryChain.get(agentId) ?? Promise.resolve();
@@ -2288,6 +2292,8 @@ export function apply(ctx) {
 
   /** 中间层：滚出窗口的段落压成一段摘要，靠 rolledThroughId 保证不重压。 */
   async function maybeRollup(agentId) {
+    const retryKey = `${agentId}:rollup`;
+    if (Date.now() < (memoryRetryAt.get(retryKey) ?? 0)) return { rolled: false, reason: "backoff" };
     const pending = store.pendingMessages(agentId);
     const conversational = conversationMessages(pending);
     const plan = planRollup(conversational, { ...DEFAULT_CONTEXT, ...(store.getPref(agentId).context ?? {}) });
@@ -2313,6 +2319,7 @@ export function apply(ctx) {
     const askMemory = memoryAsker(agentId);
     const result = await runSummary(askMemory, segmentSpec(material, USER_NAME));
     if (!result.ok) {
+      memoryRetryAt.set(retryKey, Date.now() + 5 * 60_000);
       diagnostics({ event: "memory.rollup.failed", agentId, reason: result.reason, error: result.error ?? null });
       return { rolled: false, reason: result.reason };
     }
@@ -2333,9 +2340,11 @@ export function apply(ctx) {
       store.appendArchive(agentId, makeArchiveEntry(result.text, material));
       diagnostics({ event: "memory.facts.ok", agentId, count: 0, ignoredLegacyFacts: parsedFacts.facts.length, longtermCount: parsedEntries.entries.length });
     } catch (error) {
+      memoryRetryAt.set(retryKey, Date.now() + 5 * 60_000);
       diagnostics({ event: "memory.facts.failed", agentId, error: describeError(error) });
       return { rolled: false, reason: "facts-failed" };
     }
+    memoryRetryAt.delete(retryKey);
     store.markRolledThrough(agentId, plan.batch[plan.batch.length - 1].id);
     diagnostics({ event: "memory.rollup.ok", agentId, count: plan.batch.length, chars: result.text.length });
     return { rolled: true, text: result.text, count: plan.batch.length };
@@ -2402,18 +2411,21 @@ export function apply(ctx) {
 
   /** 跨天了：给最近一个尚未收口的旧日子补一条日账，顺手更新档案。 */
   async function maybeCloseDay(agentId) {
-    const sourceStamp = memorySourceStamp(agentId);
     const rows = conversationMessages(store.getThread(agentId).messages);
     if (rows.length === 0) return { closed: false, reason: "empty" };
     const today = dayKey();
     const ledgerDays = new Set(store.readMemory(agentId).ledger.map((row) => String(row?.day ?? "")));
     const days = [...new Set(rows.map((row) => dayKey(row.at)).filter((day) => day && day !== today && !ledgerDays.has(day)))].sort();
-    const lastDay = days.at(-1);
-    if (!lastDay) return { closed: false, day: today };
+    const lastDay = days.filter((day) => Date.now() >= (memoryRetryAt.get(`${agentId}:ledger:${day}`) ?? 0)).at(-1);
+    if (!lastDay) return { closed: false, day: today, reason: days.length ? "backoff" : "up-to-date" };
+    const retryKey = `${agentId}:ledger:${lastDay}`;
+    const dayStamp = () => JSON.stringify(conversationMessages(store.getThread(agentId).messages).filter((row) => dayKey(row.at) === lastDay));
+    const sourceStamp = dayStamp();
     const sameDay = rows.filter((row) => dayKey(row.at) === lastDay);
     if (sameDay.length === 0) return { closed: false, day: lastDay };
     const result = await runSummary(memoryAsker(agentId), dailySpec(sameDay, lastDay, USER_NAME));
     if (!result.ok) {
+      memoryRetryAt.set(retryKey, Date.now() + 5 * 60_000);
       diagnostics({
         event: "memory.ledger.failed",
         agentId,
@@ -2423,7 +2435,8 @@ export function apply(ctx) {
       });
       return { closed: false, day: lastDay, reason: result.reason };
     }
-    if (memorySourceStamp(agentId) !== sourceStamp) return { closed: false, day: lastDay, reason: "source-changed" };
+    if (dayStamp() !== sourceStamp) return { closed: false, day: lastDay, reason: "source-changed" };
+    memoryRetryAt.delete(retryKey);
     store.upsertLedger(agentId, lastDay, result.text);
     diagnostics({ event: "memory.ledger.ok", agentId, day: lastDay, chars: result.text.length });
     await maybeRefreshProfile(agentId, { force: true });
@@ -4779,13 +4792,16 @@ export function apply(ctx) {
    * 得马上过一遍话题本，以后当由头带出来（不靠"攒够十条"那个阀）。
    */
   function scheduleMemoryWork(agentId, { burst = 0 } = {}) {
+    if (memoryWorkScheduled.has(agentId)) return;
+    memoryWorkScheduled.add(agentId);
     void queueMemoryJob(agentId, async () => {
       const rolled = await maybeRollup(agentId);
+      await maybeCloseDay(agentId);
       await maybeRefreshProfile(agentId, { force: Boolean(rolled.rolled) });
       await maybeExtractTopics(agentId, { force: burst >= 2 });
       await maybeDraftPersonality(agentId);
       await maybeTendHobbies(agentId);
-    });
+    }).finally(() => memoryWorkScheduled.delete(agentId));
   }
 
   // ─────────────────────── 话题本（M5 的核心） ───────────────────────
@@ -4928,7 +4944,8 @@ export function apply(ctx) {
    * 生成一份回复并落库。同步那条路（她在场）和异步那条路都用它。
    * 只管生成与入账，节奏、提醒那些外面各自接。
    */
-  async function composeReply(agentId, { repliedTo = null, mayPass = false, currentMessageId = null, excludeMessageId = null, replaceMessageId = null, isCurrent = null, onCapture = null } = {}) {
+  async function composeReply(agentId, { repliedTo = null, mayPass = false, currentMessageId = null, excludeMessageId = null, replaceMessageId = null, isCurrent = null, onCapture = null, signal = null } = {}) {
+    signal?.throwIfAborted();
     if (focusCompanion.active()?.companionId === agentId) return { ok: false, reason: 'silent', generationMs: 0 };
     await loadUserName();
     const startedAt = Date.now();
@@ -4936,12 +4953,14 @@ export function apply(ctx) {
     if (await backfillVisionNote(agentId, store.pendingMessages(agentId))) {
       // 补完要重取一次，否则这轮上下文里还是那份没有说明的旧消息
     }
-    const pending = store.pendingMessages(agentId).filter((row) => row?.id !== excludeMessageId);
-    const windowed = splitForContext(pending).recent;
+    signal?.throwIfAborted();
+    // 近期原话不跟摘要水位绑在一起；失败的摘要不能把两者之间的往来遮掉。
+    const windowed = selectReplyContext(store.getThread(agentId).messages.filter((row) => row?.id !== excludeMessageId));
     // 回复目标必须是这轮实际看进去的最后一条用户消息；否则连发时会把已经覆盖的话误判成漏回。
     const replyTargetId = [...windowed].reverse().find((row) => row?.role === "user" && !row.recalled && isSpeechMessage(row))?.id ?? repliedTo;
     // 这就是本轮真正的目标上界。外面靠它盖章已读，所以得把捕获到的目标报上去。
     if (replyTargetId) onCapture?.(replyTargetId);
+    currentMessageId ??= replyTargetId;
     // 这轮捕获之后又落进来新的她的话：旧稿不能再原样送出去。返回 superseded 让外层
     // 在同一条回合里顺序重来（不新开第二个生成）。
     const targetStillLive = () => !replyTargetId || store.getThread(agentId).messages.some((row) => row.id === replyTargetId && row.role === "user" && !row.recalled);
@@ -4965,8 +4984,7 @@ export function apply(ctx) {
       diagnostics({ event: "reply.silent", agentId, generationMs, reason: "obvious-closing-signal" });
       return { ok: false, reason: "silent", generationMs };
     }
-    // 跨天了就先给上一个日子补一笔（一天只发生一次，之后就短路返回）
-    await maybeCloseDay(agentId);
+    // 旧日账在回复后的后台整理；失败不能拖住眼前聊天，更不能每次插话重试它。
     const [partners, persona] = await Promise.all([listPartners(), getPersona(agentId)]);
     const partner = partners.find((row) => row.id === agentId);
     const memory = store.readMemory(agentId);
@@ -5207,7 +5225,11 @@ export function apply(ctx) {
     const messages = threadToMessages(windowed, windowed.length, {
       userName: USER_NAME,
       describeSticker: (id) => stickerLabels.get(id) ?? null,
+      mergeConsecutiveUser: true,
     });
+    diagnostics({ event: "reply.context", agentId, rows: windowed.length, messages: messages.length,
+      rawChars: windowed.reduce((n, row) => n + String(row.text ?? "").length, 0),
+      firstId: windowed[0]?.id ?? null, targetId: replyTargetId });
 
     // 这次用哪个模型：本应用单独指定 > 本应用全局指定 > 伙伴在 Hana 里的默认模型 > 兜底。
     // 目录拉一次，resolve 和 stream 两处共用。拉不到也不播报，退回“跟当前模型走”。
@@ -5259,6 +5281,7 @@ export function apply(ctx) {
           executeTool: runChatTool,
           maxToolCalls: 3,
           maxToolRounds: 2,
+          signal,
         });
       } catch (error) {
         if (error?.code === "MODEL_UNAVAILABLE") {
@@ -5505,14 +5528,16 @@ export function apply(ctx) {
       turn.status = "generating";
       // 同一伙伴同一时刻只允许一个生成：旧稿作废了就在这条回合里顺序重来，
       // 不新开一个回合，也不同时开两个模型请求。
-      const made = await composeWithSupersedeRetry(
-        () => composeReply(turn.agentId, {
+      const made = await replyComposer.run(turn.agentId,
+        ({ signal }) => composeReply(turn.agentId, {
+          signal,
           repliedTo: turn.userMessageId,
           isCurrent: () => threadGeneration(turn.agentId) === turn.threadGeneration,
           // 重新捕获到的目标要跟上：已读盖章跟着实际读到的那条走，不是钉在最初那条上。
           onCapture: (targetId) => { turn.readTargetId = targetId; },
         }),
-        { onSupersede: (attempt, result) => diagnostics({ event: "turn.superseded", agentId: turn.agentId, attempt, supersededBy: result.supersededBy ?? null }) },
+        { isCurrent: () => threadGeneration(turn.agentId) === turn.threadGeneration,
+          onSupersede: (attempt, result) => diagnostics({ event: "turn.superseded", agentId: turn.agentId, attempt, supersededBy: result?.supersededBy ?? null }) },
       );
       turn.generationMs = made.generationMs;
       if (!made.ok) {
@@ -5603,6 +5628,15 @@ export function apply(ctx) {
       scheduleQueuedReply(turn.agentId, made.repliedTo ?? turn.userMessageId);
       scheduleTurnCleanup(turn);
     } catch (error) {
+      if (error?.code === "REPLY_BUSY") {
+        turn.status = "ready";
+        turn.bubbles = [];
+        turn.silent = true;
+        const target = store.getThread(turn.agentId).messages.findLast((row) => row.role === "user" && !row.recalled && isSpeechMessage(row));
+        if (target) scheduleReplyAt(turn.agentId, Date.now() + 500, "queued", target.id);
+        scheduleTurnCleanup(turn);
+        return;
+      }
       turn.status = "error";
       turn.error = describeError(error);
       const pending = store.getPendingReply(turn.agentId);
@@ -5746,7 +5780,15 @@ export function apply(ctx) {
       pendingReplies.delete(agentId);
       deliveringReplies.add(agentId);
       const generation = threadGeneration(agentId);
-      void queueMemoryJob(agentId, () => deliverScheduledReply(agentId, generation)).finally(() => {
+      // 和实时回复一样，不能排在旧摘要的慢请求后面；出站由replyComposer独占。
+      void deliverScheduledReply(agentId, generation).catch((error) => {
+        diagnostics({ event: "reply.delivery.failed", agentId, error: describeError(error) });
+        const pending = store.getPendingReply(agentId);
+        if (pending?.messageId && generation === threadGeneration(agentId)) {
+          const busy = error?.code === "REPLY_BUSY";
+          scheduleReplyAt(agentId, Date.now() + (busy ? 500 : 5 * 60_000), busy ? "queued" : "retry", pending.messageId);
+        }
+      }).finally(() => {
         deliveringReplies.delete(agentId);
       });
     }, delay);
@@ -5797,7 +5839,9 @@ export function apply(ctx) {
       return;
     }
     for (const partner of partners) {
-      if (pendingReplies.has(partner.id) || deliveringReplies.has(partner.id)) continue;
+      // 实时回合已经留了恢复凭证，不能在它生成时又把同一凭证恢复成第二轮。
+      if (pendingReplies.has(partner.id) || deliveringReplies.has(partner.id) || replyComposer.has(partner.id)
+        || [...turns.values()].some((turn) => turn.agentId === partner.id && ["pending", "generating"].includes(turn.status))) continue;
       let pending = store.getPendingReply(partner.id);
       const messages = store.getThread(partner.id).messages;
       let targetMessageId = pending?.messageId ?? null;
@@ -5911,6 +5955,27 @@ export function apply(ctx) {
   /** 到点了：生成一条回复落库（她不在也照发，等她回来看）。 */
   async function deliverScheduledReply(agentId, generation = threadGeneration(agentId)) {
     let pending = store.getPendingReply(agentId);
+    if (!pending || generation !== threadGeneration(agentId)) return { ok: false, reason: "stale" };
+    const rows = store.getThread(agentId).messages;
+    const delivered = pending.messageId && rows.find((row) => row.role === "assistant" && !row.recalled && row.repliedTo === pending.messageId);
+    if (delivered) {
+      const finalized = finalizeWakeReply(pending, delivered.id, new Date(delivered.at));
+      if (finalized) store.setPendingReply(agentId, finalized);
+      commitWakeExceptionIfReady(agentId, finalized ?? pending);
+      store.clearPendingReplyIf(agentId, pending.messageId);
+      // 旧定时器不重复发已回过的话；若之后真有新话，只给未覆盖的尾巴留凭证。
+      const lastReply = rows.findLastIndex((row) => row.role === "assistant" && !row.recalled && isSpeechMessage(row));
+      const latest = rows.slice(lastReply + 1).findLast((row) => row.role === "user" && !row.recalled && !row.notice && isSpeechMessage(row));
+      if (latest) scheduleReplyAt(agentId, Date.now() + 500, "queued", latest.id);
+      diagnostics({ event: "reply.already-delivered", agentId, messageId: pending.messageId });
+      return { ok: true, alreadyDelivered: true };
+    }
+    if (replyComposer.has(agentId) || [...turns.values()].some((turn) => turn.agentId === agentId && ["pending", "generating"].includes(turn.status))) {
+      // 正在退场的旧车道也仍独占；保留凭证短暂让位，不当成模型失败。
+      if (pending?.messageId) scheduleReplyAt(agentId, Date.now() + 500, "queued", pending.messageId);
+      return { ok: false, reason: "busy" };
+    }
+    if (generation !== threadGeneration(agentId)) return { ok: false, reason: "stale" };
     if (pending?.wakeDecision === "deferred") {
       pending = resolveDeferredWake(pending);
       store.setPendingReply(agentId, pending);
@@ -5935,14 +6000,16 @@ export function apply(ctx) {
       wakeKind: pending?.wakeKind,
     });
     pending = store.getPendingReply(agentId) ?? pending;
-    const made = await composeWithSupersedeRetry(
-      () => composeReply(agentId, {
+    const made = await replyComposer.run(agentId,
+      ({ signal }) => composeReply(agentId, {
+        signal,
         mayPass: true,
         repliedTo: pending?.messageId ?? null,
         currentMessageId: pending?.messageId ?? null,
         isCurrent: () => threadGeneration(agentId) === generation,
       }),
-      { onSupersede: (attempt, result) => diagnostics({ event: "reply.superseded", agentId, stage: "scheduled", attempt, supersededBy: result.supersededBy ?? null }) },
+      { isCurrent: () => threadGeneration(agentId) === generation,
+        onSupersede: (attempt, result) => diagnostics({ event: "reply.superseded", agentId, stage: "scheduled", attempt, supersededBy: result?.supersededBy ?? null }) },
     );
     if (!made.ok) {
       if (made.reason === "stale") return { ok: false, reason: "stale" };
@@ -7413,6 +7480,7 @@ export function apply(ctx) {
       app.post("/thread/:agentId/clear", (c) => {
         const agentId = c.req.param("agentId");
         threadGenerations.set(agentId, threadGeneration(agentId) + 1);
+        replyComposer.cancel(agentId);
         cancelScheduledReply(agentId);
         for (const [key, generation] of voiceGenerations) {
           if (generation.agentId === agentId) voiceGenerations.delete(key);
@@ -7425,6 +7493,7 @@ export function apply(ctx) {
       app.post("/memory/:agentId/reset", (c) => {
         const agentId = c.req.param("agentId");
         threadGenerations.set(agentId, threadGeneration(agentId) + 1);
+        replyComposer.cancel(agentId);
         cancelScheduledReply(agentId);
         cancelPendingActionReply(agentId);
         for (const [key, generation] of voiceGenerations) {
@@ -7808,6 +7877,9 @@ export function apply(ctx) {
           ...(attachment ? { attachment: { id: attachment.id, name: attachment.name, mimeType: attachment.mimeType, size: attachment.size }, visionNote, ...(visionVia ? { visionVia } : {}) } : {}),
           ...(visionNotice ? { notice: visionNotice } : {}),
         });
+        if (isSpeechMessage(stored) && replyComposer.interrupt(agentId, stored.id)) {
+          diagnostics({ event: "reply.interrupted", agentId, messageId: stored.id });
+        }
         if (matchVideoStop(messageText)) {
           store.setGlobalSettings({ videoShareMaxPerDay: 0 });
           // 只记明确关闭的来源，不另设门禁；恢复仍由设置开关决定。
@@ -7825,7 +7897,8 @@ export function apply(ctx) {
         const responseInFlight = [...turns.values()].some((turn) => turn.agentId === agentId && ["pending", "generating"].includes(turn.status))
           || pendingReplies.has(agentId)
           || deliveringReplies.has(agentId)
-          || autonomousLanes.has(agentId);
+          || autonomousLanes.has(agentId)
+          || replyComposer.has(agentId);
         advancePartnerRelationship(agentId, messageText, stickerSignalText, stored.id);
         // 她一开口，「等回音」这件事就翻篇了：催到第几次、下次什么时候看，都不作数了。
         // 她回来了就当她一直没走，不翻旧账（真想数落她，那也是ta自己愿不愿意）。
@@ -7884,6 +7957,8 @@ export function apply(ctx) {
         store.setPartnerSettings(agentId, { phone: plan.phone });
 
         if (responseInFlight) {
+          // 清空/重置后的旧车道尚在退场时，新消息也得有恢复凭证。
+          if (!store.getPendingReply(agentId)) scheduleReplyAt(agentId, Date.now() + 500, "queued", stored.id);
           diagnostics({ event: "turn.queued", agentId, reason: "response-in-flight", messageId: stored.id });
           return c.json({ ok: true, messageId: stored.id, mode: "queued", queued: true, recall: recallEligibility(stored) });
         }

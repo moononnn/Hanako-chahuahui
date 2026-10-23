@@ -263,7 +263,8 @@ test("清空聊天后旧定时器不能给新消息盖章：上界查无此人�
 // 真路由、真账本文件验证；这里只守接线形状，不冒充行为验证。
 
 test("后台在各阶段各查一次有没有新话顶掉旧稿", () => {
-  assert.match(appSource, /composeWithSupersedeRetry/);
+  assert.match(appSource, /createInterruptibleComposer/);
+  assert.match(appSource, /replyComposer\.interrupt\(agentId, stored\.id\)/);
   assert.match(appSource, /hasNewerUserMessage/);
   // 安静收口：拿上一轮的句号收尾之前先查，别把她刚补的那句晾在未读上。
   assert.match(appSource, /const staleClosing = supersededResult\("quiet-close"\);/);
@@ -304,9 +305,11 @@ test("重新捕获的目标要报给外面：已读水位跟着实际覆盖范�
 
 test("实时回合和排期轮都走顺序重来，修整那条路不动", () => {
   const turnBlock = appSource.slice(appSource.indexOf("async function runTurn(turn)"));
-  assert.match(turnBlock, /composeWithSupersedeRetry\(/, "实时回合要在同一条回合里重来，不能新开一个生成");
+  assert.match(turnBlock, /replyComposer\.run\(turn\.agentId/, "实时回合使用可取消的同伙伴单车道");
+  assert.match(turnBlock, /\(\{ signal \}\) => composeReply/);
   const deliverBlock = appSource.slice(appSource.indexOf("async function deliverScheduledReply("));
-  assert.match(deliverBlock, /composeWithSupersedeRetry\(/, "排期轮同样要接住连续追加");
+  assert.match(deliverBlock, /replyComposer\.run\(agentId/, "排期轮同样接住不限次数的连续追加");
+  assert.match(deliverBlock, /\(\{ signal \}\) => composeReply/);
   const refineBlock = appSource.slice(appSource.indexOf("/thread/:agentId/refine/:messageId\""));
   assert.doesNotMatch(refineBlock.slice(0, 3000), /composeWithSupersedeRetry\(/, "修整是替换指定那条回复，不走这条路");
 });
