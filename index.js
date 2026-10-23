@@ -48,6 +48,7 @@ import {
 } from "./lib/model.js";
 import { createStore, createDiagnostics } from "./lib/store.js";
 import { registerUsageQuery } from "./lib/usage-query.js";
+import { registerPersonalityTool } from "./lib/personality-tool.js";
 import { createFocusCompanion, focusReminderSpec, focusChatText } from "./lib/focus-companion.js";
 import { composeWithSupersedeRetry, hasNewerUserMessage, isSpeechMessage } from "./lib/turn-window.js";
 import { createThreadRebuildScheduler } from "./lib/rebuild-queue.js";
@@ -495,6 +496,8 @@ export function apply(ctx) {
   const diagnostics = createDiagnostics(ctx.dataDir);
   const videoUnderstanding = createVideoUnderstanding(ctx, { diagnostics });
   const store = createStore(ctx.dataDir);
+  try { registerPersonalityTool(ctx, { store, listPartners }); }
+  catch { ctx.logger?.error?.("[chahuahui] 性格档案工具注册失败，其余功能继续装载"); }
   // 凭据仅供B站内部请求，公开状态不带凭据，且不进入设置、诊断或模型上下文。
   // 扫码登录只保存经nav验证的SESSDATA；现有读写函数使用Windows DPAPI，网络未知时保留。
   const videoLoginManager = createVideoLogin({

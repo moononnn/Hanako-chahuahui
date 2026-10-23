@@ -1,5 +1,13 @@
 # TESTING · 茶话会
 
+## Hana 对话修订性格工具（2026-10-23）
+
+- 正式 `chahuahui_personality` 的 read / preview / apply 不调用模型，只开放本App调色盘的色、行为、自画像与语料。省略区段保留、提供数组替换整个区段；先读版本、预览不落盘，具体修改获同意后应用。复用 commitChange/saveKnowing 历史，回读验证，原token重试幂等；未确认成功不宣称保存。token仅在本次进程内保留30分钟，重载后明确失效。
+- 严格校验未知字段、路径型编号、未知伙伴、引用、重复色/编号、角色数量、长度与活行为上限；不接受隐藏兴趣/采访/聊天/Hana身份。颜色按底/主/点归一；旧档超量活行为、空壳色及既有捏人草稿显式提示，不删除旧草稿。宿主附加context在注册包装层分离，不回显，不放宽业务白名单。
+- 命令：`node --check index.js`；`node --check lib/personality-tool.js`；`node --test tests/personality-tool.test.js tests/persona-review.test.js tests/palette.test.js tests/load.test.js`；`git diff --check`。最终相关4文件 **77/77通过，0失败、取消、跳过**；语法与diff通过。未全量。
+- 覆盖读/预览零写入、局部修改、保护其他字段与其他伙伴、历史快照、重复/并发apply、版本与同版本指纹冲突、后台无关写盘推进版本后的幂等、过期/跨伙伴/无确认、静默截断拒绝、任意色序、写失败保留token、已写后抛错重查、回读不一致和宿主context分离。真实云构建stripDevOnly仅在临时副本运行，证明正式注册与工具暴露声明保留、调试入口及外部备份写权限仍剥离；不冒称完整打包/发布验收。
+- 交叉审查后补齐幂等版本口径、色序和生效提示。正式reload成功，宿主目录tool_help可发现完整工具名；实机初读曾因宿主附加context被拒，针对该原因修复并复跑上述77项，重新reload后read→preview→apply成功。指定伙伴性格按已确认范围保存，回包verified=true；同token再次apply返回alreadyApplied=true且版本不增加。未调用真实模型，聊天自然度待观察。版本、README、简介未变，未上传。
+
 ## 后台只读用量查询（2026-10-22）
 
 - 新增 `chahuahui_usage_query`，只在显式调用时经 `ctx.bus.request("usage:list", filter)` 查公开宿主账本。默认最近1小时、`attributionKind=plugin`、最多100条，可按带时区时间、宿主归因伙伴、provider/model、状态筛选；范围最多7天、单次最多200条。没有分页入参契约，不伪造翻页；有游标或达到上限均标部分统计。

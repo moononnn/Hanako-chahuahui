@@ -78,6 +78,27 @@ test("用量查询工具注册失败不能拖垮整个应用", async () => {
   assert.ok(errors.some((line) => line.includes("用量查询工具注册失败")));
 });
 
+test("正式性格工具可注册，注册失败也不拖垮路由装载", async () => {
+  const { apply } = await import("../index.js");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chahuahui-personality-register-"));
+  const tools = [];
+  const errors = [];
+  let routes = 0;
+  const ctx = {
+    dataDir: dir,
+    logger: { info() {}, warn() {}, error(value) { errors.push(value); } },
+    bus: { request: async () => ({ agents: [] }), subscribe: () => () => {} },
+    inputBanner: { set() {}, dismiss() {} },
+    routes: { register() { routes++; } },
+    tools: { register(tool) { tools.push(tool.name); if (tool.name === "chahuahui_personality") throw new Error("registration denied"); } },
+    resources: { read: async () => ({ content: "" }) },
+  };
+  assert.doesNotThrow(() => apply(ctx));
+  assert.ok(tools.includes("chahuahui_personality"));
+  assert.ok(errors.some((line) => line.includes("性格档案工具注册失败")));
+  assert.equal(routes, 1);
+});
+
 test("内测入口必须包在 DEV_TOOLS 开关里（本地验收要用、发布版不许开）", () => {
   const src = fs.readFileSync(new URL("../index.js", import.meta.url), "utf8");
   // 这些口子能触发模型调用或后台写盘，发布副本构建时 DEV_TOOLS 置 false，整面关掉

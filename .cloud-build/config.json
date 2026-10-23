@@ -97,11 +97,6 @@
     "replacements": [
       {
         "file": "manifest.json",
-        "from": "    \"app/tools.expose-to-model\",",
-        "to": ""
-      },
-      {
-        "file": "manifest.json",
         "from": "    \"app/resources.write\",",
         "to": ""
       },
