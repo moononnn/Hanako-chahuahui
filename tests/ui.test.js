@@ -985,7 +985,9 @@ test("起跑线：自动量那边的痕迹，也能自己定从哪儿算，只�
   assert.match(app, /&& !\(reasonAllowed && reason && reason\.kind !== "interest"\)/, "非兴趣那几种由头不带兴趣素材，也不消耗种子和发现");
   assert.match(app, /const reasonAllowed = kind === "proactive"\s+&& !exception\s+&& !String\(todoNudge \?\? ""\)\.trim\(\)\s+&& !followup\s+&& !wakeEcho\s+&& !greetingOnly/u, "待办、跟进、回声、夜间例外这一轮不启用由头，低信号放行也不会跟着误开");
   assert.match(app, /const introducedText = introducedTextFrom\(threadRows\)/, "已经介绍过什么只认实际送出的正文");
-  assert.match(app, /const reasonResolved = enrichReasonContext\(reasonAllowed \? reason : null, \{ sceneEcho, workfeedText, sentTexts: recentAsks \}\)/, "由头凭据在出站那一步才拼全，且只在真正用得上的那一轮拼");
+  // 公共事件（2026-10-24）：节日与天气那两种由头不走 enrichReasonContext，
+  // 它手上的事实是拾光记摊的事件，让凭据重拼一遍会把事实换掉。
+  assert.match(app, /const reasonResolved = publicEvent\s+\? \{ reason: publicEvent\.reason, dropped: false \}\s+: enrichReasonContext\(reasonAllowed \? reason : null, \{ sceneEcho, workfeedText, sentTexts: recentAsks \}\)/, "由头凭据在出站那一步才拼全，且只在真正用得上的那一轮拼；公共事件不经重拼");
   assert.match(app, /isLowSignalProactive\(text, \{ reason: sendReason \}\)/, "低信号那一关由 compose 按由头种类放行");
   assert.match(app, /const proactiveContext = followupContext/u, "由头种类记在已有的 proactiveContext 里，不另立 schema");
   assert.match(app, /reason: "reason-context-empty", preserveIntent: true/, "由头缺凭据不算时机不合适，暂存意图得留着");
