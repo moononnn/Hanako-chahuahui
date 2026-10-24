@@ -223,6 +223,24 @@
         </article>
         <article class="setting-card compact">
           <div class="setting-copy">
+            <h3>节日祝福</h3>
+            <p id="festival-copy">节日那天，伙伴会主动来说一句。</p>
+          </div>
+          <button class="switch" id="festival-switch" type="button" role="switch" aria-checked="false">
+            <span class="track"><span></span></span><span class="switch-label">关闭</span>
+          </button>
+        </article>
+        <article class="setting-card compact">
+          <div class="setting-copy">
+            <h3>天气提醒</h3>
+            <p id="weather-alert-copy">天气要变的时候，由一位伙伴提你一句。</p>
+          </div>
+          <button class="switch" id="weather-alert-switch" type="button" role="switch" aria-checked="false">
+            <span class="track"><span></span></span><span class="switch-label">关闭</span>
+          </button>
+        </article>
+        <article class="setting-card compact">
+          <div class="setting-copy">
             <h3>Hana 主对话近况</h3>
             <p id="workfeed-copy">打开后，伙伴可以在合适时参考你和伙伴在 Hana 主对话框里最近聊过的事。关掉就不再收集，已经收的也不再使用。</p>
           </div>
@@ -876,6 +894,28 @@
       document.getElementById("daybook-copy").textContent = daybookInstalled
         ? "打开后，伙伴会知道今天是什么日子、窗外什么天气，还有你们最近过下来的日子。"
         : "需要先装上「拾光记」应用，这一项才有得开。";
+      // 节日与天气都从拾光记读：没装就无从认起，今日情境没开也不会去读。
+      // 两段联动同一把闸，免得开了却在后台一直读不到东西。
+      const immersionReady = daybookInstalled && Boolean(globalSettings.daybookEnabled);
+      for (const [switchId, copyId, field, hintOn] of [
+        ["festival-switch", "festival-copy", "festivalGreetingEnabled",
+          "节日那天，伙伴会主动来说一句。只在你允许主动来找的伙伴里说，一人一条，各按各的性格。"],
+        ["weather-alert-switch", "weather-alert-copy", "weatherAlertEnabled",
+          "天气要变的时候，由一位伙伴提你一句。按亲密度挑一位，别的伙伴不重复。"],
+      ]) {
+        const button = document.getElementById(switchId);
+        const on = globalSettings[field] !== false;
+        const live = on && immersionReady;
+        button.classList.toggle("on", live);
+        button.disabled = !immersionReady;
+        button.setAttribute("aria-checked", String(live));
+        button.querySelector(".switch-label").textContent = !daybookInstalled
+          ? "未安装"
+          : immersionReady ? (on ? "打开" : "关闭") : "先开今日情境";
+        document.getElementById(copyId).textContent = daybookInstalled
+          ? hintOn
+          : "需要先装上「拾光记」应用，这一项才有得开。";
+      }
       const workfeedSwitch = document.getElementById("workfeed-switch");
       const workfeedOn = globalSettings.workfeedEnabled !== false;
       workfeedSwitch.classList.toggle("on", workfeedOn);
@@ -2048,6 +2088,18 @@
       const next = !Boolean(globalSettings.daybookEnabled);
       if (await saveGlobal({ daybookEnabled: next }, next ? "伙伴以后会知道拾光记里的今天了" : "拾光记今日情境已关闭")) paintGlobal();
     });
+    // 节日与天气：跟今日情境同一把闸，没装或没开就不让点。
+    for (const [switchId, field, onSay, offSay] of [
+      ["festival-switch", "festivalGreetingEnabled", "节日那天伙伴会来说一句", "已关闭，节日不再主动开口"],
+      ["weather-alert-switch", "weatherAlertEnabled", "天气要变时会有伙伴提你一句", "已关闭，天气不再主动开口"],
+    ]) {
+      document.getElementById(switchId).addEventListener("click", async () => {
+        if (!daybookInstalled) return say("先装上拾光记，这一项才能开", "err");
+        if (!globalSettings.daybookEnabled) return say("先把上面的「拾光记今日情境」打开", "err");
+        const next = globalSettings[field] === false;
+        if (await saveGlobal({ [field]: next }, next ? onSay : offSay)) paintGlobal();
+      });
+    }
     document.getElementById("workfeed-switch").addEventListener("click", async () => {
       const next = globalSettings.workfeedEnabled === false;
       if (await saveGlobal({ workfeedEnabled: next }, next ? "伙伴又能参考 Hana 主对话近况了" : "已关闭，伙伴不再参考 Hana 主对话近况")) paintGlobal();

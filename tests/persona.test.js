@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { extractDialectBlock, personaSeedText, renderPersona, readPersonaUsage, PERSONA_BUDGET } from "../lib/persona.js";
+import { extractDialectBlock, personaSeedText, pickMemoryNow, renderPersona, readPersonaUsage, PERSONA_BUDGET } from "../lib/persona.js";
 
 test("取料：identity 是正主，没有就往下退到自我介绍、对外那份、钉选", () => {
   assert.equal(personaSeedText({ identity: "我是 X" }).key, "identity");
@@ -25,7 +25,7 @@ test("方言口吻从 AGENTS.md 里单独捞，只取带标记那块，工作规
   assert.equal(extractDialectBlock(null), null);
 });
 
-test("对话用的参考段落：人格、说话口吻、钉选、记忆、经验；自我介绍与对外自述不进", () => {
+test("对话用的参考段落：人格、说话口吻、钉选、记忆、近况、经验；自我介绍与对外自述不进", () => {
   const text = renderPersona({
     files: {
       identity: "人格",
@@ -34,6 +34,7 @@ test("对话用的参考段落：人格、说话口吻、钉选、记忆、经�
       public: "公开",
       pinned: "钉选",
       facts: "记忆",
+      now: "近况",
       experience: "经验",
     },
   });
@@ -41,6 +42,7 @@ test("对话用的参考段落：人格、说话口吻、钉选、记忆、经�
   assert.match(text, /【说话口吻】/);
   assert.match(text, /【钉选记忆】/);
   assert.match(text, /【记忆】/);
+  assert.match(text, /【近况】/);
   assert.match(text, /【经验】/);
   assert.doesNotMatch(text, /介绍|公开/, "自我介绍和对外自述不往对话提示词里塞，只给性格初稿用");
 });
@@ -88,7 +90,8 @@ function fakeCtx(files) {
   return {
     resources: {
       read: async ({ path: p }) => {
-        const key = Object.keys(files).find((k) => p.endsWith(k.replace(/\\/g, "/")));
+        const norm = String(p).replace(/\\/g, "/");
+        const key = Object.keys(files).find((k) => norm.endsWith(k.replace(/\\/g, "/")));
         if (!key) return { error: "not found" };
         return { content: files[key] };
       },
@@ -133,8 +136,54 @@ test("用量盘点：没写的算空、读不到算读不到，不当成超了",
   assert.equal(empty.status, "empty");
   assert.equal(empty.dropped, 0);
   // AGENTS.md 压根不存在时方言读不到，但其余照样盘得出来
-  assert.equal(usage.files.length, 7);
+  assert.equal(usage.files.length, 8);
   assert.equal(usage.files.filter((row) => row.status === "trimmed").length, 0);
+});
+
+test("今日与长期：重要事实和本周流水账不跟着进闲聊", () => {
+  const raw = [
+    "## 重要事实",
+    "她是谁的那一大段。",
+    "",
+    "## 今天",
+    "- 上午在弄长截图",
+    "- 傍晚在改茶话会",
+    "",
+    "## 本周早些时候",
+    "### 2026-10-17",
+    "那天的一串流水账。",
+    "",
+    "## 长期情况",
+    "她长期关注个性化陪伴。",
+  ].join("\n");
+  const picked = pickMemoryNow(raw);
+  assert.match(picked, /## 今天\n- 上午在弄长截图/);
+  assert.match(picked, /## 长期情况\n她长期关注个性化陪伴/);
+  assert.doesNotMatch(picked, /重要事实|她是谁的那一大段/);
+  assert.doesNotMatch(picked, /本周早些时候|2026-10-17|流水账/, "一周的口水账不进闲聊");
+});
+
+test("今日与长期：哪一节写长了就各切各的，不把长远那节整段挤掉", () => {
+  const raw = `## 今天\n${"今".repeat(50)}\n## 长期情况\n${"远".repeat(50)}`;
+  const picked = pickMemoryNow(raw, { perSection: 20 });
+  assert.match(picked, /今{20}\n…（后略）/);
+  assert.match(picked, /远{20}\n…（后略）/);
+  assert.doesNotMatch(picked, /今{21}/);
+});
+
+test("今日与长期：文件不在、格式没认出来时老实返回空", () => {
+  assert.equal(pickMemoryNow(null), "");
+  assert.equal(pickMemoryNow("   "), "");
+  assert.equal(pickMemoryNow("没标题的一段话"), "");
+});
+
+test("用量盘点：近况只算真正进提示词那两节的长度", async () => {
+  const raw = ["## 重要事实", "事".repeat(500), "## 今天", "今".repeat(40), "## 长期情况", "远".repeat(40)].join("\n");
+  const usage = await readPersonaUsage(fakeCtx({ "memory/memory.md": raw }), { agentsRoot: "/agents", agentId: "hanako" });
+  const row = usage.files.find((item) => item.key === "now");
+  assert.equal(row.chars, pickMemoryNow(raw).length);
+  assert.ok(row.chars < 200, "重要事实不算在这份账上");
+  assert.equal(row.status, "ok");
 });
 
 test("用量盘点：编号不合法直接空盘，不去拼路径", async () => {

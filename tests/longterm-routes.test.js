@@ -94,8 +94,10 @@ const NOISE_WORDS = [
 ];
 
 function noiseEntries() {
+  //  noises 用 event，不用 symbol：symbol（专属称呼、共用栗、暗号）从 2026-10-24 起有恒驻特权，
+  // 不管这轮聊什么都占上两格。拿它当「不该出现的无关条目」，测的就不再是相关度而是恒驻层了。
   return NOISE_WORDS.map((word) => ({
-    kind: "symbol",
+    kind: "event",
     title: word,
     text: `关于${word}的一件旧事，细节已经记不清了。`,
     keys: [word],

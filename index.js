@@ -334,7 +334,8 @@ import {
   renderActionLine,
   renderMyActionLine,
 } from "./lib/actions.js";
-import { SLEEP_SHAPE, baseHoursFor, dozingNow, isSleepSet, parseSleep, sleepSpec, sleepWindows } from "./lib/sleep.js";
+import { SLEEP_SHAPE, baseHoursFor, dozingNow, hoursToday, isSleepSet, parseSleep, sleepSpec, sleepWindows } from "./lib/sleep.js";
+import { moodBrief } from "./lib/mood-daily.js";
 import { DOZE_SLOWDOWN, mergeDueAt, planReply } from "./lib/reply.js";
 import { advancePhone } from "./lib/phone.js";
 import { recallEligibility, shouldCancelScheduledReply } from "./lib/recall.js";
@@ -513,6 +514,21 @@ export function apply(ctx) {
   const diagnostics = createDiagnostics(ctx.dataDir);
   const videoUnderstanding = createVideoUnderstanding(ctx, { diagnostics });
   const store = createStore(ctx.dataDir);
+
+  /**
+   * 她今天大致什么样子（心情日盘）。只用在主动消息的背景位。
+   * 算不出来就当没有：心情不该把主动那条消息拖垮。
+   */
+  const moodLineFor = (agentId, now = new Date()) => {
+    try {
+      const settings = store.getPartnerSettings(agentId);
+      const day = store.getTodayMood(agentId, { now, sleepHours: hoursToday(settings?.sleep, now) });
+      return moodBrief(day);
+    } catch {
+      return "";
+    }
+  };
+
   try { registerPersonalityTool(ctx, { store, listPartners }); }
   catch { ctx.logger?.error?.("[chahuahui] 性格档案工具注册失败，其余功能继续装载"); }
   // 凭据仅供B站内部请求，公开状态不带凭据，且不进入设置、诊断或模型上下文。
@@ -2337,9 +2353,11 @@ export function apply(ctx) {
   }
 
   /** 中间层：滚出窗口的段落压成一段摘要，靠 rolledThroughId 保证不重压。 */
-  async function maybeRollup(agentId) {
+  async function maybeRollup(agentId, { force = false } = {}) {
     const retryKey = `${agentId}:rollup`;
-    if (Date.now() < (memoryRetryAt.get(retryKey) ?? 0)) return { rolled: false, reason: "backoff" };
+    // 后台撞了坏结果就退避五分钟，不慌着反复烧钱；她亲手点「整理」不算退避：
+    // 按钮按下去没反应，她会以为坏了，而这里确实没在干活。
+    if (!force && Date.now() < (memoryRetryAt.get(retryKey) ?? 0)) return { rolled: false, reason: "backoff" };
     const pending = store.pendingMessages(agentId);
     const conversational = conversationMessages(pending);
     const plan = planRollup(conversational, { ...DEFAULT_CONTEXT, ...(store.getPref(agentId).context ?? {}) });
@@ -2694,7 +2712,7 @@ export function apply(ctx) {
               sleepStart,
               stickerText,
             })
-          : proactiveSpec({ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, video: shareableVideo, news: shareableNews, videoLoginNotice, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, morningFirst: morningFirstScene, askBudgetSpent: askSpent, reason: sendReason, introducedText });
+          : proactiveSpec({ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, video: shareableVideo, news: shareableNews, videoLoginNotice, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, morningFirst: morningFirstScene, askBudgetSpent: askSpent, reason: sendReason, introducedText, moodText: moodLineFor(agentId) });
 
     let raw = "";
     try {
@@ -5084,9 +5102,8 @@ export function apply(ctx) {
     await loadUserName();
     const startedAt = Date.now();
     // 先把上次没看清的图补上：ta 这会儿要回话，得真看见那张图，而不是照着「没能看清」猜。
-    if (await backfillVisionNote(agentId, store.pendingMessages(agentId))) {
-      // 补完要重取一次，否则这轮上下文里还是那份没有说明的旧消息
-    }
+    // 补完再取上下文：下面 selectReplyContext 走的是补过之后的账，不会拿到那份没说明的旧消息。
+    await backfillVisionNote(agentId, store.pendingMessages(agentId));
     signal?.throwIfAborted();
     // 近期原话不跟摘要水位绑在一起；失败的摘要不能把两者之间的往来遮掉。
     const windowed = selectReplyContext(store.getThread(agentId).messages.filter((row) => row?.id !== excludeMessageId));
@@ -5325,6 +5342,8 @@ export function apply(ctx) {
       daybookText,
       todoDoneText,
       workfeedText,
+      // 心情日盘：一天一个底子，只作背景，不写在脸上。
+      moodText: moodLineFor(agentId),
       searchText: chatSearch.context,
       // 她这一轮递了一个视频过来：材料摆在她那句话旁边。
       videoText,
@@ -7165,6 +7184,7 @@ export function apply(ctx) {
         passText: "",
         note,
         teaseText: buildTeaseText({ stage: merged.stage }),
+        moodText: moodLineFor(agentId),
         userName: USER_NAME,
       });
       const replies = [];
@@ -8577,7 +8597,7 @@ export function apply(ctx) {
       app.post("/memory/:agentId/tidy", async (c) => {
         const agentId = c.req.param("agentId");
         try {
-          const rolled = await queueMemoryJob(agentId, async () => maybeRollup(agentId));
+          const rolled = await queueMemoryJob(agentId, async () => maybeRollup(agentId, { force: true }));
           const profile = await queueMemoryJob(agentId, async () =>
             maybeRefreshProfile(agentId, { force: true }),
           );

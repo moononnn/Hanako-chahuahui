@@ -79,3 +79,28 @@ test("还没戴过徽章的 ta：门槛降到「现在就定一个」，并说�
   assert.doesNotMatch(fresh, /你现在佩戴的是/, "没戴过就不该说有佩戴结果");
 });
 
+
+test("心情徽章在库里，能走隐藏标记挂出来", () => {
+  const ids = COMMON_BADGES.map((row) => row.id);
+  for (const id of ["blue", "unspoken", "weary"]) assert.equal(ids.includes(id), true, `${id} 不在徽章表里`);
+  for (const label of ["有点闷", "不想说话", "有点累"]) {
+    const parsed = parseBadgeMarker(`今天不想多说\n[徽章:${label}]`);
+    assert.equal(parsed.found, true);
+    assert.equal(badgeText(parsed.badge), label);
+    assert.equal(parsed.before, "今天不想多说");
+  }
+});
+
+test("心情徽章被标出来了，兜底不会自动推一个上去", () => {
+  const moodOnes = COMMON_BADGES.filter((row) => row.mood === true).map((row) => row.id);
+  assert.deepEqual(moodOnes.sort(), ["blue", "unspoken", "weary"]);
+  // 兜底只认作息和手边有没有手机，不许拿「有点闷」冒充 ta 自己的状态
+  const fallback = fallbackBadge({ sleeping: false, unread: 0, lastMessage: null, hasHistory: true });
+  assert.equal(moodOnes.includes(fallback.id), false);
+});
+
+test("徽章说明里写明心情不必挂，按性子来", () => {
+  const guide = badgeGuide({ current: { type: "common", id: "blue" } });
+  assert.match(guide, /不必挂/);
+  assert.match(guide, /按你自己的性子/);
+});

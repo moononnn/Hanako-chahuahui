@@ -71,7 +71,10 @@ test("没查到与被拦下：给伙伴的是人话，不是内部状态码", ()
 
 test("接线：聊天回复这一路真的把工具交给了模型", () => {
   const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-  assert.match(source, /tools: offerSearchTool \? \[SEARCH_TOOL\] : null/);
-  assert.match(source, /executeTool: offerSearchTool \? webSearchTool : null/);
+  // 工具不止搜索一个了：她手边真有视频时，读视频的那个也一起给，所以走数组，有几个给几个。
+  assert.match(source, /if \(offerSearchTool\) chatTools\.push\(SEARCH_TOOL\)/);
+  assert.match(source, /if \(videoShelf\.length\) chatTools\.push\(READ_VIDEO_TOOL\)/, "没东西可点开时不给读视频工具");
+  assert.match(source, /tools: chatTools\.length \? chatTools : null/, "空数组不发，发的是真手上有的那几个");
+  assert.match(source, /executeTool: runChatTool/);
   assert.match(source, /createWebSearchTool\(\{ agentId, partnerName/);
 });

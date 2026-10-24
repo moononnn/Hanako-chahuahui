@@ -60,7 +60,7 @@ test("ta 回话前先把上次没看清的图补上", () => {
   // 补不上不阻断这一轮
   assert.match(app, /diagnostics\(\{ event: "vision\.backfill\.failed"/);
   // 补完要重取上下文，否则这轮拿的还是那份没说明的旧消息
-  assert.match(app, /if \(await backfillVisionNote\(agentId, store\.pendingMessages\(agentId\)\)\) \{[\s\S]{0,200}?\n\s*\}\s*\n\s*const pending = store\.pendingMessages\(agentId\)/);
+  assert.match(app, /await backfillVisionNote\(agentId, store\.pendingMessages\(agentId\)\);[\s\S]{0,300}?const windowed = selectReplyContext\(/);
 });
 
 test("模型不可用：消息照落、保持未读、只弹一条提示", () => {
@@ -967,7 +967,7 @@ test("起跑线：自动量那边的痕迹，也能自己定从哪儿算，只�
   assert.doesNotMatch(app, /session:list/, "量会话那条路 v2 应用走不通，别写");
   assert.match(app, /note: relationshipNote\(effectiveRelationship\(knowing\), knowing\.relationSeed\)/, "回复那一句也要带上起跑线");
   // 2026-10-20：主动拼装多带了一路新闻素材（news），意图不变：只带当前消息类型真正用得上的那一份。
-  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, video: shareableVideo, news: shareableNews, videoLoginNotice, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, morningFirst: morningFirstScene, askBudgetSpent: askSpent, reason: sendReason, introducedText \}\)/, "主动消息只带与当前消息类型相符的兴趣发现，同时带上本人人格、电脑那边的近况、「纯招呼」标志、晨间首次这层、关系式由头与已经介绍过什么");
+  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, video: shareableVideo, news: shareableNews, videoLoginNotice, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, morningFirst: morningFirstScene, askBudgetSpent: askSpent, reason: sendReason, introducedText, moodText: moodLineFor\(agentId\) \}\)/, "主动消息只带与当前消息类型相符的兴趣发现，同时带上本人人格、电脑那边的近况、「纯招呼」标志、晨间首次这层、关系式由头、已经介绍过什么和当日心情");
   assert.match(app, /const morningFirstScene = morningFirst && isFirstProactiveOfLifeDay\(store\.getProactiveState\(agentId\)\.lastSentAt, now\)/, "晨间首次在出站按当前已发送时刻复核一次");
   assert.match(app, /const historyWindow = splitForContext\(conversationMessages\(threadRows\)\)\.recent/, "主动开口复用同一份上下文预算");
   assert.match(app, /isFirstProactiveOfLifeDay\(state\.lastSentAt, now\)/, "首条联系按四点生活日计算");

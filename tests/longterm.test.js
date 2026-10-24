@@ -336,3 +336,59 @@ test("source, feedback or result deletion invalidates whole entry without old-ve
   assert.equal(applied.length, 1);
   assert.deepEqual(removeLongtermBySource(mergeLongterm(applied, entries), "u2"), []);
 });
+
+// ── 恒驻层（2026-10-24）────────────────────────────────────────────────
+// symbol 类条目（专属称呼、共用梗、暗号）不该跟 event 一起被检索分数淘汰。
+// 但它也不能白吃检索预算，所以另开一层、另算一份。
+
+const symbol = (text, keys, updatedAt = at) => row({ kind: "symbol", title: text.slice(0, 12), text, keys, updatedAt });
+
+test("恒驻默认关闭：不传参数时 symbol 照样要命中才进来", () => {
+  const entries = normalizeLongterm([
+    symbol("我们之间管这个叫那件事。", ["那件事"]),
+    row(),
+  ]);
+  assert.deepEqual(selectLongterm(entries, "雨夜捡猫"), selectLongterm(entries, "雨夜捡猫", { residentEntries: 0 }));
+  assert.equal(selectLongterm(entries, "雨夜捡猫").some((e) => e.kind === "symbol"), false);
+});
+
+test("开了恒驻，symbol 不命中也会在", () => {
+  const entries = normalizeLongterm([
+    symbol("她管我叫花宝。", ["花宝"]),
+    row(),
+  ]);
+  const picked = selectLongterm(entries, "雨夜捡猫", { residentEntries: 2 });
+  assert.equal(picked.some((e) => e.kind === "symbol" && e.keys.includes("花宝")), true);
+  assert.equal(picked.some((e) => e.kind === "event"), true, "检索层不能被恒驻挤掉");
+});
+
+test("恒驻另花预算，不占检索层的字符额度", () => {
+  const entries = normalizeLongterm([symbol("她管我叫花宝。", ["花宝"]), row()]);
+  const budget = longtermBlock([entries[1]]).length + 20;
+  const strict = selectLongterm(entries, "雨夜捡猫", { maxChars: budget });
+  assert.equal(strict.some((e) => e.kind === "symbol"), false, "不打开恒驻时 symbol 会被预算挡掉");
+  const withResident = selectLongterm(entries, "雨夜捡猫", { maxChars: budget, residentEntries: 1 });
+  assert.equal(withResident.some((e) => e.kind === "symbol"), true, "恒驻不跟检索抢额度");
+  assert.equal(withResident.some((e) => e.kind === "event"), true);
+});
+
+test("恒驻有上限：按最近更新取前几条，不会把预算全吃光", () => {
+  const entries = normalizeLongterm([
+    symbol("旧的那个梗。", ["旧梗"], "2026-01-01T00:00:00.000Z"),
+    symbol("中的那个梗。", ["中梗"], "2026-06-01T00:00:00.000Z"),
+    symbol("新的那个梗。", ["新梗"], "2026-10-01T00:00:00.000Z"),
+    row(),
+  ]);
+  const picked = selectLongterm(entries, "雨夜捡猫", { residentEntries: 1 });
+  const residents = picked.filter((e) => e.kind === "symbol");
+  assert.equal(residents.length, 1);
+  assert.equal(residents[0].keys.includes("新梗"), true, "取最近更新的那条");
+});
+
+test("恒驻条自己超预算就不进来，不硬塞", () => {
+  const huge = symbol("长".repeat(120), ["长话"], at);
+  const entries = normalizeLongterm([huge, row()]);
+  const picked = selectLongterm(entries, "雨夜捡猫", { residentEntries: 2, residentChars: 10 });
+  assert.equal(picked.some((e) => e.kind === "symbol"), false);
+  assert.equal(picked.some((e) => e.kind === "event"), true);
+});
