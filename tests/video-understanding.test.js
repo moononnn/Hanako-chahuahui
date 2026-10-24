@@ -123,6 +123,9 @@ test("取流/权限/取帧失败均保留原文字材料，不把封面当成功
     assert.equal(out.reason, "text-fallback");
     assert.equal(s.calls.stream.length, 0);
     assert.equal(JSON.stringify(s.calls.logs).includes("private path or signed URL"), false);
+    const denied = s.calls.logs.find(row => row.event === "video.visual.failed" && row.code === "ERR_ACCESS_DENIED");
+    if (denied) assert.equal(denied.stage, "download-decode");
+    if (options.fetchMedia) assert.ok(s.calls.logs.some(row => row.event === "video.visual.unavailable" && row.stage === "playurl"));
   }
 });
 

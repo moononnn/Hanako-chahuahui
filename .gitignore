@@ -15,6 +15,7 @@ tests/taste-probe-context.test.js
 
 # 本机对话调试后台：实现、界面和用例均不公开
 lib/local-dev.js
+lib/dev-video-diagnose.js
 lib/dev-thread-range.js
 lib/dev-thread-range-store.js
 lib/dev-thread-range-backup.js

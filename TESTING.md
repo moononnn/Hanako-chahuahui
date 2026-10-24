@@ -1,5 +1,30 @@
 # TESTING · 茶话会
 
+## 视频画面理解：宿主可执行候选上限（2026-10-24）
+
+- 修复前基线：App v0.11.0；同一失败视频 `BV1VthX6XE2E` 在真实App首阶段返回 `APP_EXECUTABLE_REQUEST_INVALID`，原文 `resolveExecutable requires 1 to 64 command names or absolute paths.`。当前App环境候选91项，本机普通进程可算出136项，不能混称实测数字。旧日志在模型request前只剩笼统失败码。
+- 修复：候选去重后按不超过64项分批，命中即停，不截断后面的安装位置；各批共用原取帧60秒截止。定位失败保留安全错误码，去掉一律归咎授权的文案；正式编排增加白名单阶段日志，不落原异常、地址、帧字节或凭据。
+- 局部命令：`node --test tests/video-frame-resolver.test.js tests/video-frame-reader.test.js tests/video-understanding.test.js tests/load.test.js` → **54/54**；`node --test --test-name-pattern='公开源码' tests/reply-rules-compact.test.js` → **1/1**；语法与diff检查通过，非全量。新增5例覆盖真实超64候选、第三批才命中、去重/命中即停、共享时限、权限错误不吞。入口最后调整后再次load **6/6**与源码守卫 **1/1**通过，不重复累加。
+- 中途自检：诊断钩子位置一度影响仅关闭DEV的源码守卫；一次临时移动又把await放进同步apply，装载检查立即失败，未重载该错误版本。已将顶层导入放回既有钩子区并加文件存在性检查，最终语法、装载和源码守卫均通过。没有用失败命令后面的退出0冒充通过。
+- 修复后同场景：真实App取帧 **3658ms**，9图（1封面+8正片）共 **125317B**；正片采样 **13.5 / 26 / 26.5 / 27 / 27.5 / 28 / 28.5 / 40.5秒**；局部连续clip **26～28.5秒、2fps**。未把跨片采样混进连续段。
+- 真实识图只发1笔，沿用当前已验证的 **minimax / MiniMax-M3.1-Flash-Preview**，9图，maxTokens3600，不换模型不重试。08:13:46.857 request → 08:14:30.314 `video.visual.ready`，事实说明 **597字**；以正式缓存文件回查确认status=ok、model/图数/采样/clip一致。同步诊断调用30秒RPC先超时，不能因此断言后台识图失败或再次重发。
+- 缓存复验：同视频同模型 **127ms**，`attempted:false`、`reason:cache`，复用08:14:30.312的同一visual，没有新识图请求。没有伪造`cached:true`字段（正式结果以reason表达）。
+- 独立只读复核无阻断。正式reload已执行；本次只证明该视频的真App解码→识图→缓存闭环，不证明全天自动分享自然度，也**未补发链接/看视频工具漏接画面增强**。不全量、不发布，版本/README/简介不动。
+
+## 公共事件：节日祝福与天气提醒主动开口（2026-10-24）
+
+- 范围：新增 `lib/public-events.js`（读拾光记 `alerts` 契约、认节日、挑天气事件、按亲密度加权分配负责人、当天账本）；`proactiveSpec` 加节日/天气两条成文引导；`gateCheck` 加 `freeOfQuota`；主循环把公共事件插在到点待办/回声/跟进/晚安/新闻视频之后。**只跑假宿主与假模型，未调用真实模型，不声称这两个功能在实机聊天里的自然度已验收。**
+- 语法：`node --check index.js lib/public-events.js lib/compose.js lib/proactive.js lib/proactive-reasons.js lib/daybook.js`，6 份通过。
+- 定向：`tests/public-events.test.js` **17/17 通过**（读快照的失败路径、节日一人一条与跳日重算、天气挑件与过点不报、抽签定死与换事重抽、亲密度加权 600 轮分布、别人记账记不上）；`tests/compose.test.js` **46/46 通过**（新增 4 条：节日不追问不套贺词、清晨首条不降级成可选背景、天气不念预报不客服腔、公共事件占位时种子让位）；`tests/load.test.js` 装载守卫通过。
+- 全量：`node --test --test-concurrency=1 "tests/*.test.js"` → **2308 条，2295 通过，9 失败，4 跳过**。
+- 这 9 条与本版无关，逐条核实过：
+  - **7 条是上一个提交（6731fc5, 2026-10-23）留下的测试债**：`dev-thread-range.test.js` 4 条（含 `公开包不声明本机模型工具权限`——个性工具改成不走剥离后，manifest 能力断言未同步）、`longterm-routes.test.js` 2 条、`search-tool.test.js` 1 条（仍断言旧写法 `tools: offerSearchTool ? [SEARCH_TOOL] : null`，而源码早已改成 `chatTools.push`）。
+  - **1 条**是 `ui.test.js` 的 `ta 回话前先把上次没看清的图补上`，断言窗口里多了 `signal?.throwIfAborted()`，也是上一提交带来的。
+  - **1 条** `reply-rules-compact.test.js` 的 `公开源码即使只关闭DEV_TOOLS` 是**另一个工作窗口正在改的视频诊断钩子**引起的：`if (DEV_TOOLS) videoDiagnosisHooks = await import(...)` 是顶层 await，不能交给 `new Function`。那个块不是本版改的，归视频那条线自己收。
+- 本版顺带修的时间炸弹：`tests/video-sharing.test.js` 3 处 `selectVideoShares` 没传 `now`，用真实当前时间对抗 2026-10-16 的账本，隔八天就滑出保留窗口。已改为显式传入。
+- 未做：**未重载**。工作树里同时躺着另一个窗口正在改的视频理解链，现在重载会把半成品带进运行时；等那条线收尾后一起重载，再做实机验收。
+- 未做：设置页还没有这三个开关（`publicEventsEnabled` / `festivalGreetingEnabled` / `weatherAlertEnabled`）的界面，后端已经接受写入。
+
 ## 近期上下文与连续插话（2026-10-23）
 
 - 范围：近期上下文选择/连续用户消息合并、取消与持续插话、实时/排期/恢复防重、后台摘要与日账退避。只使用假宿主及假模型跑真实App路由，不改生产聊天，不声称真实模型理解效果已验收。

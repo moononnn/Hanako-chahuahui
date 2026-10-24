@@ -42,6 +42,7 @@
       "tests/reply-rule-probe.test.js",
       "tests/taste-probe-context.test.js",
       "lib/local-dev.js",
+      "lib/dev-video-diagnose.js",
       "lib/dev-thread-range.js",
       "lib/dev-thread-range-store.js",
       "lib/dev-thread-range-backup.js",

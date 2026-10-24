@@ -491,6 +491,10 @@ const DEV_TOOLS = true;
 // CHF-20261012-01~04：仅本地普通回复试点；设为空字符串即可回旧版。
 compactReplyPilotId = DEV_TOOLS ? "hanako" : "";
 let localDevHooks = null;
+let videoDiagnosisHooks = null;
+if (DEV_TOOLS && fs.existsSync(new URL("./lib/dev-video-diagnose.js", import.meta.url))) {
+  videoDiagnosisHooks = await import("./lib/dev-video-diagnose.js");
+}
 if (DEV_TOOLS && fs.existsSync(new URL("./lib/local-dev.js", import.meta.url))) {
   localDevHooks = await import("./lib/local-dev.js");
 }
@@ -10039,6 +10043,7 @@ export function apply(ctx) {
 
   // __CHAHUAHUI_DEV_ONLY__
   try {
+    if (DEV_TOOLS && videoDiagnosisHooks) videoDiagnosisHooks.registerVideoDiagnosis(ctx, { store, understanding: videoUnderstanding });
     if (DEV_TOOLS && localDevHooks) localDevHooks.mount({
       store, ctx, diagnostics, turns, pendingReplies, deliveringReplies,
       autonomousLanes, voiceGenerations, queueMemoryJob, voiceFile, threadRebuild,
