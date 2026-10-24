@@ -1,5 +1,16 @@
 # TESTING · 茶话会
 
+## 发链接看视频工具：补接画面（2026-10-24）
+
+- 修前基线：实际聊天工具执行器只有collectInboundVideo→packMaterials，没有enhance；同模型缓存中存在画面事实，工具仍回标题档。真路由回归先失败、接入后通过，未用修后成功倒推修前情况。
+- 修复：原始文字缓存与模型隔离的视觉缓存分开；伙伴自行调用时才增强；同一回复的多工具调用及正文重试最多一次新视觉尝试，缓存不占额度；识图未验证或失败回原文字，不换模型；signal中断及时退出旧工具，后续不发新识图或回喂。
+- `node --test --test-timeout=15000 tests/video-tool-visual-routes.test.js`：5/5。覆盖缓存事实进入实际toolResult且零新增识图/取流、未验证配置保留标题、伙伴不调用则零视频网络、同轮A缓存→B新失败→C因预算不取流、正式/turns插话在旧view仍挂起时4秒内重开且旧请求放行后无额外回喂/取流。测试使用临时目录、假网络与假模型，退出统一清理。
+- `node --test --test-timeout=20000 tests/video-tool.test.js tests/video-inbound.test.js tests/video-understanding.test.js tests/load.test.js tests/reply-cancel-model.test.js`：63项，59通过、4既有短链用例跳过、0失败。`node --test --test-name-pattern='公开源码' tests/reply-rules-compact.test.js`：1/1。三组共65通过、4跳过，不重复累加复跑；不是全应用回归。
+- index.js、video-tool.js、本地诊断模块语法及git diff --check通过。独立只读复核本轮接线、预算与中断，无阻断；未声称完整重审旧取帧器。
+- 真实App验收：通过仅本机诊断钩子直接调用实际createReadVideoTool，目标BV1VthX6XE2E，当前伙伴配置，8413ms返回hasVisual=true；工具文本含【她刚给你发了一个视频】、【画面记录】及局部观看/无音轨边界。08:46:02.736后台同时记录video.visual.cache-hit和chat.tool.video：hasVisual=true、visualReason=cache、visualAttempted=false。本次复用早些时候已验证的视觉缓存，没有新增付费识图，也未让模型生成一段真实聊天来验证自然度。
+- 插话测试观测说明：假宿主保存了messages数组引用，后续工具循环追加会反映在首轮记录上；是否回喂以真正发出的模型请求次数及新回合输入为准。断言共两轮、新回合无旧toolResult，不能把旧引用变化误报为多发请求。
+- 已正式reload并完成上述真实工具调用；不改变伙伴是否选择点开的自主权，不扩大短链/番剧支持范围。版本/README/简介未动，未上传。下节“未补链接”是此前取帧修复阶段的范围记录，本节已续修。
+
 ## 视频画面理解：宿主可执行候选上限（2026-10-24）
 
 - 修复前基线：App v0.11.0；同一失败视频 `BV1VthX6XE2E` 在真实App首阶段返回 `APP_EXECUTABLE_REQUEST_INVALID`，原文 `resolveExecutable requires 1 to 64 command names or absolute paths.`。当前App环境候选91项，本机普通进程可算出136项，不能混称实测数字。旧日志在模型request前只剩笼统失败码。
