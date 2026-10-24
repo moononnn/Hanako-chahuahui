@@ -31,6 +31,9 @@ test("工具声明按宿主契约来：有名字、有 url 参数、必填", () 
   // 描述里得说清边界：只认 B 站普通视频，别让人以为番剧也能读。
   assert.match(READ_VIDEO_TOOL.description, /B 站/);
   assert.match(READ_VIDEO_TOOL.description, /番剧/);
+  assert.match(READ_VIDEO_TOOL.description, /识图可用且取帧成功/);
+  assert.match(READ_VIDEO_TOOL.description, /局部连续片段/);
+  assert.match(READ_VIDEO_TOOL.description, /不含音轨.*不代表完整观看/);
 });
 
 test("失败文案不暴露内部步骤", () => {

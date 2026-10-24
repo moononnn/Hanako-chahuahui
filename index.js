@@ -852,9 +852,12 @@ export function apply(ctx) {
    * 2026-10-23 从「回复前自动取材料」改成「伙伴自己调」：
    * 发起权交给 ta，不想看就不调；哪天想起来再调也不晚。
    */
-  function createReadVideoTool({ agentId }) {
+  function createReadVideoTool({ agentId, signal = null }) {
     const fetcher = typeof ctx.network?.fetch === "function" ? ctx.network.fetch.bind(ctx.network) : null;
-    return async ({ name, arguments: args } = {}) => {
+    // 同一回复的多次工具调用与正文重试共用一次新取帧额度；命中缓存不占用。
+    let visualAttemptAvailable = true;
+    const read = async ({ name, arguments: args } = {}) => {
+      signal?.throwIfAborted();
       if (name !== READ_VIDEO_TOOL_NAME) {
         return { isError: true, text: "这个工具不存在。就用手上已有的东西说话。" };
       }
@@ -863,24 +866,49 @@ export function apply(ctx) {
       if (!fetcher) return { isError: true, text: VIDEO_TOOL_EMPTY_TEXT };
       try {
         const login = await videoLogin();
-        // 同一个视频她可能反复提，十分钟内不重复抓一遍。
+        signal?.throwIfAborted();
+        const cookie = login.ok ? login.cookie : "";
+        // 这里只缓存原始文字材料，画面缓存由视频+分P+识图模型的正式键管理。
         const inbound = await cachedInboundVideo(
           `v:${raw.slice(0, 400)}`,
-          () => collectInboundVideo(fetcher, raw, { cookie: login.ok ? login.cookie : "" }),
+          () => collectInboundVideo(fetcher, raw, { cookie }),
         );
+        signal?.throwIfAborted();
         if (!inbound.ok) {
           diagnostics({ event: "chat.tool.video", agentId, ok: false,
             reason: String(inbound.reason ?? "").slice(0, 120), unsupported: inbound.unsupported === true });
           return { isError: true, text: inbound.unsupported ? VIDEO_TOOL_UNSUPPORTED_TEXT : VIDEO_TOOL_EMPTY_TEXT };
         }
+        const enhanced = await videoUnderstanding.enhance(inbound.materials, {
+          vision: effectiveVisionConfig(store.getGlobalSettings().vision, store.getPartnerSettings(agentId).vision),
+          cookie, allowNewRequest: visualAttemptAvailable, canContinue: () => !signal?.aborted,
+        });
+        if (enhanced.attempted) visualAttemptAvailable = false;
+        signal?.throwIfAborted();
+        const materials = enhanced.materials;
         diagnostics({ event: "chat.tool.video", agentId, ok: true,
-          bvid: inbound.materials?.video?.bvid ?? null, readKind: inbound.materials?.readKind ?? null });
+          bvid: materials?.video?.bvid ?? null, readKind: materials?.readKind ?? null,
+          hasVisual: materials?.visual?.status === "ok", visualReason: enhanced.reason,
+          visualAttempted: enhanced.attempted });
         // origin=user：这批东西是她递过来的，不是伙伴自己刷到的。
-        return { isError: false, text: packMaterials(inbound.materials, { origin: "user", maxChars: 2200 }) };
+        return { isError: false, text: packMaterials(materials, { origin: "user", maxChars: 2200 }) };
       } catch (error) {
-        diagnostics({ event: "chat.tool.video", agentId, ok: false, error: describeError(error) });
+        if (signal?.aborted) signal.throwIfAborted();
+        const code = /^[A-Z_]{3,60}$/u.test(String(error?.code ?? "")) ? error.code : "VIDEO_TOOL_FAILED";
+        diagnostics({ event: "chat.tool.video", agentId, ok: false, code });
         return { isError: true, text: VIDEO_TOOL_EMPTY_TEXT };
       }
+    };
+    return async (payload) => {
+      signal?.throwIfAborted();
+      if (!signal) return read(payload);
+      let onAbort;
+      const aborted = new Promise((_, reject) => {
+        onAbort = () => reject(signal.reason ?? new Error("video read aborted"));
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
+      try { return await Promise.race([read(payload), aborted]); }
+      finally { signal.removeEventListener("abort", onAbort); }
     };
   }
 
@@ -5354,7 +5382,7 @@ export function apply(ctx) {
     let generated = null;
     // 这一轮给哪些工具：搜索和读视频各自独立，有几个给几个。
     // 读视频的工具只在「她手边真有视频」时才给：没有可点开的东西时不拿工具吊者 ta。
-    const readVideoTool = createReadVideoTool({ agentId });
+    const readVideoTool = createReadVideoTool({ agentId, signal });
     const chatTools = [];
     if (offerSearchTool) chatTools.push(SEARCH_TOOL);
     if (videoShelf.length) chatTools.push(READ_VIDEO_TOOL);
@@ -10043,7 +10071,7 @@ export function apply(ctx) {
 
   // __CHAHUAHUI_DEV_ONLY__
   try {
-    if (DEV_TOOLS && videoDiagnosisHooks) videoDiagnosisHooks.registerVideoDiagnosis(ctx, { store, understanding: videoUnderstanding });
+    if (DEV_TOOLS && videoDiagnosisHooks) videoDiagnosisHooks.registerVideoDiagnosis(ctx, { store, understanding: videoUnderstanding, createReadVideoTool });
     if (DEV_TOOLS && localDevHooks) localDevHooks.mount({
       store, ctx, diagnostics, turns, pendingReplies, deliveringReplies,
       autonomousLanes, voiceGenerations, queueMemoryJob, voiceFile, threadRebuild,
