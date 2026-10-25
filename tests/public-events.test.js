@@ -101,9 +101,9 @@ test("节日：一人一条，同一天同一节日说过就不再提；不同�
   assert.equal(shouldSendFestival({ festival: "中秋节", day: DAY, agentId: "hanako", state }), true);
   state = noteFestivalSent(state, { festival: "中秋节", day: DAY, agentId: "hanako", at: NOW });
   assert.equal(shouldSendFestival({ festival: "中秋节", day: DAY, agentId: "hanako", state }), false);
-  assert.equal(shouldSendFestival({ festival: "中秋节", day: DAY, agentId: "xiansheng", state }), true, "别人还没说");
-  state = noteFestivalSent(state, { festival: "中秋节", day: DAY, agentId: "xiansheng", at: NOW });
-  assert.deepEqual(state.publicEvents.festival.sent, ["hanako", "xiansheng"]);
+  assert.equal(shouldSendFestival({ festival: "中秋节", day: DAY, agentId: "beta", state }), true, "别人还没说");
+  state = noteFestivalSent(state, { festival: "中秋节", day: DAY, agentId: "beta", at: NOW });
+  assert.deepEqual(state.publicEvents.festival.sent, ["hanako", "beta"]);
 });
 
 test("节日：换一个节日、或跨到第二天，账重新算", () => {
@@ -150,7 +150,7 @@ test("天气：整点那一刻还能提，过了宽限就不再提", () => {
 
 // ── 天气：归谁 ──
 
-const PARTNERS = [{ id: "hanako", name: "小花" }, { id: "xiansheng", name: "星眠" }, { id: "yukina", name: "雪奈" }];
+const PARTNERS = [{ id: "hanako", name: "小花" }, { id: "beta", name: "乙" }, { id: "gamma", name: "丙" }];
 
 test("天气：抽一位负责人，同一天同一件事不再重抽", () => {
   const first = claimWeatherOwner({
@@ -181,11 +181,11 @@ test("天气：换了一件新事、或跨天，重新抽", () => {
 test("天气：亲密度高的那位被抽中的次数明显更多", () => {
   const weights = {
     hanako: intimacyWeight({ familiarity: { turns: 80, activeDays: 30 }, intimacy: { score: 40 } }),
-    xiansheng: intimacyWeight({ familiarity: { turns: 4, activeDays: 2 }, intimacy: { score: 2 } }),
-    yukina: intimacyWeight({ familiarity: { turns: 0, activeDays: 0 }, intimacy: { score: 0 } }),
+    beta: intimacyWeight({ familiarity: { turns: 4, activeDays: 2 }, intimacy: { score: 2 } }),
+    gamma: intimacyWeight({ familiarity: { turns: 0, activeDays: 0 }, intimacy: { score: 0 } }),
   };
-  assert.ok(weights.hanako > weights.xiansheng);
-  assert.ok(weights.xiansheng >= weights.yukina, "垫底的也有地板，只是更低");
+  assert.ok(weights.hanako > weights.beta);
+  assert.ok(weights.beta >= weights.gamma, "垫底的也有地板，只是更低");
 
   let pickHanako = 0;
   const rounds = 600;

@@ -32,17 +32,35 @@ test("模型不可用：不拿别的模型顶嘴，挂提示、慢速重试有�
   assert.match(app, /return \{ ok: false, reason: "unavailable", kind: generated\.kind, generationMs/);
   assert.match(app, /chat\.model\.unavailable/);
   // 实时回合：挂提示、清待答、return，不进五分钟重试
-  assert.match(app, /if \(made\.reason === "unavailable"\) \{[\s\S]{0,700}?attachOfflineNotice\(turn\.agentId, turn\.userMessageId, made\.kind\)[\s\S]{0,300}?return;/);
+  assert.match(app, /if \(made\.reason === "unavailable"\) \{[\s\S]{0,900}?attachOfflineNotice\(turn\.agentId, turn\.userMessageId, made\.kind\)[\s\S]{0,400}?return;/);
   // 排队回复：同一套处理
   assert.match(app, /if \(made\.reason === "unavailable"\) \{[\s\S]{0,400}?attachOfflineNotice\(agentId, target, made\.kind\)/);
   // 提示是挂在那条触发消息上（跟「未读」指同一件事），不是伪造 ta 说的话
   assert.match(app, /async function attachOfflineNotice\(agentId, messageId, kind\)/);
   assert.match(app, /store\.patchMessage\(agentId, target, \{\s*\n\s*notice: \{ code: "MODEL_UNAVAILABLE"/);
-  // 回头看要有上限：45 分钟一次、最多三次
+  // 回头看要有上限：45 分钟一次、最多八次（5 小时限额得跨得过去）
   assert.match(app, /const MODEL_RETRY_DELAY_MS = 45 \* 60 \* 1000;/);
-  assert.match(app, /const MODEL_RETRY_LIMIT = 3;/);
-  assert.match(app, /if \(tries <= MODEL_RETRY_LIMIT\)/);
+  assert.match(app, /const MODEL_RETRY_LIMIT = 8;/);
+  assert.match(app, /const retryScheduled = tries <= MODEL_RETRY_LIMIT;/);
   assert.match(app, /modelRetryCount: tries/);
+});
+
+test("模型没接上就不算已读，排上的回头看不能被清掉，接上了再摘告示", () => {
+  // 2026-10-25 实机：11:42 盖了已读、模型 5 小时限额回不了，12:31 直接发了条 B 站视频，
+  // 中间那句「辛苦做了那么久」悬着没人接。三处都得卡住。
+  //
+  // ① 挂提示就把已读退回去：界面上不能是「已读」加一个字没有。
+  assert.match(app, /notice: \{ code: "MODEL_UNAVAILABLE", kind: kind \|\| "provider", text \},\s*\n\s*modelRetryCount: tries,[\s\S]{0,400}?readAt: null,/);
+  // ② 已经排上「慢速回头看」就不能再一把清掉（清了等于到点无事发生）。
+  assert.match(app, /const retryScheduled = tries <= MODEL_RETRY_LIMIT;/);
+  assert.match(app, /if \(!patched\.retryScheduled\) store\.clearPendingReplyIf\(turn\.agentId, turn\.userMessageId\);/);
+  assert.match(app, /if \(!patched\.retryScheduled\) store\.clearPendingReply\(agentId\);/);
+  assert.doesNotMatch(app, /attachOfflineNotice\(agentId, target, made\.kind\);\s*\n\s*store\.clearPendingReply\(agentId\);/);
+  // ③ 真接上了要把那张过期告示摘掉，否则一直挂着“这会儿说不出话”，已读也永远盖不上。
+  assert.match(app, /function clearOfflineNotice\(agentId, throughId\)/);
+  assert.match(app, /clearOfflineNotice\(agentId, made\.repliedTo \?\? pending\?\.messageId \?\? null\)/);
+  assert.match(app, /clearOfflineNotice\(turn\.agentId, made\.repliedTo \?\? turn\.readTargetId \?\? turn\.userMessageId\)/);
+  assert.match(app, /store\.patchMessage\(agentId, row\.id, \{ notice: null \}\)/);
 });
 
 test("挂着不可用提示的消息不得被「末尾未读就重试」那条兼容逻辑再捡起来", () => {

@@ -29,7 +29,7 @@ test("换一天就换一个运气：一百天里至少出现三种心情", () =>
 
 test("不同伙伴同一天不是同一个心情", () => {
   const now = at("2026-10-24T09:00:00+08:00");
-  const ids = ["hanako", "yumi", "xiansheng", "yukina"];
+  const ids = ["hanako", "alpha", "beta", "gamma"];
   const moods = new Set(ids.map((agentId) => settleDay(null, { now, agentId }).moodId));
   assert.ok(moods.size >= 2, "四个人同一天全是同一个心情，那就不叫各过各的");
 });

@@ -504,7 +504,7 @@ test("登录过期走当前伙伴模型的主动提醒、不混视频、不扣�
   assert.equal(disk(app).getGlobalRuntime().videoLoginNotice.messageId, sent.id);
   assert.equal(disk(app).getVideoBook(AGENT).pending.length, 1);
   const prompt = JSON.stringify(app.models.calls[0].request);
-  assert.match(prompt, /登录已经确认失效/);
+  assert.match(prompt, /登录这一步被挡住了/);
   assert.doesNotMatch(prompt, /你已经读过字幕|没有可用的种子或新发现/);
   assert.equal(app.models.calls[0].request.model, "test-model");
 });

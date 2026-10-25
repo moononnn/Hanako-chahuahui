@@ -44,10 +44,13 @@ import {
   chatModelOptions,
   visionModelOptions,
   resolveModelChoice,
+  setUsageObserver,
   withModelDeadline,
 } from "./lib/model.js";
 import { createStore, createDiagnostics } from "./lib/store.js";
 import { registerUsageQuery } from "./lib/usage-query.js";
+import { collectUsage } from "./lib/usage-stats.js";
+import { recordUsageCall } from "./lib/usage-book.js";
 import { registerPersonalityTool } from "./lib/personality-tool.js";
 import { createFocusCompanion, focusReminderSpec, focusChatText } from "./lib/focus-companion.js";
 import { createInterruptibleComposer, hasNewerUserMessage, isSpeechMessage } from "./lib/turn-window.js";
@@ -512,6 +515,15 @@ export function apply(ctx) {
   try { registerUsageQuery(ctx); }
   catch { ctx.logger?.error?.("[chahuahui] 用量查询工具注册失败，其余功能继续装载"); }
   const diagnostics = createDiagnostics(ctx.dataDir);
+  // 宿主账本只记到「茶话会」这一层，伙伴这一维由我们自己补：
+  // 每次发模型请求都会报一个 requestId 过来，落到 usage-calls.json。
+  setUsageObserver((entry) => {
+    try {
+      recordUsageCall(ctx.dataDir, entry);
+    } catch (error) {
+      diagnostics({ event: "usage.book.write.failed", error: describeError(error) });
+    }
+  });
   const videoUnderstanding = createVideoUnderstanding(ctx, { diagnostics });
   const store = createStore(ctx.dataDir);
 
@@ -644,7 +656,7 @@ export function apply(ctx) {
     if (!isCurrent() || !ownMessageCurrent()) return 'stale';
     const generated = await generateReply(ctx, { systemPrompt, messages,
       diagnostics, maxTokens: 900, catalog, modelRef: choice ? { provider: choice.provider, model: choice.model } : null,
-      retryDelaysMs: [], allowUtilityFallback: false });
+      retryDelaysMs: [], allowUtilityFallback: false, usageTag: { agentId, kind: "chat" } });
     if (!isCurrent() || !ownMessageCurrent()) return 'stale';
     // 这条路径不经过 splitReply，模型照抄历史消息的【日期 时间】前缀没人摘（2026-10-14 实机）。
     const text = stripTimeHeader(cleanVoice(String(generated.text || ''), 'voice'));
@@ -1326,10 +1338,12 @@ export function apply(ctx) {
 
   const ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
   const ATTACHMENT_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
-  // 模型这会儿用不了时，给 ta 回头看的节奏：45 分钟一次、最多三次。
+  // 模型这会儿用不了时，给 ta 回头看的节奏：45 分钟一次、最多八次。
   // 实测（2026-10-02 23:13~23:29）Codex 挂了十六分钟就恢复；原来那条“五分钟重试”是无底洞。
+  // 上限从三次提到八次（2026-10-25）：实测撞上的是订阅的 5 小时限额，三次（两个多小时）
+  // 根本跨不过额度窗口，到点重试完就永远不回头了，那句“缓过来自己来接上”成了空话。
   const MODEL_RETRY_DELAY_MS = 45 * 60 * 1000;
-  const MODEL_RETRY_LIMIT = 3;
+  const MODEL_RETRY_LIMIT = 8;
   const attachmentsDir = path.join(ctx.dataDir, "v2", "attachments");
   fs.mkdirSync(attachmentsDir, { recursive: true });
 
@@ -2730,6 +2744,7 @@ export function apply(ctx) {
           messages: [...historyMessages, { role: "user", content: spec.userText }], diagnostics, maxTokens: 1800,
           modelRef: choice ? { provider: choice.provider, model: choice.model } : null, catalog,
           allowUtilityFallback: false,
+          usageTag: { agentId, kind: "proactive" },
         });
         raw = generated.text;
       } else {
@@ -3451,7 +3466,7 @@ export function apply(ctx) {
   }
 
   /**
-   * 公共事件（2026-10-24 玥儿定）：节日与天气这种「今天确实发生的事」，比普通由头更该开口。
+   * 公共事件（2026-10-24 定）：节日与天气这种「今天确实发生的事」，比普通由头更该开口。
    *
    *   节日：开了主动消息的伙伴各自说一句，一人一条。人情味来自差异，不来自统一口径。
    *   天气：一件事只归一位。按亲密度加权抽，抽完当天定死，别人一概不提。
@@ -5428,6 +5443,7 @@ export function apply(ctx) {
           maxTokens: feedbackPrompt ? 1800 : 900,
           modelRef: choice ? { provider: choice.provider, model: choice.model } : null,
           catalog: modelCatalog,
+          usageTag: { agentId, kind: "chat" },
           // 工具回合：伙伴自己决定要不要调、调哪个。搜索是查外面的事，
           // 读视频是把她发过来的那条真看了——两个都由 ta 自己发起。
           tools: chatTools.length ? chatTools : null,
@@ -5712,9 +5728,10 @@ export function apply(ctx) {
           turn.status = "error";
           turn.error = { message: "模型这会儿用不了", kind: made.kind ?? "provider" };
           const patched = await attachOfflineNotice(turn.agentId, turn.userMessageId, made.kind);
-          store.clearPendingReplyIf(turn.agentId, turn.userMessageId);
+          // 已经排上慢速回头看了就别清：清了等于把那次找回一并作废，到点无事发生。
+          if (!patched.retryScheduled) store.clearPendingReplyIf(turn.agentId, turn.userMessageId);
           scheduleTurnCleanup(turn);
-          diagnostics({ event: "turn.unavailable", agentId: turn.agentId, messageId: turn.userMessageId, kind: made.kind, patched });
+          diagnostics({ event: "turn.unavailable", agentId: turn.agentId, messageId: turn.userMessageId, kind: made.kind, patched: patched.patched, retryScheduled: patched.retryScheduled });
           return;
         }
         if (made.reason === "silent" || made.reason === "stale") {
@@ -5765,6 +5782,9 @@ export function apply(ctx) {
       turn.replyMessageId = made.messageId;
       // 已读的水位要跟实际送出去的那份对齐：若重新捕获时把目标推到了更新的一条，
       // 而定时器已经在那之前开过火，这里把中间欠下的补上。账本对齐，不靠前端猜。
+      // 之前挂着「模型用不了」的那句这回真接上了：先摘告示，再补已读。
+      const noticesCleared = clearOfflineNotice(turn.agentId, made.repliedTo ?? turn.readTargetId ?? turn.userMessageId);
+      if (noticesCleared) diagnostics({ event: "offline.notice.cleared", agentId: turn.agentId, cleared: noticesCleared });
       const readAfter = store.markUserMessagesRead(turn.agentId, new Date().toISOString(), { throughId: made.repliedTo ?? turn.readTargetId ?? turn.userMessageId });
       if (readAfter.length) diagnostics({ event: "turn.read.catchup", agentId: turn.agentId, touched: readAfter.length, throughId: made.repliedTo ?? null });
       const pendingWake = store.getPendingReply(turn.agentId);
@@ -6079,7 +6099,7 @@ export function apply(ctx) {
    */
   async function attachOfflineNotice(agentId, messageId, kind) {
     const target = String(messageId ?? "").trim();
-    if (!target) return false;
+    if (!target) return { patched: false, retryScheduled: false };
     try {
       const partners = await listPartners().catch(() => []);
       const name = partners.find((row) => row.id === agentId)?.name ?? "";
@@ -6090,8 +6110,13 @@ export function apply(ctx) {
       store.patchMessage(agentId, target, {
         notice: { code: "MODEL_UNAVAILABLE", kind: kind || "provider", text },
         modelRetryCount: tries,
+        // 没接上就不算看到过。已读是「ta 收到了这句」的收据，模型压根没答上话，
+        // 这张收据就是假的：界面上摆着「已读」却一个字没回，她只能自己猜发生了什么。
+        // （2026-10-25 实机：11:42 盖了已读，12:31 直接发了条 B 站视频，中间那句没人管。）
+        readAt: null,
       });
-      if (tries <= MODEL_RETRY_LIMIT) {
+      const retryScheduled = tries <= MODEL_RETRY_LIMIT;
+      if (retryScheduled) {
         const dueAt = new Date(Date.now() + MODEL_RETRY_DELAY_MS).toISOString();
         store.setPendingReply(agentId, { dueAt, mode: "model-retry", messageId: target, triggerMessageId: target });
         scheduleReplyAt(agentId, Date.now() + MODEL_RETRY_DELAY_MS, "model-retry", target, null, null);
@@ -6099,11 +6124,31 @@ export function apply(ctx) {
       } else {
         diagnostics({ event: "model.retry.exhausted", agentId, messageId: target, tries });
       }
-      return true;
+      return { patched: true, retryScheduled };
     } catch (error) {
       diagnostics({ event: "offline.notice.failed", agentId, messageId: target, error: describeError(error) });
-      return false;
+      return { patched: false, retryScheduled: false };
     }
+  }
+
+  /**
+   * 这一句终于接上了：把当初挂的「模型用不了」摘掉。
+   *
+   * 不清就是一张过期的告示：ta 已经好好回了话，界面上还挂着一行“这会儿说不出话”；
+   * 而且 markUserMessagesRead 对挂着这类提示的消息一律跳过，不清就永远盖不上已读。
+   * 只清到 throughId 为止：后面她新说的话还没接，不该跟着一起消。
+   */
+  function clearOfflineNotice(agentId, throughId) {
+    const rows = store.getThread(agentId).messages;
+    const bound = throughId ? Number(rows.find((row) => row?.id === throughId)?.seq ?? -1) : null;
+    let cleared = 0;
+    for (const row of rows) {
+      if (row?.role !== "user" || row?.notice?.code !== "MODEL_UNAVAILABLE") continue;
+      if (bound !== null && Number(row.seq ?? 0) > bound) continue;
+      store.patchMessage(agentId, row.id, { notice: null });
+      cleared += 1;
+    }
+    return cleared;
   }
 
   /** 到点了：生成一条回复落库（她不在也照发，等她回来看）。 */
@@ -6178,10 +6223,11 @@ export function apply(ctx) {
       }
       if (made.reason === "unavailable") {
         // 同 runTurn：把「ta 接不上话」挂到触发的那条上，不重试、不换模型。
+        // 挂载里已经排好了慢速回头看的待办，这里不能一把清掉，否则到点没人接。
         const target = pending?.messageId ?? null;
         const patched = await attachOfflineNotice(agentId, target, made.kind);
-        store.clearPendingReply(agentId);
-        diagnostics({ event: "reply.unavailable", agentId, messageId: target, kind: made.kind, patched });
+        if (!patched.retryScheduled) store.clearPendingReply(agentId);
+        diagnostics({ event: "reply.unavailable", agentId, messageId: target, kind: made.kind, patched: patched.patched, retryScheduled: patched.retryScheduled });
         return { ok: false, reason: "unavailable" };
       }
       if (made.reason === "silent" || made.reason === "passed") {
@@ -6201,6 +6247,9 @@ export function apply(ctx) {
     }
     const finalized = finalizeWakeReply(store.getPendingReply(agentId) ?? pending, made.messageId);
     if (finalized) store.setPendingReply(agentId, finalized);
+    // 接上了：先把当初挂的「模型用不了」摘掉，再盖已读（挂着提示的那些消息盖不上）。
+    const noticesCleared = clearOfflineNotice(agentId, made.repliedTo ?? pending?.messageId ?? null);
+    if (noticesCleared) diagnostics({ event: "offline.notice.cleared", agentId, cleared: noticesCleared });
     // 重新捕获过目标时，开头那次盖章停在旧上界；这里按实际送出去的那份补齐。
     const readCatchup = store.markUserMessagesRead(agentId, new Date().toISOString(), { throughId: made.repliedTo ?? null });
     if (readCatchup.length) diagnostics({ event: "reply.read.catchup", agentId, touched: readCatchup.length, throughId: made.repliedTo ?? null });
@@ -7311,6 +7360,26 @@ export function apply(ctx) {
           }
         }
         return next();
+      });
+
+      // 设置页「用量」那页。读数只走宿主账本，拿不到就说拿不到——
+      // 空列表不能画成一排零，那会让她以为这段时间真的没花过。
+      app.get("/usage", async (c) => {
+        const days = Number(c.req.query("days") ?? "7");
+        try {
+          return c.json({ ok: true, ...(await collectUsage(ctx, { days, diagnostics })) });
+        } catch (error) {
+          diagnostics({ event: "usage.stats.failed", days, error: describeError(error) });
+          const denied = /permission|capability|grant|authority|授权|权限/iu.test(String(error?.message ?? ""));
+          return c.json({
+            ok: false,
+            error: {
+              message: denied
+                ? "还没拿到读用量的权限。去 Hana 应用管理里审阅茶话会的「读取用量」，放行后这一页才有数。"
+                : "这段用量没取回来，过一会儿再试一次。",
+            },
+          }, denied ? 403 : 502);
+        }
       });
 
       app.get("/partners", async (c) => {
@@ -8697,6 +8766,7 @@ export function apply(ctx) {
             maxTokens: 900,
             modelRef: choice ? { provider: choice.provider, model: choice.model } : null,
             catalog,
+            usageTag: { agentId: target?.id ?? null, kind: "probe" },
             tools: [SEARCH_TOOL],
             executeTool: async (call) => {
               diagnostics({ event: "probe.tool.called", name: call.name, args: call.arguments });
@@ -10146,6 +10216,7 @@ export function apply(ctx) {
             maxTokens: 900,
             modelRef: choice ? { provider: choice.provider, model: choice.model } : null,
             catalog,
+            usageTag: { agentId: target?.id ?? null, kind: "probe" },
             tools: [SEARCH_TOOL],
             executeTool: input?.real
               ? createWebSearchTool({ agentId: target.id, partnerName: target.name })

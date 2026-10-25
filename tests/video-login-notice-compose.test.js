@@ -10,7 +10,7 @@ test('登录提醒保留人格与自主拒绝，不混兴趣库存或上一轮�
     sceneEcho: { userText: '这个问题你怎么看？', assistantText: '稍等' }, reason: { kind: 'affection' },
   });
   assert.match(spec.systemPrompt, /性格克制/);
-  assert.match(spec.userText, /登录已经确认失效/);
+  assert.match(spec.userText, /登录这一步被挡住了/);
   assert.match(spec.userText, /茶话会设置里重新扫码/);
   assert.match(spec.userText, /\[不回\]/);
   assert.doesNotMatch(spec.userText, /污染|把那件事接住|这个问题你怎么看|没有可用的种子或新发现/);

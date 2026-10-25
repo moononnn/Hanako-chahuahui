@@ -35,9 +35,9 @@ test('缺失依据的共同经历和未知由头不启用关系出口', () => {
 
 test('首次对象交代与后续展开只依据实际发出的聊天，不靠后台库存', () => {
   const first = proactiveSpec({ ...common, seed });
-  assert.match(first.userText, /首次出现|第一次出现/);
+  assert.match(first.userText, /一句家常话点明它是什么就够/);
   assert.match(first.userText, /后台.*不代表/);
-  assert.match(first.userText, /直观/);
+  assert.match(first.userText, /自己的反应/);
   const later = proactiveSpec({ ...common, seed, introducedText: '此前实际发出：看到一只手工布兔，耳朵一长一短' });
   assert.match(later.userText, /此前实际发出/);
   assert.match(later.userText, /没有明确证据.*首次|没有明确证据.*第一次/);
@@ -69,7 +69,7 @@ test('有效联系不再摘上一轮那两行，原文走独立历史', () => {
 
 test('关系由头引用新对象时同样核对实际已介绍记录', () => {
   const spec = proactiveSpec({ ...common, reason: { kind: 'shared', contextText: '一起讨论过玩偶' }, introducedText: '此前实际发出：手工布兔' });
-  assert.match(spec.userText, /第一次出现/);
+  assert.match(spec.userText, /一句家常话点明它是什么就够/);
   assert.match(spec.userText, /此前实际发出：手工布兔/);
   assert.match(spec.userText, /单纯搭话和想念不需要另找对象/);
 });

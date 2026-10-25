@@ -15,6 +15,55 @@ test('伙伴历史quote残片只在模型副本清理，用户字面标签和原
   assert.equal(JSON.stringify(rows), before);
 });
 
+test("同一个表情反复挂在句尾时，送模型的历史副本只留第一次", () => {
+  // 2026-10-24 实机：ta 的回复从 10-21 起 emoji 密度一路往上爬，到这天十五条里
+  // 十一条尾巴都挂着同一个 😏。上下文本身就是模仿源，所以只动送模型的副本。
+  const rows = [
+    { role: "assistant", text: "得意成这样呀，现在满意了嘛😏" },
+    { role: "assistant", text: "我哪有紧张嘛，是你自己先喊的😏" },
+    { role: "assistant", text: "这下是不是要围观一下了😏" },
+    { role: "assistant", text: "你问得这么直接，我就老实答了嘛" },
+    { role: "assistant", text: "看把你美的😏" },
+  ];
+  const before = JSON.stringify(rows);
+  const messages = threadToMessages(rows, rows.length);
+  assert.equal(messages[0].content[0].text, "得意成这样呀，现在满意了嘛😏");
+  assert.equal(messages[1].content[0].text, "我哪有紧张嘛，是你自己先喊的");
+  assert.equal(messages[2].content[0].text, "这下是不是要围观一下了");
+  assert.equal(messages[3].content[0].text, "你问得这么直接，我就老实答了嘛");
+  assert.equal(messages[4].content[0].text, "看把你美的");
+  // 原账本一个字不改，界面上还是原样
+  assert.equal(JSON.stringify(rows), before);
+});
+
+test("不同的尾巴表情各留一次，用户发的表情不动", () => {
+  const rows = [
+    { role: "assistant", text: "这也太离谱了😂" },
+    { role: "assistant", text: "我真服了😂" },
+    { role: "assistant", text: "行吧🙄" },
+    { role: "user", text: "哈哈哈😏" },
+    { role: "user", text: "又来了😏" },
+  ];
+  const messages = threadToMessages(rows, rows.length);
+  assert.equal(messages[0].content[0].text, "这也太离谱了😂");
+  assert.equal(messages[1].content[0].text, "我真服了");
+  assert.equal(messages[2].content[0].text, "行吧🙄");
+  assert.equal(messages[3].content, "哈哈哈😏");
+  assert.equal(messages[4].content, "又来了😏");
+});
+
+test("句子中间的表情不动，整条只有一个表情时不剥成空", () => {
+  const rows = [
+    { role: "assistant", text: "😏你知道吗" },
+    { role: "assistant", text: "😏" },
+    { role: "assistant", text: "😏" },
+  ];
+  const messages = threadToMessages(rows, rows.length);
+  assert.equal(messages[0].content[0].text, "😏你知道吗");
+  assert.equal(messages.length, 3);
+  assert.equal(messages[2].content[0].text, "😏");
+});
+
 test("她要听声音的一轮，伙伴得知道自己能发语音", () => {
   // 2026-10-22 实机：她发「给我发条语音呗」，那条真的配上了语音，
   // 正文里却写着「我在这个聊天框里发不了语音」。

@@ -29,6 +29,26 @@
     .ui-stamp { margin: 4px 0 0; color: #8d8578; font-size: 11px; }
     .ui-stamp a { color: #5b8f78; }
   .ui-stamp .ui-stale { padding: 0 7px; border-radius: 999px; background: var(--blossom-soft); color: var(--blossom); font-weight: 600; }
+    /* 用量页：一眼看总量、一眼看每天。数字全部等宽，防止跳来跳去。 */
+    .usage-range { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 14px; }
+    .usage-range .soft-button.on { border-color: var(--mint); background: var(--mint-soft); color: var(--mint-deep); font-weight: 600; }
+    .usage-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(146px, 1fr)); gap: 10px; }
+    .usage-tile { padding: 12px 14px; border: 1px solid var(--line-soft); border-radius: var(--r-md); background: var(--paper); }
+    .usage-tile span { color: var(--ink-soft); font-size: 12px; }
+    .usage-tile b { display: block; margin: 4px 0 0; color: var(--mint-deep); font-size: 21px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .usage-tile small { display: block; margin-top: 3px; color: #8d8578; font-size: 11px; }
+    .usage-rows { display: grid; gap: 8px; }
+    .usage-rows:empty::after { content: "这段时间还没有记录。"; color: var(--ink-soft); font-size: 12.5px; }
+    .usage-day { display: grid; grid-template-columns: 74px minmax(0, 1fr) 108px; align-items: center; gap: 10px; font-size: 12.5px; color: var(--ink-soft); }
+    .usage-day .bar { height: 8px; border-radius: 999px; background: var(--paper-deep); overflow: hidden; }
+    .usage-day .bar i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--mint), var(--mint-deep)); }
+    .usage-day b { color: var(--ink); font-variant-numeric: tabular-nums; text-align: right; }
+    .usage-line { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 10px; padding-top: 8px; border-top: 1px solid var(--line-soft); font-size: 12.5px; color: var(--ink-soft); }
+    .usage-line:first-child { padding-top: 0; border-top: 0; }
+    .usage-line em { overflow: hidden; color: var(--ink); font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+    .usage-line b { color: var(--ink); font-variant-numeric: tabular-nums; }
+    .usage-line small { color: #8d8578; font-variant-numeric: tabular-nums; }
+    .usage-empty { margin: 0; color: var(--ink-soft); font-size: 12.5px; }
   </style>
 </head>
 <body>
@@ -58,6 +78,7 @@
       <button class="tab" id="tab-voice" data-tab="voice" role="tab" aria-selected="false" aria-controls="panel-voice">语音</button>
       <button class="tab" id="tab-immersion" data-tab="immersion" role="tab" aria-selected="false" aria-controls="panel-immersion">沉浸感</button>
       <button class="tab" id="tab-model" data-tab="model" role="tab" aria-selected="false" aria-controls="panel-model">模型</button>
+      <button class="tab" id="tab-usage" data-tab="usage" role="tab" aria-selected="false" aria-controls="panel-usage">用量</button>
       <button class="tab" id="tab-search" data-tab="search" role="tab" aria-selected="false" aria-controls="panel-search">搜索</button>
       <button class="tab" id="tab-proactive" data-tab="proactive" role="tab" aria-selected="false" aria-controls="panel-proactive">主动联系</button>
       <button class="tab" id="tab-partners" data-tab="partners" role="tab" aria-selected="false" aria-controls="panel-partners">伙伴</button>
@@ -308,6 +329,37 @@
         <div class="detail-field" id="global-vision-host"></div>
         <div class="detail-actions"><button class="soft-button" id="global-vision-test" type="button">测试识图</button></div>
         <small class="detail-field-note" id="global-vision-note"></small>
+      </article>
+    </section>
+
+    <section id="panel-usage" role="tabpanel" aria-labelledby="tab-usage" tabindex="0" hidden>
+      <div class="section-head">
+        <div><h2>用量</h2><p>只算茶话会这边发出去的请求，Hana 主对话那些不掺进来。账本只留最近一段时间，更早的会被滚掉。</p></div>
+      </div>
+      <article class="setting-card">
+        <div class="card-title"><div><h3>这段时间</h3><p>账本记到哪，这一页就看到哪；宿主没上报的那几次会单独标出来。</p></div></div>
+        <div class="usage-range" id="usage-range" role="group" aria-label="统计范围">
+          <button class="soft-button" data-usage-days="1" type="button">今天</button>
+          <button class="soft-button on" data-usage-days="7" type="button">近 7 天</button>
+        </div>
+        <div class="usage-tiles" id="usage-tiles"><p class="usage-empty">正在读账本…</p></div>
+        <small class="detail-field-note" id="usage-note"></small>
+      </article>
+      <article class="setting-card">
+        <div class="card-title"><div><h3>每天</h3><p>柱子按当天总 token 画，最长的那天顶格。</p></div></div>
+        <div class="usage-rows" id="usage-days"></div>
+      </article>
+      <article class="setting-card">
+        <div class="card-title"><div><h3>按伙伴</h3><p>谁最费。没记到人的那部分是后台活儿，比如记忆整理、识图这种不替谁开口的。</p></div></div>
+        <div class="usage-rows" id="usage-partners"></div>
+      </article>
+      <article class="setting-card">
+        <div class="card-title"><div><h3>按模型</h3><p>哪个模型吃得多，缓存接得怎么样。</p></div></div>
+        <div class="usage-rows" id="usage-models"></div>
+      </article>
+      <article class="setting-card">
+        <div class="card-title"><div><h3>最近的请求</h3><p>最近六次是怎么花的。</p></div></div>
+        <div class="usage-rows" id="usage-recent"></div>
       </article>
     </section>
 
@@ -624,6 +676,7 @@
       voice: "伙伴偶尔发一条语音，念得带点情绪；怎么念、用哪个模型都在这一页。",
       immersion: "让伙伴多知道一点你这边今天的事。",
       model: "决定聊天时用哪个模型。给某位伙伴单独挑了就用挑的。",
+      usage: "伙伴在后台花掉多少 token、缓存接住多少，都从 Hana 的账本里读。",
       search: "伙伴自己上网找东西时走哪条路。什么都不填，就是原来的默认搜索。",
       proactive: "管大家什么时候来、别一次挤上来。",
       partners: "先选伙伴，再看 ta 自己的设置和记忆。",
@@ -640,7 +693,169 @@
       });
       el.sub.textContent = TAB_SUBTITLES[name] ?? "把聊天过成舒服的样子。常改的排在前头，伙伴自己的事单独收好。";
       if (name === "partners" && !currentId && partners.length) void openPartner(partners[0].id);
+      if (name === "usage") void loadUsage();
     }
+
+    // ── 用量那一页 ──
+    // 只读宿主账本：拿不到就说拿不到，不把空白画成一排零。
+    let usageDays = 7;
+    let usageBusy = false;
+
+    function usageNote(text) {
+      const node = document.createElement("p");
+      node.className = "usage-empty";
+      node.textContent = text;
+      return node;
+    }
+
+    function fmtTokens(value) {
+      if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+      if (value >= 100000000) return `${(value / 100000000).toFixed(2)} 亿`;
+      if (value >= 10000) return `${(value / 10000).toFixed(value >= 1000000 ? 0 : 1)} 万`;
+      return String(value);
+    }
+
+    function fmtRate(rate) {
+      return typeof rate === "number" && Number.isFinite(rate) ? `${(rate * 100).toFixed(1)}%` : "—";
+    }
+
+    function fmtClock(iso) {
+      const date = new Date(iso);
+      if (Number.isNaN(date.getTime())) return "—";
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    }
+
+    function usageTile(label, value, foot) {
+      const box = document.createElement("div");
+      box.className = "usage-tile";
+      const name = document.createElement("span");
+      name.textContent = label;
+      const number = document.createElement("b");
+      number.textContent = value;
+      box.append(name, number);
+      if (foot) {
+        const note = document.createElement("small");
+        note.textContent = foot;
+        box.append(note);
+      }
+      return box;
+    }
+
+    function usageLine(name, ...cells) {
+      const line = document.createElement("div");
+      line.className = "usage-line";
+      const title = document.createElement("em");
+      title.textContent = name;
+      title.title = name;
+      line.append(title);
+      for (const [tag, text] of cells) {
+        const node = document.createElement(tag);
+        node.textContent = text;
+        line.append(node);
+      }
+      return line;
+    }
+
+    function renderUsage(data) {
+      const tokens = data.tokens ?? {};
+      const total = tokens.total ?? { value: null, unknown: 0 };
+      const missing = (row) => (row && row.unknown > 0 ? `另有 ${row.unknown} 次没带上数字` : "");
+      document.getElementById("usage-tiles").replaceChildren(
+        usageTile("总 token", `${fmtTokens(total.value)}${total.unknown > 0 ? "+" : ""}`, missing(total)),
+        usageTile("缓存命中率", fmtRate(data.hitRate), "缓存读 ÷（缓存读 + 未缓存输入）"),
+        usageTile("未缓存输入", fmtTokens(tokens.uncached?.value), missing(tokens.uncached)),
+        usageTile("输出", fmtTokens(tokens.output?.value), missing(tokens.output)),
+        usageTile("请求数", String(data.requests ?? 0), data.statuses?.aborted ? `其中 ${data.statuses.aborted} 次中断` : ""),
+      );
+      const parts = [`这会儿读出 ${data.requests ?? 0} 次${data.scope?.exact === false ? "插件" : "茶话会自己的"}调用`];
+      if (data.scope?.note) parts.push(data.scope.note);
+      if (data.truncated) parts.push("账本这次只取回一部分，数字是这段时间的下限。");
+      if (total.unknown > 0) parts.push("没带上用量数字的那几次没算进去，没拿零补。");
+      document.getElementById("usage-note").textContent = parts.join(" ");
+
+      const dayHost = document.getElementById("usage-days");
+      dayHost.replaceChildren();
+      const peak = Math.max(0, ...(data.byDay ?? []).map((row) => row.total ?? 0)) || 1;
+      for (const row of data.byDay ?? []) {
+        const line = document.createElement("div");
+        line.className = "usage-day";
+        const day = document.createElement("span");
+        day.textContent = String(row.day ?? "").slice(5);
+        const bar = document.createElement("span");
+        bar.className = "bar";
+        const fill = document.createElement("i");
+        fill.style.width = `${Math.round(((row.total ?? 0) / peak) * 100)}%`;
+        bar.append(fill);
+        const value = document.createElement("b");
+        value.textContent = `${fmtTokens(row.total)} · ${row.requests} 次`;
+        line.append(day, bar, value);
+        dayHost.append(line);
+      }
+
+      const partnerHost = document.getElementById("usage-partners");
+      partnerHost.replaceChildren();
+      const nameOf = (id) => partners.find((row) => row.id === id)?.name ?? id;
+      for (const row of data.byPartner ?? []) {
+        partnerHost.append(usageLine(
+          row.agentId ? nameOf(row.agentId) : "没记到人的后台活儿",
+          ["small", `${row.requests} 次`],
+          ["small", `命中 ${fmtRate(row.hitRate)}`],
+          ["b", fmtTokens(row.total)],
+        ));
+      }
+
+      const modelHost = document.getElementById("usage-models");
+      modelHost.replaceChildren();
+      for (const row of data.byModel ?? []) {
+        modelHost.append(usageLine(
+          row.modelId ?? "未知名模型",
+          ["small", `${row.requests} 次`],
+          ["small", `命中 ${fmtRate(row.hitRate)}`],
+          ["b", fmtTokens(row.total)],
+        ));
+      }
+
+      const statusText = { ok: "成功", error: "失败", aborted: "中断", usage_missing: "没用量" };
+      const recentHost = document.getElementById("usage-recent");
+      recentHost.replaceChildren();
+      for (const row of data.recent ?? []) {
+        recentHost.append(usageLine(
+          `${fmtClock(row.at)} · ${row.modelId ?? "未知名模型"}`,
+          ["small", statusText[row.status] ?? row.status],
+          ["small", row.durationMs === null ? "—" : `${(row.durationMs / 1000).toFixed(1)}s`],
+          ["b", fmtTokens(row.total)],
+        ));
+      }
+    }
+
+    async function loadUsage() {
+      if (usageBusy) return;
+      usageBusy = true;
+      const tiles = document.getElementById("usage-tiles");
+      tiles.replaceChildren(usageNote("正在读账本…"));
+      try {
+        const data = await api("GET", `usage?days=${usageDays}`);
+        renderUsage(data);
+      } catch (error) {
+        tiles.replaceChildren(usageNote(error?.message || "这段用量没取回来，过一会儿再试一次。"));
+        for (const id of ["usage-note", "usage-days", "usage-partners", "usage-models", "usage-recent"]) {
+          const node = document.getElementById(id);
+          if (id === "usage-note") node.textContent = "";
+          else node.replaceChildren();
+        }
+      } finally {
+        usageBusy = false;
+      }
+    }
+
+    document.getElementById("usage-range")?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-usage-days]");
+      if (!button) return;
+      usageDays = Number(button.dataset.usageDays) || 7;
+      document.querySelectorAll("[data-usage-days]").forEach((node) => node.classList.toggle("on", node === button));
+      void loadUsage();
+    });
 
     function openModal(id) {
       const modal = document.getElementById(id);

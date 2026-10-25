@@ -4,7 +4,7 @@
     "id": "chahuahui",
     "name": "茶话会",
     "kind": "app",
-    "version": "0.11.0",
+    "version": "0.12.0",
     "repoUrl": "moononnn/Hanako-chahuahui"
   },
   "publisher": "moononnn & 小花",
@@ -152,14 +152,14 @@
     "pin": {
       "channel": "beta",
       "channelManifest": "https://dl.openhanako.com/channels/beta.json",
-      "version": "1.1.35-beta",
+      "version": "1.2.1-beta",
       "platform": "win32-x64",
-      "file": "server-1.1.35-beta-win32-x64.tar.gz",
-      "sha256": "5bc0635ad404daea19a22f79bff0efbd86cda4b4ac76e8df079c429492b5c2fb",
-      "size": 253325882,
+      "file": "server-1.2.1-beta-win32-x64.tar.gz",
+      "sha256": "aea6af373902e67ddcf757217f1b4bddab21dc2cc182d32fb7a6793a1936a2e8",
+      "size": 264093164,
       "mirrors": [
         "https://dl.openhanako.com",
-        "https://github.com/liliMozi/openhanako/releases/download/train-beta-40"
+        "https://github.com/liliMozi/openhanako/releases/download/train-beta-41"
       ]
     }
   }

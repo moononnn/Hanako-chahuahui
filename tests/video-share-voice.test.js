@@ -26,7 +26,7 @@ test('视频成文以想对她说的话起步，撤掉摘句再点评和首次�
 
 test('视频口吻只作用在视频路径，普通兴趣仍有原来的对象背景规则', () => {
   const plain = proactiveSpec({ ...base, seed: { hook: '木头接缝', kind: 'motif' } });
-  assert.match(plain.userText, /这轮主要让她认得它/);
+  assert.match(plain.userText, /一句家常话点明它是什么就够/);
   assert.match(plain.systemPrompt, /先把具体东西摆出来/);
   assert.doesNotMatch(plain.userText, /忍不住想把它递给她/);
   const contact = proactiveSpec({ ...base, video, reason: { kind: 'contact' } });

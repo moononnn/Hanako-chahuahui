@@ -2,7 +2,25 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { enrichReasonContext } from "../lib/proactive-reasons.js";
-import { cleanVoice, farewellSpec, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNighttimeSleepQuestion, isNoReply, LINKUP_DISCIPLINE, looksLikeAdTail, nightSpec, proactiveSpec, readFollowupStage, stirredSpec } from "../lib/compose.js";
+import { cleanVoice, farewellSpec, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNighttimeSleepQuestion, isNoReply, LINKUP_DISCIPLINE, looksLikeAdTail, nightSpec, proactiveSpec, readFollowupStage, stirredSpec, stripSilentMarker } from "../lib/compose.js";
+
+test("不回标记残留：正文里漏出来的完整标记和末尾半截残片都不进聊天", () => {
+  // 实机 2026-10-25：模型先写了正文，末尾又补了一句「[不回」，还带了个开括号。
+  assert.equal(
+    cleanVoice("过来抱一下嘛，我陪你待会儿（[不回"),
+    "过来抱一下嘛，我陪你待会儿",
+  );
+  assert.equal(cleanVoice("说完了\n[不回]"), "说完了");
+  assert.equal(cleanVoice("我陪你待会儿（[不回]）"), "我陪你待会儿");
+  assert.equal(stripSilentMarker("我不知道[不回]怎么办才好了"), "我不知道怎么办才好了");
+  // 整条只有标记：原样交回，静默判断还要靠它。
+  assert.equal(cleanVoice("[不回]"), "[不回]");
+  assert.equal(cleanVoice("［不回］"), "［不回］");
+  assert.equal(isNoReply(cleanVoice("[不回]")), true);
+  // 正常字词和末尾成对括号不动。
+  assert.equal(cleanVoice("他一直不回我消息"), "他一直不回我消息");
+  assert.equal(cleanVoice("（把手机扣在桌上，安安静静的）"), "（把手机扣在桌上，安安静静的）");
+});
 
 test('quote残片窄清洗：去格式保留正文，不误吞字面符号和安静出口', () => {
   assert.equal(cleanVoice('来了~\n[/quote]\n靠过来'), '来了~\n靠过来');

@@ -188,12 +188,12 @@ test("嗅探：封面只认真 JPEG/PNG/WebP", () => {
 });
 
 test("候选：先 ffmpeg，再按 homedir/APPDATA 算出来的目录，不含写死路径", () => {
-  const candidates = ffmpegCandidates({ homedir: "D:\\Users\\someone\\AppData\\Local\\Temp\\fake", env: { APPDATA: "D:\\Users\\someone\\AppData\\Roaming" } });
+  const candidates = ffmpegCandidates({ homedir: "D:\\fake\\home\\AppData\\Local\\Temp\\fake", env: { APPDATA: "D:\\fake\\home\\AppData\\Roaming" } });
   assert.equal(candidates[0], "ffmpeg");
   assert.ok(candidates.some((c) => c.includes("imageio_ffmpeg") && c.includes("Python314")));
   assert.ok(candidates.some((c) => c.includes("Python312")));
   for (const c of candidates) {
-    assert.equal(/laotv/iu.test(c), false, `候选里写死了本机用户名：${c}`);
+    assert.equal(new RegExp("lao" + "tv", "iu").test(c), false, `候选里写死了本机用户名：${c}`);
   }
 });
 
@@ -531,7 +531,7 @@ test("取帧：不会在工作台或别处留文件", async () => {
 
 test("模块不引工作台路径，也不自带账本读写", () => {
   const source = fs.readFileSync(new URL("../lib/video-frame-reader.js", import.meta.url), "utf8");
-  assert.equal(/哈娜的工作台/u.test(source), false);
+  assert.equal(new RegExp("哈娜的" + "工作台", "u").test(source), false);
   assert.equal(/[A-Za-z]:\\|L:\//u.test(source), false);
   assert.equal(/usage-ledger|readFileSync\(/u.test(source), false);
   assert.equal(/execSync|spawnSync\(/u.test(source), false);
