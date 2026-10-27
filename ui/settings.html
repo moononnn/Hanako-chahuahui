@@ -325,7 +325,7 @@
         <small class="detail-field-note" id="global-recognition-model-note"></small>
       </article>
       <article class="setting-card">
-        <div class="card-title"><div><h3>全局辅助识图</h3><p>聊天模型看不懂图片时，先由这位模型看一眼。只有测试通过后，茶话会才会允许发送图片。</p></div></div>
+        <div class="card-title"><div><h3>全局辅助识图</h3><p>给看不了图的聊天模型配一双备用眼睛：图先由这位模型看一眼，再把它的话递给聊天模型。聊天模型自己就能收图时不走这一层。测试通过后这个配置才生效。</p></div></div>
         <div class="detail-field" id="global-vision-host"></div>
         <div class="detail-actions"><button class="soft-button" id="global-vision-test" type="button">测试识图</button></div>
         <small class="detail-field-note" id="global-vision-note"></small>
@@ -1785,7 +1785,7 @@
         }
       };
       if (!visionModelCatalog.length) note.textContent = "Hana 没有把可识图模型列出来，暂时不能配置。";
-      else if (!vision.model) note.textContent = "没配置全局识图模型，发送图片会被拦住。";
+      else if (!vision.model) note.textContent = "没配辅助识图模型。聊天模型自己能收图时照常发；收不了图时就发不了。";
       else if (vision.status === "verified") note.textContent = "已通过测试，未单独配置识图模型的伙伴可以使用。";
       else if (vision.status === "failed") note.textContent = `上次测试没通过：${vision.error || "模型暂时不可用"}`;
       else note.textContent = "模型已选，但还没通过测试。";
@@ -4053,7 +4053,7 @@
       }
       detailPanels.model.appendChild(modelCard);
 
-      const visionCard = detailCard("ta 的识图模型", "不选就跟全局辅助识图。只有测试通过后，这位伙伴才允许接收图片。");
+      const visionCard = detailCard("ta 的识图模型", "不选就跟全局辅助识图。给看不了图的聊天模型配的备用眼睛；聊天模型自己就能收图时不走这一层。测试通过后这个配置才生效。");
       const visionHost = document.createElement("div");
       visionHost.className = "detail-field";
       const visionSel = buildVisionSelect(visionKeyOf(s.vision));
@@ -4074,7 +4074,7 @@
       const paintPartnerVision = () => {
         const currentVision = s.vision ?? {};
         visionTest.disabled = !currentVision.model;
-        if (!currentVision.model) visionNote.textContent = globalSettings.vision?.status === "verified" ? "当前跟随全局辅助识图。" : "没配置可用识图模型，发送图片会被拦住。";
+        if (!currentVision.model) visionNote.textContent = globalSettings.vision?.status === "verified" ? "当前跟随全局辅助识图。" : "没配辅助识图模型。聊天模型自己能收图时照常发；收不了图时就发不了。";
         else if (currentVision.status === "verified") visionNote.textContent = "这位伙伴的识图测试已通过。";
         else if (currentVision.status === "failed") visionNote.textContent = `上次测试没通过：${currentVision.error || "模型暂时不可用"}`;
         else visionNote.textContent = "模型已选，但还没通过测试。";

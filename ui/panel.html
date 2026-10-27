@@ -3465,7 +3465,7 @@
         const currentPartner = partners.find((p) => p.id === current);
         if (currentPartner?.background) void syncChatBackground(current, currentPartner.background);
         el.imageButton.disabled = !(currentPartner?.imageCapability?.allowed);
-        el.imageButton.title = currentPartner?.imageCapability?.allowed ? "发送图片" : "当前伙伴没有通过测试的识图模型";
+        el.imageButton.title = currentPartner?.imageCapability?.allowed ? "发送图片" : "这位伙伴这会儿收不了图：聊天模型不支持图像输入，辅助识图也没配好";
       }
       if (currentWasRemoved) {
         const next = partners[0]?.id;
@@ -4155,7 +4155,7 @@
       el.input.disabled = false;
       el.send.disabled = false;
       el.imageButton.disabled = !(partner?.imageCapability?.allowed);
-      el.imageButton.title = partner?.imageCapability?.allowed ? "发送图片" : "当前伙伴没有通过测试的识图模型";
+      el.imageButton.title = partner?.imageCapability?.allowed ? "发送图片" : "这位伙伴这会儿收不了图：聊天模型不支持图像输入，辅助识图也没配好";
       el.emojiButton.disabled = false;
       el.appearanceButton.disabled = false;
       closeAppearance();
