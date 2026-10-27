@@ -43,6 +43,7 @@ import {
   normalizeModelRef,
   chatModelOptions,
   visionModelOptions,
+  choiceSupportsImage,
   resolveModelChoice,
   setUsageObserver,
   withModelDeadline,
@@ -5397,17 +5398,10 @@ export function apply(ctx) {
       library: readStickerLibrary(ctx.dataDir),
       catalog: stickerCatalog,
     });
-    const messages = threadToMessages(windowed, windowed.length, {
-      userName: USER_NAME,
-      describeSticker: (id) => stickerLabels.get(id) ?? null,
-      mergeConsecutiveUser: true,
-    });
-    diagnostics({ event: "reply.context", agentId, rows: windowed.length, messages: messages.length,
-      rawChars: windowed.reduce((n, row) => n + String(row.text ?? "").length, 0),
-      firstId: windowed[0]?.id ?? null, targetId: replyTargetId });
-
     // 这次用哪个模型：本应用单独指定 > 本应用全局指定 > 伙伴在 Hana 里的默认模型 > 兜底。
     // 目录拉一次，resolve 和 stream 两处共用。拉不到也不播报，退回“跟当前模型走”。
+    // 必须在拼消息之前算出来：聊天模型自己就能看图时，最后那张图直接交给它，
+    // 不再先叫醒另一个模型转述一遍。
     let modelCatalog = null;
     try {
       modelCatalog = await ctx.models.list();
@@ -5419,6 +5413,25 @@ export function apply(ctx) {
       globalRef: store.getGlobalSettings().model,
       agentRef: await agentDefaultModel(agentId),
     });
+    const nativeVision = choiceSupportsImage(modelCatalog, choice);
+    // 图在磁盘上，纯函数拿不到；这里把字节读好递进去，读不到就退回原来的文字交代。
+    // 只给最后一张：更早的只留文件路径，不然每轮都重传历史图的 base64。
+    const loadImage = nativeVision
+      ? (id) => {
+        const stored = readAttachment(id, agentId);
+        return stored?.data ? { mimeType: stored.mimeType, data: stored.data.toString("base64") } : null;
+      }
+      : null;
+    const messages = threadToMessages(windowed, windowed.length, {
+      userName: USER_NAME,
+      describeSticker: (id) => stickerLabels.get(id) ?? null,
+      mergeConsecutiveUser: true,
+      loadImage,
+    });
+    if (nativeVision) diagnostics({ event: "reply.vision.native", agentId, provider: choice?.provider ?? null, model: choice?.model ?? null });
+    diagnostics({ event: "reply.context", agentId, rows: windowed.length, messages: messages.length,
+      rawChars: windowed.reduce((n, row) => n + String(row.text ?? "").length, 0),
+      firstId: windowed[0]?.id ?? null, targetId: replyTargetId });
 
     let generated = null;
     // 这一轮给哪些工具：搜索和读视频各自独立，有几个给几个。
@@ -7427,7 +7440,11 @@ export function apply(ctx) {
               // 背景元数据跟着轮询下发：她在设置页换完图，聊天窗最迟一轮就自己跟上
               background: settings.background,
               imageCapability: {
-                allowed: Boolean(vision.model && vision.status === "verified"),
+                // 只在“配了识图模型但没过测”这种确定不通的时候灰掉按钮。
+                // 本路由拿不到“聊天模型能不能看图”（那要读模型目录，轮询不该为此多拉一次），
+                // 所以“没配辅助识图”不能当成发不了：交给 /turns 真发的时判，判不过会回一句人话，
+                // 图和原话都留着。反过来配了却测失败时，那条路也基本不会自己好，先拦下来更省事。
+                allowed: !vision.model || vision.status !== "failed",
                 source: vision.source,
                 status: vision.status,
                 error: vision.error,
@@ -8052,8 +8069,21 @@ export function apply(ctx) {
         let visionNotice = null;
         if (isImage) {
           const vision = effectiveVisionConfig(store.getGlobalSettings().vision, store.getPartnerSettings(agentId).vision);
-          if (!vision.model || vision.status !== "verified") {
-            return c.json({ ok: false, error: { code: "VISION_UNAVAILABLE", message: "当前伙伴没有通过测试的识图模型，暂时不能发送图片" } }, 403);
+          const visionReady = Boolean(vision.model && vision.status === "verified");
+          // 聊天模型自己能看图就不必先转述一遍：图存下来，回复那一轮直接交给它。
+          let nativeVision = false;
+          try {
+            const catalog = await ctx.models.list();
+            nativeVision = choiceSupportsImage(catalog, resolveModelChoice(catalog, {
+              partnerRef: store.getPartnerSettings(agentId).model,
+              globalRef: store.getGlobalSettings().model,
+              agentRef: await agentDefaultModel(agentId),
+            }));
+          } catch (error) {
+            diagnostics({ event: "vision.native.probe.failed", agentId, error: describeError(error) });
+          }
+          if (!visionReady && !nativeVision) {
+            return c.json({ ok: false, error: { code: "VISION_UNAVAILABLE", message: "当前伙伴这会儿看不到图片：它的聊天模型不支持图像输入，也没配通过测试的识图模型" } }, 403);
           }
           // 存图和识图分两步，失败的处理完全不同：
           // 存不下是真的收不了（图片太大、格式不对），这时候回错误、整条不落；
@@ -8063,15 +8093,20 @@ export function apply(ctx) {
           } catch (error) {
             return c.json({ ok: false, error: { code: "ATTACHMENT_REJECTED", message: error?.message || "这张图暂时收不下" } }, 400);
           }
-          try {
-            const described = await describeImageWithFallback(vision.model, attachment);
-            visionNote = described.note;
-            visionVia = described.via;
-          } catch (error) {
-            const kind = classifyVisionFailure(error);
-            diagnostics({ event: "vision.failed", agentId, attachmentId: attachment.id, kind, error: describeError(error) });
-            const partnerRow = (await listPartners().catch(() => [])).find((row) => row.id === agentId);
-            visionNotice = { code: "MODEL_UNAVAILABLE", kind, text: visionUnavailableNotice(kind, partnerRow?.name ?? "") };
+          // 聊天模型自己能看：不叫辅助识图，把图原样留给回复那一轮。
+          if (nativeVision) {
+            diagnostics({ event: "vision.native", agentId, attachmentId: attachment.id, via: "chat-model" });
+          } else {
+            try {
+              const described = await describeImageWithFallback(vision.model, attachment);
+              visionNote = described.note;
+              visionVia = described.via;
+            } catch (error) {
+              const kind = classifyVisionFailure(error);
+              diagnostics({ event: "vision.failed", agentId, attachmentId: attachment.id, kind, error: describeError(error) });
+              const partnerRow = (await listPartners().catch(() => [])).find((row) => row.id === agentId);
+              visionNotice = { code: "MODEL_UNAVAILABLE", kind, text: visionUnavailableNotice(kind, partnerRow?.name ?? "") };
+            }
           }
         }
         let stickerSignalText = "";
