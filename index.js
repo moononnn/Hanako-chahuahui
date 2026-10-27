@@ -57,6 +57,7 @@ import { createInterruptibleComposer, hasNewerUserMessage, isSpeechMessage } fro
 import { createThreadRebuildScheduler } from "./lib/rebuild-queue.js";
 import { protectKey, unprotectKey, isProtectedKey, encryptionStatus } from "./lib/crypto.js";
 import { listBackgrounds, readBackgroundBytes, writeBackground, removeBackgroundFile, normalizeOpacity, normalizeTone, isBackgroundFile, fileTypeOf } from "./lib/background.js";
+import { detectImageType } from "./lib/background.js";
 import { pruneStickerUsage, recordStickerUsage } from "./lib/sticker-usage.js";
 import {
   DEFAULT_CONTEXT,
@@ -1380,8 +1381,8 @@ export function apply(ctx) {
   }
 
   function saveAttachment({ name, mimeType, data, agentId }) {
-    const cleanType = String(mimeType ?? "").toLowerCase();
-    if (!ATTACHMENT_TYPES.has(cleanType)) throw new Error("只支持 PNG、JPG、GIF 和 WebP 图片");
+    const claimedType = String(mimeType ?? "").toLowerCase();
+    if (!ATTACHMENT_TYPES.has(claimedType)) throw new Error("只支持 PNG、JPG、GIF 和 WebP 图片");
     const raw = String(data ?? "").replace(/^data:[^,]+,/, "");
     if (!isStrictBase64(raw)) throw new Error("图片数据格式不正确");
     const bytes = Buffer.from(raw, "base64");
@@ -1391,7 +1392,13 @@ export function apply(ctx) {
     if (usedBytes + bytes.length > ATTACHMENT_TOTAL_BYTES) {
       throw new Error(`图片存得太多了（已经用了约 ${Math.round(usedBytes / 1048576)} MB），先删掉一些老对话里的图片再发`);
     }
-    if (!imageBytesMatchMime(bytes, cleanType)) throw new Error("图片内容与文件类型不一致");
+    // 以字节为准，不以声称的类型为准：
+    // 浏览器给的 mimeType 跟着扩展名与 Content-Type 走，改名后的文件会带着错的类型过来
+    // （实测一张 1254×1254 的 PNG 叫 .jpg，就被当成“图片内容与文件类型不一致”拦在外面）。
+    // 先按字节认出真实格式；认不出时才退回声称的类型，回退时那道家底校验照旧生效。
+    const detectedType = detectImageType(bytes);
+    const cleanType = detectedType ?? claimedType;
+    if (!detectedType && !imageBytesMatchMime(bytes, cleanType)) throw new Error("图片内容与文件类型不一致");
     const id = `img_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     const safeId = id.replace(/[^a-zA-Z0-9_-]/g, "_");
     const binPath = attachmentPath(safeId);
