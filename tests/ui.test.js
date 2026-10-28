@@ -11,8 +11,8 @@ const app = fs.readFileSync(new URL("../index.js", import.meta.url), "utf8");
 
 test("识图也有第二条路：首选真挂了才换，备用通道看不了图才轮提示", () => {
   // 首选识图失败后走 describeImageWithFallback，成功则带出 via
-  assert.match(app, /async function describeImageWithFallback\(modelRef, attachment\)/);
-  assert.match(app, /return \{ note: await describeImage\(ref, attachment\), via: `\$\{ref\.provider\}\/\$\{ref\.model\}` \}/);
+  assert.match(app, /async function describeImageWithFallback\(modelRef, attachment, context = ""\)/);
+  assert.match(app, /return \{ note: await describeImage\(ref, attachment, context\), via: `\$\{ref\.provider\}\/\$\{ref\.model\}` \}/);
   assert.match(app, /if \(!shouldTryVisionFallback\(kind\)\) throw firstError/);
   // 备用通道用哪个模型猜不出来（目录里 isCurrent 的是宿主焦点模型，不是 utility 那个），
   // 所以不预判「它看不了图」，直接问一次：能看就拿回说明。
@@ -21,7 +21,7 @@ test("识图也有第二条路：首选真挂了才换，备用通道看不了�
   assert.match(app, /async function describeImageViaUtility\(attachment\)/);
   assert.match(app, /run: \(\) => ctx\.models\.utility\(\{/);
   // 走备用通道识图成功，就不再挂提示（visionNotice 只在真没识出来时才有）
-  assert.match(app, /const described = await describeImageWithFallback\(vision\.model, attachment\);[\s\S]{0,200}?visionNote = described\.note;[\s\S]{0,120}?visionVia = described\.via;/);
+  assert.match(app, /const described = await describeImageWithFallback\(vision\.model, attachment, text\);[\s\S]{0,200}?visionNote = described\.note;[\s\S]{0,120}?visionVia = described\.via;/);
   // 这次是用哪条路看的，记在这条消息上（刷新后也查得到）
   assert.match(app, /\.\.\.\(visionVia \? \{ visionVia \} : \{\}\)/);
 });
@@ -1654,7 +1654,8 @@ test("伙伴每轮都能按性格安静收尾，且异步排期不把这个结�
   // 这里守的还是原意：unreadResetAt（删除后恢复未读）必须被排除在外。
   assert.match(app, /tail\.find\(\(row\) => !row\.readAt && !row\.unreadResetAt && !row\.recalled[^)]*\)/, "删除后明确恢复未读的原话不能被旧账恢复流程自动重回");
   assert.match(app, /reply\.recovered\.unread-reset/, "旧排期如果还指着被删除的原话，要清掉而不是重发");
-  assert.match(panel, /if \(m\.proactive \|\| m\.nudge \|\| \["action", "tavern-opening"\]\.includes\(m\.kind\)\) continue;[\s\S]{0,120}?if \(m\.repliedTo\)/, "主动消息即使带脏 repliedTo 也不能把用户原话算已读");
+  assert.match(panel, /\|\| m\.proactive \|\| m\.nudge \|\| \["action", "tavern-opening"\]\.includes\(m\.kind\)/, "主动消息、戳一戳和动作不算接住原话");
+  assert.match(panel, /if \(m\.repliedTo\) answered\.add\(String\(m\.repliedTo\)\)/, "脏 repliedTo 不能把用户原话算已读：先过本轮的静默判定");
   assert.match(app, /repliedTo === targetMessageId/, "恢复前要识别已落盘的同一条回复，避免关机时重复生成");
   assert.match(app, /repliedTo: pending\?\.messageId \?\? null/, "异步恢复落盘时要保留回复目标，幂等判断才有依据");
   assert.match(app, /threadGenerations\.set\(agentId, threadGeneration\(agentId\) \+ 1\)/, "清空聊天要让旧回包失效");
@@ -1917,6 +1918,9 @@ test("表情包进上下文：靠本地标签翻成人话，不靠看图", () =>
 
 test("图片发送门禁：附件校验、伙伴归属和识图协议都在服务端", () => {
   assert.match(app, /isStrictBase64\(raw\)/);
+  // 收图按字节认格式：浏览器给的 mime 跟着扩展名走，改名后的图会带着错类型过来。
+  assert.match(app, /const detectedType = detectImageType\(bytes\);/);
+  assert.match(app, /const cleanType = detectedType \?\? claimedType;/);
   assert.match(app, /imageBytesMatchMime\(bytes, cleanType\)/);
   assert.match(app, /saveAttachment\(\{ \.\.\.imageInput, agentId \}\)/);
   assert.match(app, /app\.get\("\/attachment\/:agentId\/:id"/);
@@ -1984,7 +1988,9 @@ test("聊天输入框可把剪贴板图片送进待发送图片链路", () => {
   assert.match(panel, /el\.input\.addEventListener\("paste", \(event\) =>/);
   assert.match(panel, /entry\.kind === "file" && entry\.type\.startsWith\("image\/"\)/);
   assert.match(panel, /event\.preventDefault\(\);[\s\S]*?void chooseImageFile\(file\);/);
-  assert.match(panel, /name: file\.name \|\| "剪贴板图片\.png"/);
+  // 名字随压缩后的真实格式走：压成 JPEG 还叫 .png，api 那头会当成类型不符。
+  assert.match(panel, /name: renameForMime\(file\.name \|\| "剪贴板图片", shrunk\.mimeType\)/);
+  assert.match(panel, /const shrunk = await shrinkImage\(rawData, file\.type\)/);
 });
 
 test("图片回包延迟或丢失时用请求编号对账，已落盘图片不再留在待发送区", () => {
@@ -2059,7 +2065,7 @@ test("历史图片渲染使用当前伙伴，进视口才去取（不再一次�
 
 test("每位伙伴一间房：设置页挑图，聊天窗按浓度铺上去", () => {
   // 后端：图落盘 + 设置归一化 + 三条路由 + 元数据跟着轮询下发
-  assert.match(app, /import \{ listBackgrounds,[\s\S]*?normalizeOpacity,[\s\S]*?isBackgroundFile,[\s\S]*?fileTypeOf \} from "\.\/lib\/background\.js"/);
+  assert.match(app, /import \{ listBackgrounds,[\s\S]*?isBackgroundFile,[\s\S]*?fileTypeOf, detectImageType \} from "\.\/lib\/background\.js"/);
   assert.match(app, /writeBackground\(ctx\.dataDir, bytes\)/, "背景写入共享图库，不再按伙伴分目录");
   assert.match(app, /app\.get\("\/background\/:agentId"/);
   assert.match(app, /app\.post\("\/background\/:agentId"/);

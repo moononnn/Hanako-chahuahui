@@ -8,6 +8,7 @@ import {
   isConversationMessage,
   makeArchiveEntry,
   planRollup,
+  recallLedger,
   recentArchive,
   recentLedger,
   renderForSummary,
@@ -181,6 +182,60 @@ test("空白的日账和摘要被丢掉，不占位置", () => {
   const rows = recentLedger({ ledger: [{ day: "2026-09-12", text: "   " }, { day: "2026-09-11", text: "有内容" }] }, 5);
   assert.equal(rows.length, 1);
   assert.equal(recentArchive({ archive: [{ text: "" }, { text: "有用" }] }, 5).length, 1);
+});
+
+test("更早的日账能被当下的话题拽回来", () => {
+  const ledger = [
+    { day: "2026-09-14", text: "聊了 LineageOS 24 和 Android 17 的事。" },
+    { day: "2026-10-20", text: "她说今天很累。" },
+    { day: "2026-10-21", text: "聊了表情包。" },
+  ];
+  const rows = recallLedger({ ledger }, "你觉得 LineageOS 那个能刷吗", { exclude: new Set(["2026-10-20", "2026-10-21"]) });
+  assert.deepEqual(rows.map((row) => row.day), ["2026-09-14"]);
+});
+
+test("没命中就不拽老日子，不拿无关的话占预算", () => {
+  const ledger = [{ day: "2026-09-14", text: "聊了 LineageOS 24 和 Android 17 的事。" }];
+  assert.deepEqual(recallLedger({ ledger }, "今天吃什么"), []);
+  const common = [{ day: "2026-09-14", text: "她说今天很累，我们聊了很久。" }];
+  assert.deepEqual(recallLedger({ ledger: common }, "今天真的好累啊"), [], "常见词不算锚点");
+});
+
+test("更早的日子最多拽两天，按相关度与预算选", () => {
+  const ledger = [
+    { day: "2026-09-10", text: "LineageOS 刷机失败了一次。" },
+    { day: "2026-09-11", text: "LineageOS 的相机还有问题。" },
+    { day: "2026-09-12", text: "LineageOS 的续航还行。" },
+  ];
+  const rows = recallLedger({ ledger }, "LineageOS 现在稳吗", { maxEntries: 2 });
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map((row) => row.day), ["2026-09-11", "2026-09-12"], "同分时取更近的，输出按时间正序");
+  assert.deepEqual(recallLedger({ ledger }, "LineageOS 现在稳吗", { maxChars: 10 }), [], "预算不够就不塞");
+});
+
+test("摘要只补日账没带上的时段，不跟最近几天重复", () => {
+  const memory = {
+    ledger: [{ day: "2026-10-20", text: "最近这几天" }],
+    archive: [
+      { from: "2026-10-17T13:10:00.000Z", to: "2026-10-17T13:34:00.000Z", text: "更早的一段" },
+      { from: "2026-10-20T13:10:00.000Z", to: "2026-10-20T14:00:00.000Z", text: "日账已覆盖的一段" },
+      { from: "2026-10-22T13:10:00.000Z", to: "2026-10-22T14:00:00.000Z", text: "日账断更那天的一段" },
+    ],
+  };
+  const covered = new Set(["2026-10-20"]);
+  assert.deepEqual(recentArchive(memory, 3, { coveredDays: covered }).map((row) => row.text), ["更早的一段", "日账断更那天的一段"]);
+  assert.equal(recentArchive({ archive: [{ text: "没有时间边界的旧段" }] }, 3, { coveredDays: covered }).length, 1, "没时间边界的不当重复丢");
+});
+
+test("按需记忆块会把拽回来的老日子单独列一段", () => {
+  const ledger = [
+    { day: "2026-09-14", text: "聊了 LineageOS 24 的事。" },
+    ...Array.from({ length: 7 }, (_, i) => ({ day: `2026-10-${String(20 + i).padStart(2, "0")}`, text: `第${i + 1}天没什么事。` })),
+  ];
+  const block = buildMemoryBlock({ ledger, archive: [] }, { query: "LineageOS 那个能刷吗" });
+  assert.match(block, /【最近这些日子】/);
+  assert.match(block, /【更早记得的日子】/);
+  assert.match(block, /9月14日：聊了 LineageOS/);
 });
 
 test("摘要取材写成谁说了什么", () => {

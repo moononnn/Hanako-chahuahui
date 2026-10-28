@@ -17,6 +17,32 @@ function freshStore() {
   return { store: createStore(dir), dir };
 }
 
+/** 直接铺一本已有的账：超过上限的淘汰路径不能靠一条条追 2000 次来测。 */
+function seededStore(agentId, messages, extra = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chahuahui-store-"));
+  const file = path.join(dir, "v2", "threads", `${agentId}.json`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({
+    agentId,
+    messages,
+    nextSeq: messages.length + 1,
+    rolledThroughId: null,
+    rolledThroughSeq: null,
+    readThroughId: null,
+    readThroughAt: null,
+    pendingReply: null,
+    ...extra,
+  }), "utf8");
+  return { store: createStore(dir), dir };
+}
+
+const threadRows = (count, startSeq = 1) => Array.from({ length: count }, (_, i) => ({
+  id: `m${startSeq + i}`,
+  role: i % 2 ? "assistant" : "user",
+  text: String(startSeq + i),
+  seq: startSeq + i,
+}));
+
 test("「和小花聊聊」的存档：会话没了，原话还在，按回倒着排", () => {
   const { store, dir } = freshStore();
   store.appendReviewLog("alan", {
@@ -478,17 +504,28 @@ test("压过的消息不再进待压队列", () => {
   assert.equal(store.pendingMessages("nova").length, 0);
 });
 
-test("聊天超过 500 条后，滚动水位仍按序号过滤，不重复整理旧消息", () => {
-  const { store } = freshStore();
-  const rows = Array.from({ length: 120 }, (_, i) => store.appendMessage("nova", { role: i % 2 ? "assistant" : "user", text: String(i) }));
-  store.markRolledThrough("nova", rows[100].id);
-  for (let i = 120; i < 620; i += 1) {
-    store.appendMessage("nova", { role: i % 2 ? "assistant" : "user", text: String(i) });
-  }
+test("聊天超过上限后，滚动水位仍按序号过滤，不重复整理旧消息", () => {
+  const rows = threadRows(2000);
+  const { store } = seededStore("nova", rows, { rolledThroughId: rows[1990].id, rolledThroughSeq: 1990 });
+  for (let i = 0; i < 5; i += 1) store.appendMessage("nova", { role: "user", text: `新${i}` });
   const pending = store.pendingMessages("nova");
-  assert.equal(store.getThread("nova").messages.length, 500);
-  assert.ok(pending.every((row) => row.seq > rows[100].seq));
-  assert.equal(pending[0].text, "120");
+  assert.equal(store.getThread("nova").messages.length, 2000);
+  assert.ok(pending.every((row) => row.seq > 1990));
+  assert.equal(pending[0].seq, 1991);
+});
+
+test("滚动整理没跟上时，上限不吞没整理过的原话", () => {
+  const rows = threadRows(2000);
+  const { store } = seededStore("nova", rows);
+  for (let i = 0; i < 12; i += 1) {
+    store.appendMessage("nova", { role: "user", text: `新${i}` });
+  }
+  // 一条都没整理过：宁可让文件超一点，也不能静默丢掉没记过的原话
+  assert.equal(store.getThread("nova").messages.length, 2012);
+  // 整理追上来之后，下一次追加才把水位线以下的一起挤掉
+  store.markRolledThrough("nova", store.getThread("nova").messages.at(-1).id);
+  store.appendMessage("nova", { role: "user", text: "下一句" });
+  assert.equal(store.getThread("nova").messages.length, 2000);
 });
 
 test("同一个摘要批次重复提交只保留一份", () => {
@@ -556,12 +593,13 @@ test("档案候选和来源分开落盘，成功写入会清掉隔离候选", ()
 
 test("摘要段数有上限，超出丢最老的（长尾交给关系档案）", () => {
   const { store } = freshStore();
-  for (let i = 0; i < 20; i += 1) {
+  for (let i = 0; i < 220; i += 1) {
     store.appendArchive("nova", { id: `a${i}`, text: `第${i}段` });
   }
   const archive = store.readMemory("nova").archive;
-  assert.equal(archive.length, 12);
-  assert.equal(archive[0].text, "第8段");
+  assert.equal(archive.length, 200);
+  assert.equal(archive[0].text, "第20段");
+  assert.equal(archive.at(-1).text, "第219段", "留得住两百段，老日子才有东西可检索");
 });
 
 test("新伙伴默认不主动，已经聊过的老伙伴维持原样", () => {

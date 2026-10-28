@@ -53,6 +53,33 @@ test("模型目录只把明确接收图片的模型列为视觉模型", () => {
   assert.equal(modelSupportsImage({ visionCapabilities: {} }), true);
 });
 
+test("能力字段换个写法也得认得出来，不能把能识图的当纯文本", () => {
+  // 只认数组的写法在目录形态一变时会把整个可识图名单清空，
+  // 表现就是「能看图的模型一个都选不到」——她遇到过的就是这一种。
+  assert.equal(modelSupportsImage({ input: "text,image" }), true);
+  assert.equal(modelSupportsImage({ input: "image" }), true);
+  assert.equal(modelSupportsImage({ input: "text image" }), true);
+  assert.equal(modelSupportsImage({ input: "text" }), false);
+  // 同一件事的不同写法：任一个说了 image 就算。
+  assert.equal(modelSupportsImage({ input: ["text"], inputModalities: ["image"] }), true);
+  assert.equal(modelSupportsImage({ inputModalities: "text,image" }), true);
+  assert.equal(modelSupportsImage({ modalities: ["IMAGE"] }), true);
+  // 缺失依然当纯文本，不能凭空放行。
+  assert.equal(modelSupportsImage({}), false);
+  assert.equal(modelSupportsImage(null), false);
+});
+
+test("已配的识图模型不在目录里时，下拉不能把它默默拨成「暂不配置」", () => {
+  // 旧写法：不在名单里就把当前值丢掉。框上写着没配、实际发图还在用它，
+  // 两边对不上就算了，她改别的项时更容易顺手把这个配置清了。
+  const html = fs.readFileSync(new URL("../ui/settings.html", import.meta.url), "utf8");
+  assert.match(html, /function buildVisionSelect\(currentKey, currentRef = null\)/);
+  assert.match(html, /keep:\$\{currentRef\.provider\}\//, "超出目录的原配置得有个名字待在下拉里");
+  assert.match(html, /key\.startsWith\("keep:"\)/, "保存时得能把原值还回去");
+  assert.match(html, /buildVisionSelect\(visionKeyOf\(vision\), vision\.model\)/);
+  assert.match(html, /buildVisionSelect\(visionKeyOf\(s\.vision\), s\.vision\?\.model\)/);
+});
+
 test("识图预算给的是「思考 + 描述」，空正文在同路加预算重试一次", () => {
   // 踩过的坑（2026-10-03 / 10-04）：MiniMax M3.1 Flash 这类思考很重的模型，
   // 500（动图 900、测试 40）会被思考吃光，正文一个字不剩，表现为超时或没说明。

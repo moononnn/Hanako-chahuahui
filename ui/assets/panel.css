@@ -486,6 +486,7 @@ body.slot-embedded .slot-band-title {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  position: relative;
   background: var(--paper);
   border: 1px solid var(--line-soft);
   border-radius: var(--r-xl);
@@ -570,6 +571,27 @@ body.slot-embedded .slot-band-title {
 .stream:not(.bottom-feedback) {
   transition: transform 180ms cubic-bezier(.22, .8, .28, 1);
 }
+/* 顶部那条小提示：正在翻更早的 / 没有更早的了。
+   绝对定位浮在聊天流上面，平时不占位置，也不吃点击。 */
+.thread-top-tip {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  padding: 3px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: rgba(255, 253, 249, .94);
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(74, 70, 64, .10);
+}
+.thread-top-tip[hidden] { display: none; }
+
 .jump-bottom {
   position: absolute;
   z-index: 4;
@@ -874,6 +896,20 @@ body.slot-embedded .chat.has-bg .composer::before {
   border-radius: 10px;
   object-fit: contain;
   background: var(--sunken);
+}
+/* 原图按她定的期限清掉之后，用当时那段描述顶在原来放图的位置。 */
+.message-image-gone {
+  margin-top: 7px;
+  max-width: min(320px, 100%);
+  box-sizing: border-box;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: var(--sunken);
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .tick {
   display: inline-flex;

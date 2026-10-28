@@ -56,7 +56,7 @@ import { createFocusCompanion, focusReminderSpec, focusChatText } from "./lib/fo
 import { createInterruptibleComposer, hasNewerUserMessage, isSpeechMessage } from "./lib/turn-window.js";
 import { createThreadRebuildScheduler } from "./lib/rebuild-queue.js";
 import { protectKey, unprotectKey, isProtectedKey, encryptionStatus } from "./lib/crypto.js";
-import { listBackgrounds, readBackgroundBytes, writeBackground, removeBackgroundFile, normalizeOpacity, normalizeTone, isBackgroundFile, fileTypeOf } from "./lib/background.js";
+import { listBackgrounds, readBackgroundBytes, writeBackground, removeBackgroundFile, normalizeOpacity, normalizeTone, isBackgroundFile, fileTypeOf, detectImageType } from "./lib/background.js";
 import { pruneStickerUsage, recordStickerUsage } from "./lib/sticker-usage.js";
 import {
   DEFAULT_CONTEXT,
@@ -248,6 +248,13 @@ import {
   stickerLabelText,
 } from "./lib/stickers.js";
 import {
+  buildStickerNudge,
+  bumpNudgeState,
+  latestUserSignal,
+  nudgeStateForToday,
+  stickerSilenceRounds,
+} from "./lib/sticker-nudge.js";
+import {
   createStickerGroup,
   importStickerBytes,
   listStickerLibrary,
@@ -260,6 +267,12 @@ import {
   renameStickerGroup,
 } from "./lib/sticker-library.js";
 import { ensureStickerThumb, startThumbWarmup } from "./lib/sticker-thumb.js";
+import { contentHash, isReusableAttachment, touchAttachmentMeta } from "./lib/attachment-hash.js";
+import { catalogRowSupportsImage } from "./lib/model.js";
+import { modelSupportsImage } from "./lib/vision.js";
+import { IMAGE_TOOL, IMAGE_TOOL_EMPTY_TEXT, IMAGE_TOOL_NAME, formatImageMatches, pickImageMessages, resolveImageRange } from "./lib/image-tool.js";
+import { NATIVE_IMAGE_BODY_ROWS, NATIVE_IMAGE_BYTES_PER_TURN, NATIVE_IMAGE_PER_TURN, hasNativeImageMark, rewriteNativeImageMarks } from "./lib/native-vision.js";
+import { normalizeRetentionDays, planCleanup, summarizeStorage } from "./lib/image-retention.js";
 import { canAnswerPoke } from "./lib/poke.js";
 import { badgeGuide, badgeText, fallbackBadge, normalizeBadge, parseBadgeMarker } from "./lib/badges.js";
 import {
@@ -270,6 +283,7 @@ import {
   normalizeVisionConfig,
   partnerOfflineNotice,
   shouldTryVisionFallback,
+  splitVisionNote,
   visionUnavailableNotice,
 } from "./lib/vision.js";
 import { prepareVisionFrames } from "./lib/gif-frames.js";
@@ -875,6 +889,29 @@ export function apply(ctx) {
   }
 
   /**
+   * 翻她以前发过的图（工具执行器）。
+   *
+   * 上下文只装得住最近二十几条，隔一天那张图早就不在里面了。
+   * 所以她一提「昨天那张」，ta 得有地方去翻，而不是凭印象编一个。
+   */
+  function createFindImageTool({ messages = [] } = {}) {
+    const find = ({ name, arguments: args } = {}) => {
+      if (name !== IMAGE_TOOL_NAME) {
+        return { isError: true, text: "这个工具不存在。就用手上已有的东西说话。" };
+      }
+      const range = resolveImageRange({ since: args?.since, until: args?.until });
+      const rows = pickImageMessages(messages, { ...range, keyword: args?.keyword }, readAttachmentMeta);
+      const text = formatImageMatches(rows);
+      if (!text) return { isError: false, text: IMAGE_TOOL_EMPTY_TEXT };
+      return {
+        isError: false,
+        text: `${text}\n（描述是当初识图时写下的；她问的细节里描述没有的，就直说看不清，别替那张图补内容。）`,
+      };
+    };
+    return find;
+  }
+
+  /**
    * 读她发过来的 B 站视频（工具执行器）。
    *
    * 2026-10-23 从「回复前自动取材料」改成「伙伴自己调」：
@@ -965,6 +1002,8 @@ export function apply(ctx) {
     "rhythmEnabled", "rhythmStyleEnabled", "rhythmProactiveEnabled", "rhythmResetAt", "voiceEnabled", "voiceDelivery", "voiceProfiles", "voiceProfile", "videoShareMaxPerDay",
     // 公共事件（2026-10-24）：节目祝福与天气提醒各自一个开关，总闸关了两个都不发。
     "publicEventsEnabled", "festivalGreetingEnabled", "weatherAlertEnabled",
+    // 图片留多久：30 / 45 / 60 / 90 天，或 0 = 永久不删。
+    "imageRetentionDays",
   ]);
   const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "vision", "voice", "partnerFeedEnabled", "videoSharingEnabled"]);
 
@@ -996,6 +1035,10 @@ export function apply(ctx) {
     if (Object.prototype.hasOwnProperty.call(patch, "userNameOverride")) {
       const name = String(patch.userNameOverride ?? "").trim().slice(0, 40);
       patch.userNameOverride = name || null;
+    }
+    // 图片留多久：只收认得的那几档，其余一律回默认。
+    if (Object.prototype.hasOwnProperty.call(patch, "imageRetentionDays")) {
+      patch.imageRetentionDays = normalizeRetentionDays(patch.imageRetentionDays);
     }
     // 拾光记今日情境：只收真布尔，别让 "false" 这种字符串混成真值
     if (Object.prototype.hasOwnProperty.call(patch, "daybookEnabled")) {
@@ -1348,22 +1391,203 @@ export function apply(ctx) {
   fs.mkdirSync(attachmentsDir, { recursive: true });
 
   /**
-   * 附件总量闸：单张 10MB 管住了，总量也得管，不然反复发图能把数据目录撑满。
-   * 超了只拒新的，并告诉她用了多少——**不偷偷删老图**（删了她翻记录会看到裂图）。
+   * 硬盘还剩多少：给图片留出 1GB 余量，不跟她聊天抢地盘。
+   * 读不到磁盘信息就不拦她——宁可赌一把，也不拿一个猜出来的数字当门槛。
    */
-  const ATTACHMENT_TOTAL_BYTES = 500 * 1024 * 1024;
-  function attachmentDirBytes() {
-    let total = 0;
+  function hasDiskRoomFor(extraBytes) {
     try {
-      for (const name of fs.readdirSync(attachmentsDir)) {
-        try { total += fs.statSync(path.join(attachmentsDir, name)).size; } catch { /* 读不到的跳过 */ }
-      }
-    } catch { /* 目录还没建 */ }
-    return total;
+      const stat = fs.statfsSync ? fs.statfsSync(attachmentsDir) : null;
+      if (!stat) return true;
+      return stat.bavail * stat.bsize - extraBytes > 1024 * 1024 * 1024;
+    } catch {
+      return true;
+    }
   }
 
   function attachmentPath(id) {
     return path.join(attachmentsDir, `${String(id).replace(/[^a-zA-Z0-9_-]/g, "_")}.bin`);
+  }
+
+  /** 只看元数据，不拉图片本体。翻旧图那一步只靠时间和标题，用不着把几兆字节读进内存。 */
+  function readAttachmentMeta(id) {
+    const safeId = String(id).replace(/[^a-zA-Z0-9_-]/g, "_");
+    try { return JSON.parse(fs.readFileSync(path.join(attachmentsDir, `${safeId}.json`), "utf8")); } catch { return null; }
+  }
+
+  /** 全部图片的元数据。清账与统计只看这层，不读 bin。 */
+  function listAttachmentMetas() {
+    let names = [];
+    try { names = fs.readdirSync(attachmentsDir); } catch { return []; }
+    const out = [];
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue;
+      try { out.push(JSON.parse(fs.readFileSync(path.join(attachmentsDir, name), "utf8"))); } catch { /* 坏文件跳过 */ }
+    }
+    return out;
+  }
+
+  /** 设置页那行存储统计：多少张、占多大、最老一张是哪天、几张过了她定的期、几张是孤儿。 */
+  function imageStorageSummary() {
+    const days = store.getGlobalSettings().imageRetentionDays;
+    const summary = summarizeStorage(listAttachmentMetas(), days, Date.now(), store.referencedAttachmentIds());
+    return { ...summary, oldestAt: summary.oldestAt ? new Date(summary.oldestAt).toISOString() : null };
+  }
+
+  /**
+   * 把这次要清的图从盘上抹掉。只删图片本体，元数据留个 purgedAt 标记。
+   *
+   * 不能把元数据也删了：聊天里那条消息还挂着这个 id，前端拿不到图时会退回读
+   * 消息自己的 visionNote 写一句「这张图已经清掉了，当时看到的是…」（见 panel.html 的
+   * loadAttachmentImage）。两个文件必须成对处理——只删 .bin 会让设置页继续按 size 报占用，
+   * 只删 .json 则把文件变成永远没人认领、以后也删不掉的孤儿。
+   */
+  function dropAttachmentBytes(meta, now = new Date().toISOString()) {
+    try { fs.rmSync(attachmentPath(meta.id), { force: true }); } catch { return false; }
+    const safeId = String(meta.id).replace(/[^a-zA-Z0-9_-]/g, "_");
+    const refreshed = readAttachmentMeta(safeId);
+    if (refreshed) {
+      try {
+        fs.writeFileSync(path.join(attachmentsDir, `${safeId}.json`),
+          JSON.stringify({ ...refreshed, purgedAt: now }, null, 2), "utf8");
+      } catch { /* 标记没写上也不回滚：图已经删了，当没清只会让她再删一次同一个文件 */ }
+    }
+    return true;
+  }
+
+  /**
+   * 按她定的期限和「还有人认领吗」清一批。
+   *
+   * 全是本地活：不调识图、不调模型、不分批、也不会跑过页面那个超时。
+   * 曾经会为了「删之前先留一句话」去补一次识图，那个理由站不住：
+   * 那段字本来就写在消息的 visionNote 上，不在附件元数据里——补的那份只给翻旧图的工具看，
+   * 而那个工具筛的也是还在聊天记录里的消息，也就是说无论如何都保不住被挤出去的那批。
+   */
+  function purgeExpiredImages(now = Date.now()) {
+    const days = store.getGlobalSettings().imageRetentionDays;
+    if (!days) return { removed: 0, bytes: 0, skipped: 0, orphanCount: 0, expiredCount: 0, keepsForever: true };
+    const plan = planCleanup(listAttachmentMetas(), { days, referencedIds: store.referencedAttachmentIds() }, now);
+    let removed = 0;
+    let bytes = 0;
+    let skipped = 0;
+    for (const meta of plan.rows) {
+      if (!dropAttachmentBytes(meta)) { skipped += 1; continue; }
+      removed += 1;
+      bytes += Number(meta.size) || 0;
+    }
+    return {
+      removed, bytes, skipped,
+      orphanCount: plan.orphanCount,
+      expiredCount: plan.rows.length - plan.orphanCount,
+      keepsForever: false,
+    };
+  }
+
+  /** 这一轮该由哪个聊天模型开口。跟回复时用的是同一套账。 */
+  async function chatModelRefOf(agentId) {
+    try {
+      const catalog = await ctx.models.list();
+      const choice = resolveModelChoice(catalog, {
+        partnerRef: store.getPartnerSettings(agentId).model,
+        globalRef: store.getGlobalSettings().model,
+        agentRef: await agentDefaultModel(agentId),
+      });
+      return choice ? { provider: choice.provider, model: choice.model } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 这位伙伴自己的聊天模型能不能直接吃图。
+   *
+   * 问的是「它到底收不收图片」，不是「应用里配没配识图模型」。
+   * 这两件事被她指出过：识图模型是给看不了图的模型兜底的，
+   * 人家自己能看，就不该扶着它、让它在旁边听转述。
+   */
+  async function chatModelSeesImages(agentId) {
+    try {
+      const catalog = await ctx.models.list();
+      const choice = resolveModelChoice(catalog, {
+        partnerRef: store.getPartnerSettings(agentId).model,
+        globalRef: store.getGlobalSettings().model,
+        agentRef: await agentDefaultModel(agentId),
+      });
+      return catalogRowSupportsImage(catalog, choice);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 把当期那张图真的塞进请求里，让聊天模型自己看。
+   *
+   * prompt 那边对 nativeVision 的图只留了「［附图：img_x］」这个记号，这里负责兑付。
+   * 四条规矩：
+   *
+   * ① 同一轮里的每个记号都得兑，不能只兑第一个。她连发两张时那两句会合成一条
+   *    消息、带出两个记号，只认第一个的话剩下那张会原样留给模型当字面文读。
+   * ② 带本体的只给最近两条 user。一张图发过去、她接着追问「图上第二行写的啥」
+   *    是最常见的下一句，那条追问本身不带图，只认「最后一条」就等于刚看过就哑了。
+   *    再往前的图不再重发：每轮重发一遍是在给钱包上刑。
+   * ③ 不带本体的那些也不能留成字面文，用当时写下的描述顶上去。
+   * ④ 描述也没有时（原生那条后台还没补完，或者原图按期限清了），退到最笼统的那句，
+   *    让它知道自己少看了一张，别当成图里没内容。
+   */
+  function attachNativeImage(messages, agentId) {
+    const rows = Array.isArray(messages) ? messages : [];
+    // 从尾巴往前数 user 行：第 0 行带本体，第 1 行也带（她的追问就在这个位置），往后就不带了。
+    const withBody = new Set();
+    const budget = { left: NATIVE_IMAGE_PER_TURN, bytesLeft: NATIVE_IMAGE_BYTES_PER_TURN };
+    let seenUsers = 0;
+    for (let i = rows.length - 1; i >= 0 && seenUsers < NATIVE_IMAGE_BODY_ROWS; i -= 1) {
+      if (rows[i]?.role !== "user") continue;
+      withBody.add(i);
+      seenUsers += 1;
+    }
+    if (!withBody.size) return rows;
+    // 描述只读元数据，不拉图片本体：绝大多数记号都走这条，别为了识图再读几兆字节进内存。
+    const seenOf = (id) => String(readAttachmentMeta(id)?.description ?? "").trim();
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+      const row = rows[i];
+      if (row?.role !== "user" || !hasNativeImageMark(row.content)) continue;
+      const takeBody = withBody.has(i) && budget.left > 0;
+      const imageOf = takeBody
+        ? (id) => {
+          const stored = readAttachment(id, agentId);
+          // 图没读出来就不塞：宁可让它少看一张，也别让整轮请求报废。
+          return stored?.data
+            ? { type: "image", mimeType: stored.mimeType, data: stored.data.toString("base64") }
+            : null;
+        }
+        : () => null;
+      const done = rewriteNativeImageMarks(row.content, { imageOf, seenOf, budget });
+      if (!done.hit) continue;
+      rows[i] = { ...row, content: done.content };
+    }
+    return rows;
+  }
+
+  /**
+   * 原生看图那条路的描述不挡着回复：先让她进场，描述随后补存到元数据里。
+   *
+   * 不补的话，三十天后按期限清图时这张就只剩一个字都没留下；
+   * 用识图模型补最稳，没配就退回这位伙伴自己的聊天模型（它本来就能看图）。
+   */
+  function backfillDescriptionLater(agentId, attachmentId, said) {
+    void (async () => {
+      try {
+        const stored = readAttachment(attachmentId, agentId);
+        if (!stored?.data || stored.description) return;
+        const vision = effectiveVisionConfig(store.getGlobalSettings().vision, store.getPartnerSettings(agentId).vision);
+        const ref = (vision.model && vision.status === "verified") ? vision.model : await chatModelRefOf(agentId);
+        if (!ref) return;
+        const described = await describeImageWithFallback(ref, stored, said);
+        if (!described?.note) return;
+        recordAttachmentDescription(attachmentId, { ...splitVisionNote(described.note), via: described.via });
+      } catch (error) {
+        diagnostics({ event: "vision.native.describe.failed", agentId, attachmentId, error: describeError(error) });
+      }
+    })();
   }
 
   function readAttachment(id, expectedAgentId = null) {
@@ -1379,26 +1603,87 @@ export function apply(ctx) {
     }
   }
 
+  /** 扫一遗元数据，找这位伙伴发过的同一份文件。老图没有 hash，自然不命中。 */
+  function findAttachmentByHash(hash, agentId, mimeType) {
+    let names = [];
+    try { names = fs.readdirSync(attachmentsDir); } catch { return null; }
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue;
+      try {
+        const meta = JSON.parse(fs.readFileSync(path.join(attachmentsDir, name), "utf8"));
+        if (!isReusableAttachment(meta, { hash, agentId, mimeType })) continue;
+        // 元数据在、文件没了就不算命中：否则她会拿到一条点开是空白的记录。
+        if (!fs.existsSync(attachmentPath(meta.id))) continue;
+        return meta;
+      } catch { /* 坏掉的元数据跳过，不因此挡住她发图 */ }
+    }
+    return null;
+  }
+
+  /** 同一份文件又被发了一次：只记一笔时间，不重新落盘。 */
+  function touchAttachment(meta) {
+    const next = touchAttachmentMeta(meta);
+    const metaPath = path.join(attachmentsDir, `${String(meta.id).replace(/[^a-zA-Z0-9_-]/g, "_")}.json`);
+    try { fs.writeFileSync(metaPath, JSON.stringify(next, null, 2), "utf8"); } catch { /* 记不上时间也不耽误她发图 */ }
+    return next;
+  }
+
+  /**
+   * 识图结果绑到附件上：短标题用来找，完整描述用来回忆。
+   *
+   * 两者都存在图片自己的元数据里，跟她翻聊天记录的路径无关——
+   * 那张消息就算早滑出上下文了，图遣还得回来。
+   */
+  function recordAttachmentDescription(id, { title, description, via }, now = new Date().toISOString()) {
+    const safeId = String(id).replace(/[^a-zA-Z0-9_-]/g, "_");
+    const metaPath = path.join(attachmentsDir, `${safeId}.json`);
+    try {
+      const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+      const next = {
+        ...meta,
+        title: String(title ?? "").trim().slice(0, 80) || meta.title || "",
+        description: String(description ?? "").trim().slice(0, 4000) || meta.description || "",
+        describedAt: now,
+        describedVia: String(via ?? "").trim() || meta.describedVia || "",
+      };
+      fs.writeFileSync(metaPath, JSON.stringify(next, null, 2), "utf8");
+      return next;
+    } catch { /* 描述写不上不影响这次发送，下次重看还能再补 */ }
+    return null;
+  }
+
   function saveAttachment({ name, mimeType, data, agentId }) {
-    const cleanType = String(mimeType ?? "").toLowerCase();
-    if (!ATTACHMENT_TYPES.has(cleanType)) throw new Error("只支持 PNG、JPG、GIF 和 WebP 图片");
+    const claimedType = String(mimeType ?? "").toLowerCase();
+    if (!ATTACHMENT_TYPES.has(claimedType)) throw new Error("只支持 PNG、JPG、GIF 和 WebP 图片");
     const raw = String(data ?? "").replace(/^data:[^,]+,/, "");
     if (!isStrictBase64(raw)) throw new Error("图片数据格式不正确");
     const bytes = Buffer.from(raw, "base64");
     if (!bytes.length || bytes.length > ATTACHMENT_MAX_BYTES) throw new Error("图片太大了，单张上限 10MB");
-    // 单张管住了，总量也得管。
-    const usedBytes = attachmentDirBytes();
-    if (usedBytes + bytes.length > ATTACHMENT_TOTAL_BYTES) {
-      throw new Error(`图片存得太多了（已经用了约 ${Math.round(usedBytes / 1048576)} MB），先删掉一些老对话里的图片再发`);
+    // 以字节为准，不以声称的类型为准：浏览器给的 mimeType 跟着扩展名与 Content-Type 走，
+    // 改名后的文件会带着错的类型过来（一张 PNG 叫 .jpg，声称就是 image/jpeg）。
+    // 先按魔数认出真实格式；认不出时才退回声称的类型，那道家底校验照旧生效。
+    const detectedType = detectImageType(bytes);
+    const cleanType = detectedType ?? claimedType;
+    if (!detectedType && !imageBytesMatchMime(bytes, cleanType)) throw new Error("图片内容与文件类型不一致");
+    // 同一份文件发第二遍：复用原件，只在消息里留一条新的时间。
+    // 先查复用再查总量：复用的不占新空间，不能因为“满了”就把一个旧图发不出去。
+    const hash = contentHash(bytes);
+    const existing = findAttachmentByHash(hash, agentId, cleanType);
+    if (existing) {
+      const touched = touchAttachment(existing);
+      return { ...touched, data: bytes, reused: true };
     }
-    if (!imageBytesMatchMime(bytes, cleanType)) throw new Error("图片内容与文件类型不一致");
+    // 她自己拍板过的：不要拿「图满了」挡在聊天里。图片总量不再当门槛，
+    // 到多少只在设置页里报个数，删不删是她按的按钮。真正可能把人卡住的只剩硬盘本身。
+    if (!hasDiskRoomFor(bytes.length)) throw new Error("磁盘空间不够了，先腾点地方再发");
     const id = `img_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     const safeId = id.replace(/[^a-zA-Z0-9_-]/g, "_");
     const binPath = attachmentPath(safeId);
     const metaPath = path.join(attachmentsDir, `${safeId}.json`);
     const binTemp = `${binPath}.tmp_${process.pid}_${Date.now()}`;
     const metaTemp = `${metaPath}.tmp_${process.pid}_${Date.now()}`;
-    const meta = { id: safeId, agentId: String(agentId ?? ""), name: String(name ?? "图片").trim().slice(0, 120) || "图片", mimeType: cleanType, size: bytes.length, at: new Date().toISOString() };
+    const now = new Date().toISOString();
+    const meta = { id: safeId, agentId: String(agentId ?? ""), name: String(name ?? "图片").trim().slice(0, 120) || "图片", mimeType: cleanType, size: bytes.length, at: now, hash, lastSeenAt: now, occurrences: 1 };
     try {
       fs.writeFileSync(binTemp, bytes);
       fs.renameSync(binTemp, binPath);
@@ -1442,14 +1727,14 @@ export function apply(ctx) {
     return removed;
   }
 
-  async function describeImage(modelRef, attachment) {
+  async function describeImage(modelRef, attachment, context = "") {
     const ref = normalizeModelRef(modelRef);
     if (!ref || !attachment?.data) throw new Error("识图模型不可用");
     const requestId = `chahuahui_image_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
     // 用完就释放：识图失败或中断时别让请求一直挂在模型那一侧
     // （文字那条路早就在 finally 里 cancel 了，识图这处漏了）。
     try {
-      return await describeImageOnce(ref, attachment, requestId);
+      return await describeImageOnce(ref, attachment, requestId, context);
     } finally {
       try {
         await ctx.models.cancel(requestId);
@@ -1466,12 +1751,12 @@ export function apply(ctx) {
    * 先看宿主那条备用通道能不能看图——能看就让它看，总比让 ta 收一张“没能看清”强。
    * 只有备用通道也看不了（模型只吃文字、或者它也挂了），才轮到界面提示。
    */
-  async function describeImageWithFallback(modelRef, attachment) {
+  async function describeImageWithFallback(modelRef, attachment, context = "") {
     const ref = normalizeModelRef(modelRef);
     if (!ref || !attachment?.data) throw new Error("识图模型不可用");
     let firstError = null;
     try {
-      return { note: await describeImage(ref, attachment), via: `${ref.provider}/${ref.model}` };
+      return { note: await describeImage(ref, attachment, context), via: `${ref.provider}/${ref.model}` };
     } catch (error) {
       firstError = error;
     }
@@ -1512,9 +1797,11 @@ export function apply(ctx) {
       const stored = readAttachment(row.attachment.id, agentId);
       if (!stored?.data) continue;
       try {
-        const described = await describeImageWithFallback(vision.model, stored);
+        const described = await describeImageWithFallback(vision.model, stored, row.text);
         if (described.note) {
           store.patchMessage(agentId, row.id, { visionNote: described.note, visionVia: described.via });
+          const split = splitVisionNote(described.note);
+          recordAttachmentDescription(row.attachment.id, { ...split, via: described.via });
           filled += 1;
         }
       } catch (error) {
@@ -1565,13 +1852,19 @@ export function apply(ctx) {
     }
   }
 
-  async function describeImageOnce(ref, attachment, requestId) {
+  async function describeImageOnce(ref, attachment, requestId, context = "") {
     // 动图先在本地抽帧：只把 GIF 原样丢给模型的话，它解码出来的是静止的一帧，
     // 动作过程和梗全丢。抽成几张按时间顺序排好的 PNG，它才读得出"动起来"是什么。
     const prepared = await prepareVisionFrames(attachment);
-    const visionPrompt = prepared.animated
-      ? `请用简洁中文描述这张动图：以下 ${prepared.parts.length} 张图按时间顺序截取自同一个 GIF（原动画共 ${prepared.totalFrames} 帧）。请综合前后变化理解完整动作和梗，不要只描述第一帧；再补上主要对象、氛围、可见文字，不确定的内容请标明不确定。只输出图片说明。`
-      : "请用简洁中文描述这张图片：主要对象、动作、氛围、可见文字；不确定的内容请标明不确定。只输出图片说明。";
+    // 她发图时说的那句话是这张图在当时的意思。不把它给模型，出来的就是
+    // 「一张电脑屏幕的截图」这种三十天后连她自己也认不出的废话。
+    const said = String(context ?? "").trim().slice(0, 300);
+    const saidLine = said ? `\n她发这张图时说的是：「${said}」。把这句当线索，别照抄。` : "";
+    // 固定两段：标题是往后找图的检索键，描述是回忆用的。
+    const formatLine = "\n按这个格式回答，不要多余的话：\n【标题】十五字以内，能让她一眼认出是哪张图\n【描述】两三句：主要对象、动作、氛围，以及图上看得见的文字（照抄原文，看不清就写看不清）";
+    const visionPrompt = (prepared.animated
+      ? `请用简洁中文描述这张动图：以下 ${prepared.parts.length} 张图按时间顺序截取自同一个 GIF（原动画共 ${prepared.totalFrames} 帧）。请综合前后变化理解完整动作和梗，不要只描述第一帧。不确定的内容请标明不确定。`
+      : "请用简洁中文描述这张图片。不确定的内容请标明不确定。") + saidLine + formatLine;
     // 预算给“思考 + 描述”合计：思考很重的模型（如 MiniMax M3.1 Flash）会把 500 吃光、正文留空。
     // 拿到空正文就只在同一路把预算翻倍重试一次，不换模型也不换通道。
     const base = prepared.animated ? 3600 : 2400;
@@ -2663,6 +2956,8 @@ export function apply(ctx) {
       userName: USER_NAME,
       describeSticker: (id) => stickerLabels.get(id) ?? null,
     });
+    // 主动开口也可能撞上她刚发的图：同一个记号，同一套塞法。
+    attachNativeImage(historyMessages, agentId);
     const recentAsks = threadRows
       .filter((row) => row.proactive && row.text)
       .slice(-3)
@@ -5202,6 +5497,16 @@ export function apply(ctx) {
     // 日子按天说一遍就够（跨天或内容变了才重新露），不每轮把节日念叨一次。
     const latestUser = [...windowed].reverse().find((row) => row?.role === "user" && !row.recalled && isSpeechMessage(row));
     const threadMessages = store.getThread(agentId).messages;
+    // 表情包沉默提醒（2026-10-26）：图库和解析都通、模型却连着几天不甩，
+    // 说明缺的是可模仿的示范和成立的时机，不是能力。这里只在两个时机放行一次，不催量。
+    const nudgeState = nudgeStateForToday(store.getPartnerSettings(agentId).stickerNudge, dayKey(new Date()));
+    const stickerNudge = buildStickerNudge({
+      signal: latestUserSignal(threadMessages),
+      silenceRounds: stickerSilenceRounds(threadMessages),
+      nudgesToday: nudgeState.count,
+      userName: USER_NAME,
+    });
+    const stickerNudgeText = stickerNudge.text;
     const latestUserIndex = latestUser ? threadMessages.findIndex((row) => row?.id === latestUser.id) : -1;
     const previousAssistant = latestUserIndex > 0
       ? previousAssistantBeforeUser(threadMessages, latestUserIndex)
@@ -5353,6 +5658,7 @@ export function apply(ctx) {
       // 只给聊天这条回复路；主动联系那条路不是被对方否定之后的场合，不需要承接。
       stanceText,
       stickerText,
+      stickerNudgeText,
       timeText,
       daybookText,
       todoDoneText,
@@ -5384,6 +5690,15 @@ export function apply(ctx) {
     });
     // 只记体积和档位，不记私聊原文；字符数不是实际 token 用量。
     diagnostics({ event: "reply.prompt.profile", agentId, profile: agentId === compactReplyPilotId ? "compact-v1" : "legacy", systemChars: systemPrompt.length });
+    // 只记「提醒了没、为什么提醒」，提醒后有没有真动，看 sticker.reply 那条的 marker/sent。
+    if (stickerNudge.kind) {
+      const today = new Date();
+      diagnostics({ event: "sticker.nudge", agentId, kind: stickerNudge.kind, silenceRounds: stickerSilenceRounds(threadMessages) });
+      // 沉默兜底一天只提一次；信号触发不记账，它跟着她给的时机走，不设额度。
+      if (stickerNudge.kind === "silence") {
+        store.setPartnerSettings(agentId, { stickerNudge: bumpNudgeState(nudgeState, dayKey(today)) });
+      }
+    }
     // 表情包进上下文不能只剩"[表情]"两个字：从本地翻出标签，把"她发的是哪张"说成人话。
     // 只查本地（图库 + 快照），不靠看图，也不依赖表情包数据源当场在线。
     const stickerLabels = stickerLabelMap({
@@ -5395,6 +5710,8 @@ export function apply(ctx) {
       describeSticker: (id) => stickerLabels.get(id) ?? null,
       mergeConsecutiveUser: true,
     });
+    // 当期那张原生看的图真的塞进请求：prompt 里只留了个记号，这里换成本体。
+    attachNativeImage(messages, agentId);
     diagnostics({ event: "reply.context", agentId, rows: windowed.length, messages: messages.length,
       rawChars: windowed.reduce((n, row) => n + String(row.text ?? "").length, 0),
       firstId: windowed[0]?.id ?? null, targetId: replyTargetId });
@@ -5420,9 +5737,15 @@ export function apply(ctx) {
     const chatTools = [];
     if (offerSearchTool) chatTools.push(SEARCH_TOOL);
     if (videoShelf.length) chatTools.push(READ_VIDEO_TOOL);
+    // 翻旧图的工具只在「她真的发过图」时才给：一张都没发过时挂个空工具，只会招 ta 乱调。
+    const threadForTools = store.getThread(agentId).messages;
+    const imageShelf = threadForTools.filter((row) => row?.role === "user" && row?.attachment?.id);
+    const findImageTool = imageShelf.length ? createFindImageTool({ messages: threadForTools }) : null;
+    if (findImageTool) chatTools.push(IMAGE_TOOL);
     const runChatTool = chatTools.length
       ? async (payload) => {
         if (payload?.name === READ_VIDEO_TOOL_NAME) return readVideoTool(payload);
+        if (payload?.name === IMAGE_TOOL_NAME && findImageTool) return findImageTool(payload);
         if (payload?.name === SEARCH_TOOL_NAME && webSearchTool) return webSearchTool(payload);
         return { isError: true, text: "这个工具不存在。就用手上已有的东西说话。" };
       }
@@ -5558,6 +5881,8 @@ export function apply(ctx) {
       marker: composed.marker || null,
       sent: composed.sentSticker,
       picked: composed.stickerId ?? null,
+      // 这一轮提醒了没：拿来对账「提醒之后到底动没动」。
+      nudge: stickerNudge.kind || null,
     });
 
     // 她一口气说了好几条吗（那些没接住的话头要马上进话题本）。
@@ -7386,6 +7711,20 @@ export function apply(ctx) {
         try {
           const rows = await listPartners();
           const globalSettings = store.getGlobalSettings();
+          // 一次性把「谁能直接看图」算好：她配的聊天模型本身收图，就不该再被识图模型卡着。
+          let visionCatalog = null;
+          try { visionCatalog = await ctx.models.list(); } catch { /* 读不到就都按没有原生识图算 */ }
+          const nativeVisionIds = new Set();
+          if (visionCatalog) {
+            for (const row of rows) {
+              const choice = resolveModelChoice(visionCatalog, {
+                partnerRef: store.getPartnerSettings(row.id).model,
+                globalRef: globalSettings.model,
+                agentRef: await agentDefaultModel(row.id),
+              });
+              if (catalogRowSupportsImage(visionCatalog, choice)) nativeVisionIds.add(row.id);
+            }
+          }
           const partners = rows.map((row) => {
             const thread = store.getThread(row.id);
             const last = thread.messages[thread.messages.length - 1] ?? null;
@@ -7420,7 +7759,9 @@ export function apply(ctx) {
               // 背景元数据跟着轮询下发：她在设置页换完图，聊天窗最迟一轮就自己跟上
               background: settings.background,
               imageCapability: {
-                allowed: Boolean(vision.model && vision.status === "verified"),
+                // 两条路都算数：自己的聊天模型能看图，或者配好的识图模型测过了。
+                allowed: Boolean((vision.model && vision.status === "verified") || nativeVisionIds.has(row.id)),
+                native: nativeVisionIds.has(row.id),
                 source: vision.source,
                 status: vision.status,
                 error: vision.error,
@@ -7541,12 +7882,27 @@ export function apply(ctx) {
           // 这里不再盖章「已读」：拉一次记录不等于她看过（轮询也走这条路，
           // 窗口开着而人不在的时候，会把没看过的消息全标成已读）。
           // 真看过由前端在「可见且有焦点」时显式上报，见下面的 /read。
+          // 分页：不带 limit 时保持原样，整本一次给（旧前端和别的调用方不用改）。
+          // limit 只给最近一页，before 用 seq 当游标往前翻；total 让前端自己算还有没有更早的。
+          const query = (name) => (typeof c.req.query === "function" ? c.req.query(name) : undefined);
+          const limitRaw = Number(query("limit"));
+          // 上限对齐单本聊天账的容量：再多要也只能拿到这么多
+          const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 2000) : 0;
+          const beforeRaw = Number(query("before"));
+          const before = Number.isFinite(beforeRaw) && beforeRaw > 0 ? Math.floor(beforeRaw) : 0;
+          const visible = thread.messages.filter((message) =>
+            !message?.recalled || message.recallMode !== "hard" || message.role === "assistant"
+          );
+          const scoped = before ? visible.filter((message) => Number(message.seq) < before) : visible;
+          const page = limit ? scoped.slice(-limit) : scoped;
+          const hasMore = page.length > 0
+            && visible.some((message) => Number(message.seq) < Number(page[0].seq));
           return c.json({
             ok: true,
             agentId,
-            messages: thread.messages.filter((message) =>
-              !message?.recalled || message.recallMode !== "hard" || message.role === "assistant"
-            ).map((message) => {
+            total: visible.length,
+            hasMore,
+            messages: page.map((message) => {
               if (message?.role === "assistant" && message.recalled && message.recallMode === "hard") {
                 return { ...message, text: recallLabel, bubbles: null, kind: "recalled" };
               }
@@ -8045,9 +8401,6 @@ export function apply(ctx) {
         let visionNotice = null;
         if (isImage) {
           const vision = effectiveVisionConfig(store.getGlobalSettings().vision, store.getPartnerSettings(agentId).vision);
-          if (!vision.model || vision.status !== "verified") {
-            return c.json({ ok: false, error: { code: "VISION_UNAVAILABLE", message: "当前伙伴没有通过测试的识图模型，暂时不能发送图片" } }, 403);
-          }
           // 存图和识图分两步，失败的处理完全不同：
           // 存不下是真的收不了（图片太大、格式不对），这时候回错误、整条不落；
           // 存下了却没看清（图在，ta 这会儿看不见），消息照落、气泡照摆，只欠 ta 一句交代。
@@ -8056,15 +8409,38 @@ export function apply(ctx) {
           } catch (error) {
             return c.json({ ok: false, error: { code: "ATTACHMENT_REJECTED", message: error?.message || "这张图暂时收不下" } }, 400);
           }
-          try {
-            const described = await describeImageWithFallback(vision.model, attachment);
-            visionNote = described.note;
-            visionVia = described.via;
-          } catch (error) {
-            const kind = classifyVisionFailure(error);
-            diagnostics({ event: "vision.failed", agentId, attachmentId: attachment.id, kind, error: describeError(error) });
-            const partnerRow = (await listPartners().catch(() => [])).find((row) => row.id === agentId);
-            visionNotice = { code: "MODEL_UNAVAILABLE", kind, text: visionUnavailableNotice(kind, partnerRow?.name ?? "") };
+          // 先问一句：这位伙伴自己的聊天模型能不能直接吃图。
+          // 能就不劳识图模型转述了——它看得比转述准，还少一次调用。
+          // GIF 不走这条路：动图要转成多帧，聊天侧只接一张静图。
+          const nativeVision = attachment.mimeType !== "image/gif" && await chatModelSeesImages(agentId);
+          if (attachment.description) {
+            // 同一张图又发了一次：说明早就写好了，不再花一次识图钱。
+            visionNote = attachment.description;
+            visionVia = attachment.describedVia ?? "";
+          } else if (nativeVision) {
+            // 图直接给 ta 自己看；描述在后台补，不挡这一轮回复。
+            attachment.nativeVision = true;
+            backfillDescriptionLater(agentId, attachment.id, text);
+          } else if (!vision.model || vision.status !== "verified") {
+            // 没配好识图：图还是收下、消息还是落，只交代一句“这回没看清”。
+            // 直接拦回去的话，她连图都留不下，以后配好了也补不回来。
+            visionNotice = { code: "MODEL_UNAVAILABLE", kind: "unknown",
+              text: visionUnavailableNotice("unknown", (await listPartners().catch(() => [])).find((row) => row.id === agentId)?.name ?? "") };
+          } else {
+            try {
+              const described = await describeImageWithFallback(vision.model, attachment, text);
+              visionNote = described.note;
+              visionVia = described.via;
+              // 标题 + 描述绑到附件上：往后靠时间和内容找图靠的就是这两样。
+              const split = splitVisionNote(described.note);
+              const saved = recordAttachmentDescription(attachment.id, { ...split, via: described.via });
+              if (saved) Object.assign(attachment, saved);
+            } catch (error) {
+              const kind = classifyVisionFailure(error);
+              diagnostics({ event: "vision.failed", agentId, attachmentId: attachment.id, kind, error: describeError(error) });
+              const partnerRow = (await listPartners().catch(() => [])).find((row) => row.id === agentId);
+              visionNotice = { code: "MODEL_UNAVAILABLE", kind, text: visionUnavailableNotice(kind, partnerRow?.name ?? "") };
+            }
           }
         }
         let stickerSignalText = "";
@@ -8076,7 +8452,8 @@ export function apply(ctx) {
             const stickerIndex = await readCatalog(ctx);
             const catalog = stickerIndex ? buildCatalog(stickerIndex, agentId) : null;
             if (!catalog?.byId.has(stickerId)) {
-              if (attachment?.id) removeAttachment(attachment.id);
+              // 复用的那张是别人还在用的原件，这次没成只能收手，不能把文件删了。
+              if (attachment?.id && !attachment.reused) removeAttachment(attachment.id);
               return c.json({ ok: false, error: { message: "这张表情包当前不可用" } }, 400);
             }
             stickerSignalText = stickerLabelText(catalog.byId.get(stickerId));
@@ -8098,7 +8475,7 @@ export function apply(ctx) {
           ...(clientMessageId ? { clientMessageId } : {}),
           ...(quote ? { quote } : {}),
           ...(isSticker ? { kind: "sticker", bubbles: userBubbles } : {}),
-          ...(attachment ? { attachment: { id: attachment.id, name: attachment.name, mimeType: attachment.mimeType, size: attachment.size }, visionNote, ...(visionVia ? { visionVia } : {}) } : {}),
+          ...(attachment ? { attachment: { id: attachment.id, name: attachment.name, mimeType: attachment.mimeType, size: attachment.size, ...(attachment.nativeVision ? { nativeVision: true } : {}) }, visionNote, ...(visionVia ? { visionVia } : {}) } : {}),
           ...(visionNotice ? { notice: visionNotice } : {}),
         });
         if (isSpeechMessage(stored) && replyComposer.interrupt(agentId, stored.id)) {
@@ -8333,6 +8710,7 @@ export function apply(ctx) {
             partners,
             models,
             visionModels,
+            imageStorage: imageStorageSummary(),
             voiceChoices: voiceChoicesForModel(store.getGlobalSettings().voiceModel),
             voiceGroups: voiceGroupsForModel(store.getGlobalSettings().voiceModel),
             voiceTiers: VOICE_TIERS,
@@ -8416,6 +8794,17 @@ export function apply(ctx) {
         const agentId = String(c.req.param("agentId") ?? "").trim();
         if (!agentId) return c.json({ ok: false, error: { message: "缺少伙伴编号" } }, 400);
         return c.json({ ok: true, hiddenPartnerIds: store.unhidePartner(agentId) });
+      });
+
+      app.post("/images/cleanup", (c) => {
+        try {
+          // 纯本地删文件，不调模型：跑得再慢也不过是几个毫秒，没必要再挂 120 秒的超时。
+          const result = purgeExpiredImages();
+          diagnostics({ event: "images.cleanup", ...result });
+          return c.json({ ok: true, ...result, storage: imageStorageSummary() });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 500);
+        }
       });
 
       app.post("/vision/test", async (c) => {
@@ -8595,6 +8984,9 @@ export function apply(ctx) {
           return c.json({
             ok: true,
             global: globalSettingsView(),
+            // 期限换了一档，上面那些「几张过了期」就跟着变了。每次保存都扫一遍目录没必要，
+            // 只有她真改了期限才把新账带回去；不然页面上那行字和按钮上的数字还是旧尺子量的。
+            ...(Object.prototype.hasOwnProperty.call(globalPatch, "imageRetentionDays") ? { imageStorage: imageStorageSummary() } : {}),
             voiceChoices: voiceChoicesForModel(store.getGlobalSettings().voiceModel),
             voiceGroups: voiceGroupsForModel(store.getGlobalSettings().voiceModel),
           });

@@ -13,6 +13,7 @@ import {
   pickFromCatalog,
   normalizeModelRef,
   chatModelOptions,
+  isChatModel,
   resolveModelChoice,
   modelKey,
   STREAM_RETRY_DELAYS_MS,
@@ -655,6 +656,14 @@ test("模型引用：形状不对就当没设", () => {
   assert.equal(normalizeModelRef("p/m"), null);
   assert.equal(modelKey({ provider: "p", model: "m" }), "p/m");
   assert.equal(modelKey(null), "");
+});
+
+test("名字带 image 的理解型模型不再被当成生图筛掉", () => {
+  assert.equal(isChatModel({ provider: "p", model: "some-vendor/vision-image-llm" }), true);
+  assert.equal(isChatModel({ provider: "p", model: "qwen-image-edit" }), false);
+  assert.equal(isChatModel({ provider: "p", model: "gpt-image-1" }), false);
+  assert.equal(isChatModel({ provider: "p", model: "doubao-seedream-4" }), false);
+  assert.equal(isChatModel({ provider: "p", model: "flux-dev" }), false);
 });
 
 test("下拉目录：嵌入和生图那些不往里塞，当前焦点排最前", () => {

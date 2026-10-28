@@ -247,9 +247,10 @@ function panelHarness(names) {
     partners: [], current: "partner-a", currentMessages: [], seenIds: new Set(), voiceStates: new Map(),
     transcriptOpen: new Map(),
     partnerFeedNodes: new Map(), userCols: new Map(), tickNodes: new Map(), pendingDrafts: new Map(),
-    actionEmoji: new Map(), liveDots: null, autoScrollAllowed: true, renderingAll: false,
+    actionEmoji: new Map(), liveDots: null, autoScrollAllowed: true, renderingAll: false, prepending: false, prependAnchor: null,
+    olderTouched: false, topTipAtTop: false, topTipTimer: null, topTipDelay: null,
     lastRenderedConversationAt: null, paintedWithAvatars: null, showMessageAvatars: false,
-    renderGeneration: 0, SCROLL_BOTTOM_GAP: 24, TIME_DIVIDER_GAP_MS: 600000, SHOW_UNREAD_BADGES: true,
+    renderGeneration: 0, SCROLL_BOTTOM_GAP: 24, TIME_DIVIDER_GAP_MS: 600000, SHOW_UNREAD_BADGES: true, THREAD_PAGE_SIZE: 40, OLDER_LOAD_TOP_GAP: 240,
     draggedPartnerId: "", draggedPartnerNode: null, dragOriginIds: [], dragCommitted: false,
     partnerOrderRevision: 0, orderSavePending: false, openPartnerSeq: 0, threadViewSeq: 0,
     imageChoiceSeq: 0, inputRevision: 0, inputOwner: null, obPending: new Set(),
@@ -348,10 +349,55 @@ test("reused friend nodes retain drag ordering and save bindings", async () => {
   assert.equal(a.style.opacity, "");
 });
 
+const pagingFunctions = ["threadSeqOf", "absorbThreadPage", "resetThreadWindow", "hideThreadTopTip"];
+
+test("轮询只拿最近一页时，往前翻过的旧页不会被冲掉", () => {
+  const h = panelHarness(pagingFunctions);
+  h.context.currentMessages = Array.from({ length: 40 }, (_, i) => ({ id: `m${61 + i}`, seq: 61 + i }));
+  const absorbed = h.context.absorbThreadPage({
+    messages: Array.from({ length: 40 }, (_, i) => ({ id: `m${101 + i}`, seq: 101 + i })),
+    total: 140,
+  });
+  assert.equal(absorbed.gap, false);
+  assert.equal(h.context.currentMessages.length, 80, "旧页还在，新页接在后面");
+  assert.equal(h.context.currentMessages[0].seq, 61);
+  assert.equal(h.context.currentMessages.at(-1).seq, 140);
+  assert.equal(h.context.hasOlderMessages, true, "前面还有 60 条没加载");
+});
+
+test("轮询和窗口中间断档时，宁可回到最近一页也不留看不见的空洞", () => {
+  const h = panelHarness(pagingFunctions);
+  h.context.currentMessages = [{ id: "m61", seq: 61 }];
+  const absorbed = h.context.absorbThreadPage({
+    messages: [{ id: "m201", seq: 201 }, { id: "m202", seq: 202 }],
+    total: 202,
+  });
+  assert.equal(absorbed.gap, true);
+  assert.deepEqual(h.context.currentMessages.map((m) => m.seq), [201, 202]);
+  assert.equal(h.context.hasOlderMessages, true, "前两百条还能往上翻回来");
+});
+
+test("聊天清空后 seq 从 1 重来，轮询不会把旧窗口留在屏幕上", () => {
+  const h = panelHarness(pagingFunctions);
+  h.el.threadTopTip.hidden = false;
+  h.context.currentMessages = [{ id: "m1121", seq: 1121 }];
+  h.context.absorbThreadPage({ messages: [], total: 0 });
+  assert.deepEqual(h.context.currentMessages, [], "清空就是清空");
+  h.context.resetThreadWindow();
+  assert.equal(h.el.threadTopTip.hidden, true, "切窗/清空时顶部那条提示也要收走");
+  h.context.currentMessages = [{ id: "m1121", seq: 1121 }];
+  h.context.absorbThreadPage({ messages: [{ id: "m1", seq: 1 }], total: 1 });
+  assert.deepEqual(h.context.currentMessages.map((m) => m.id), ["m1"], "清空后新说的话从 1 开始，旧窗口不跟着混进来");
+});
+
 function openHarness() {
   const h = panelHarness(["openPartner"]); h.context.current = null;
   h.context.partners = [{ id: "partner-a", name: "A" }, { id: "partner-b", name: "B" }];
   h.context.renderFriends = () => {}; h.context.renderAll = (list) => { h.context.painted = list; };
+  // 分页的窗口状态在打开流程里要用到；这里只验打开本身，给最小替身。
+  h.context.resetThreadWindow = () => { h.context.currentMessages = []; };
+  h.context.absorbThreadPage = (data) => { h.context.currentMessages = Array.isArray(data?.messages) ? data.messages : []; };
+  h.context.fillOlderUntilScrollable = () => Promise.resolve();
   // 打开聊天时会在后台预热表情包图库（等她点笑脸时已经是现成的）。
   // 这两个是后端请求，给不会真发的替身就行；但必须返回 promise——
   // openPartner 后面接的是 .catch()，返回 undefined 会当场炸掉整个打开流程。
@@ -365,7 +411,7 @@ test("opening chat prewarms the user avatar without delaying thread loading", as
   h.context.loadAvatar = async (id) => { prewarmed.push(id); return null; };
   const task = h.context.openPartner("partner-a");
   assert.deepEqual(prewarmed, ["__user"]);
-  assert.equal(h.requests[0].path, "thread/partner-a");
+  assert.match(h.requests[0].path, /^thread\/partner-a\?limit=\d+$/, "打开聊天只拉最近一页，不把整本拖下来");
   h.requests[0].resolve({ messages: [] }); await task;
   h.requests.find((r) => r.path === "partners")?.resolve({});
 });

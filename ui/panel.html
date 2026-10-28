@@ -90,6 +90,7 @@
       <div class="stream" id="stream">
         <div class="empty" id="empty-tip">左边点一位伙伴，就能开始聊了<span class="empty-hint">还没有伙伴？点右上角齿轮，去『伙伴管理』建一个茶话会角色</span></div>
       </div>
+      <div class="thread-top-tip" id="thread-top-tip" hidden></div>
       <div class="wait-cup-layer" id="wait-cup-layer" aria-hidden="true"><span class="wait-cup-slot" id="wait-cup-slot"></span></div>
       <div class="composer">
         <div class="todo-proposal-layer" id="todo-proposals" hidden></div>
@@ -239,6 +240,7 @@
       waitCupLayer: document.getElementById("wait-cup-layer"),
       waitCupSlot: document.getElementById("wait-cup-slot"),
       jumpBottom: document.getElementById("jump-bottom"),
+    threadTopTip: document.getElementById("thread-top-tip"),
       input: document.getElementById("input"),
       send: document.getElementById("btn-send"),
       imageButton: document.getElementById("btn-image"),
@@ -397,8 +399,24 @@
     let actionEmoji = new Map();
     /** 画当前这一屏时用的是哪种外观；跟设置对不上就整段重画 */
     let paintedWithAvatars = null;
-    /** 当前这个窗的全部消息（重画时要拿回来） */
+    /** 当前这个窗已加载的消息窗口（从某个 seq 到最新，不断档；重画只用它） */
     let currentMessages = [];
+    /** 已加载窗口里最早那条的 seq；往前翻就用它当游标 */
+    let loadedOldestSeq = null;
+    let threadTotalCount = 0;
+    let hasOlderMessages = false;
+    let olderLoading = false;
+    let olderLoadFailedAt = 0;
+    /** 前插时新节点统一插到这个锚点前面 */
+    let prependAnchor = null;
+    let prepending = false;
+    let olderTouched = false;
+    let topTipAtTop = false;
+    let topTipTimer = null;
+    let topTipDelay = null;
+    /** 首屏、轮询、往前翻都按这个条数拉 */
+    const THREAD_PAGE_SIZE = 40;
+    const OLDER_LOAD_TOP_GAP = 240;
     /** 聊天请求只对发起时那一代窗口有效；切窗后旧回包一律丢掉。 */
     let threadViewSeq = 0;
     /** 重画或切窗会让正在播放/补画的旧任务失效，避免旧任务重新往新窗口塞气泡。 */
@@ -1742,7 +1760,7 @@
     }
 
     function scrollDown(force = false) {
-      if (renderingAll) return;
+      if (renderingAll || prepending) return;
       if (!force && !autoScrollAllowed) {
         updateJumpBottom();
         return;
@@ -1774,6 +1792,7 @@
     el.stream.addEventListener("scroll", () => {
       autoScrollAllowed = isAtBottom();
       updateJumpBottom();
+      maybeLoadOlder();
     }, { passive: true });
     el.jumpBottom.addEventListener("click", () => {
       autoScrollAllowed = true;
@@ -1985,9 +2004,10 @@
       return box;
     }
 
-    /** 这条该放哪儿：末尾还站着那个「正在输入」的话，就插在它前面。 */
+    /** 这条该放哪儿：前插时统一插到锚点前；平时插在「正在输入」前面，没有就接在末尾。 */
     function place(row, anchor) {
-      if (anchor?.isConnected) el.stream.insertBefore(row, anchor);
+      const target = prependAnchor?.isConnected ? prependAnchor : anchor;
+      if (target?.isConnected) el.stream.insertBefore(row, target);
       else el.stream.appendChild(row);
     }
 
@@ -2378,11 +2398,208 @@
       button.addEventListener("click", handler);
       return button;
     }
+    function threadSeqOf(message) {
+      return Number(message?.seq) || 0;
+    }
+
+    /**
+     * 把一次 /thread 的回包并进已加载窗口。
+     *
+     * 轮询每 5 秒拿的是最近一页；直接替换会把往前翻过的旧页从状态里抹掉
+     * （DOM 还在，但下次整段重画就没了），所以按 id 合并、按 seq 排序。
+     */
+    function absorbThreadPage(data, { reset = false, olderPage = false } = {}) {
+      const page = Array.isArray(data?.messages) ? data.messages : [];
+      const total = Number(data?.total);
+      let gap = false;
+      if (!reset && !olderPage && currentMessages.length) {
+        // 清空聊天后 seq 从 1 重新开始：窗口里那批旧消息不能留着
+        const tail = threadSeqOf(page[page.length - 1]);
+        if (total === 0 || (tail && tail < threadSeqOf(currentMessages[0]))) reset = true;
+      }
+      if (reset || !currentMessages.length) {
+        currentMessages = page.slice();
+      } else {
+        const newest = threadSeqOf(currentMessages[currentMessages.length - 1]);
+        const oldestPage = threadSeqOf(page[0]);
+        // 断档：上次轮询之后涌进超过一页，或者窗口隐藏了很久。
+        // 宁可回到最近一页，也不在中间留一段看不见的空洞（会认错已读对象）。
+        gap = Boolean(newest && oldestPage && oldestPage > newest + 1);
+        if (gap) {
+          currentMessages = page.slice();
+        } else {
+          const byId = new Map(currentMessages.map((message) => [message.id, message]));
+          for (const message of page) byId.set(message.id, message);
+          currentMessages = [...byId.values()].sort((a, b) => threadSeqOf(a) - threadSeqOf(b));
+        }
+      }
+      threadTotalCount = Number.isFinite(total) ? total : currentMessages.length;
+      loadedOldestSeq = threadSeqOf(currentMessages[0]) || null;
+      hasOlderMessages = currentMessages.length < threadTotalCount;
+      return { page, gap };
+    }
+
+    function resetThreadWindow() {
+      currentMessages = [];
+      loadedOldestSeq = null;
+      threadTotalCount = 0;
+      hasOlderMessages = false;
+      olderLoading = false;
+      olderLoadFailedAt = 0;
+      olderTouched = false;
+      topTipAtTop = false;
+      prependAnchor = null;
+      prepending = false;
+      hideThreadTopTip();
+    }
+
+    /** 顶部小提示：只在往上翻的时候露一下，平时不占位置。 */
+    function hideThreadTopTip() {
+      clearTimeout(topTipTimer);
+      clearTimeout(topTipDelay);
+      topTipTimer = null;
+      topTipDelay = null;
+      if (el.threadTopTip) el.threadTopTip.hidden = true;
+    }
+
+    function showThreadTopTip(text, { hold = 0, delay = 0 } = {}) {
+      if (!el.threadTopTip) return;
+      const paint = () => {
+        topTipDelay = null;
+        // 贴在聊天流顶端（不是整个面板顶端），头顶那条伙伴栏多高都不遮它
+        el.threadTopTip.style.top = `${(el.stream.offsetTop || 0) + 8}px`;
+        el.threadTopTip.textContent = text;
+        el.threadTopTip.hidden = false;
+        if (hold > 0) {
+          topTipTimer = setTimeout(() => {
+            topTipTimer = null;
+            if (el.threadTopTip) el.threadTopTip.hidden = true;
+          }, hold);
+        }
+      };
+      clearTimeout(topTipTimer);
+      clearTimeout(topTipDelay);
+      topTipTimer = null;
+      topTipDelay = null;
+      // 本机拉一页很快，拖过 150ms 才值得说一声，不然只是一闪
+      if (delay > 0) topTipDelay = setTimeout(paint, delay);
+      else paint();
+    }
+
+    /** 往前翻一页。只在她真的滑到顶附近时才叫。 */
+    async function loadOlderOnce(agentId = current, viewSeq = threadViewSeq) {
+      if (!agentId || current !== agentId || viewSeq !== threadViewSeq) return false;
+      if (!hasOlderMessages || olderLoading) return false;
+      const before = loadedOldestSeq;
+      if (!before) return false;
+      olderLoading = true;
+      olderTouched = true;
+      showThreadTopTip("正在翻更早的…", { delay: 150 });
+      const boundaryAt = currentMessages[0]?.at ?? null;
+      try {
+        const data = await api("GET", `thread/${encodeURIComponent(agentId)}?before=${before}&limit=${THREAD_PAGE_SIZE}`);
+        if (current !== agentId || viewSeq !== threadViewSeq) return false;
+        const page = Array.isArray(data?.messages) ? data.messages : [];
+        if (!page.length) {
+          threadTotalCount = currentMessages.length;
+          hasOlderMessages = false;
+          hideThreadTopTip();
+          return false;
+        }
+        absorbThreadPage(data, { olderPage: true });
+        prependOlderPage(page, boundaryAt);
+        hideThreadTopTip();
+        return true;
+      } catch (error) {
+        olderLoadFailedAt = Date.now();
+        if (current === agentId) setStatus(error.message || "更早的消息没拉上来");
+        showThreadTopTip("更早的消息没拉上来", { hold: 2400 });
+        return false;
+      } finally {
+        olderLoading = false;
+      }
+    }
+
+    /**
+     * 把一页旧消息接到顶上。
+     *
+     * 三个必须：新节点插在最前面、渲染期间别自动滚到底、
+     * 插完把高度差补回 scrollTop（不然画面跟着往上跳）。
+     */
+    function prependOlderPage(list, boundaryAt) {
+      const anchor = el.stream.firstChild;
+      const divider = anchor?.classList?.contains("time-divider") ? anchor : null;
+      const previousHeight = el.stream.scrollHeight;
+      const previousTop = el.stream.scrollTop;
+      const savedLastAt = lastRenderedConversationAt;
+      const read = readUserIds(currentMessages);
+      prependAnchor = anchor;
+      prepending = true;
+      const previousOverflowAnchor = el.stream.style.overflowAnchor;
+      // 明确自己补高度差；留着浏览器的锚定会再补一次，变成双倍偏移
+      el.stream.style.overflowAnchor = "none";
+      try {
+        lastRenderedConversationAt = null;
+        for (const message of list) {
+          if (!prependAnchor?.isConnected) prependAnchor = null;
+          renderMessage(message, { read: read.has(message.id) });
+        }
+      } finally {
+        lastRenderedConversationAt = savedLastAt;
+        prepending = false;
+        prependAnchor = null;
+        el.stream.style.overflowAnchor = previousOverflowAnchor;
+      }
+      // 旧的第一条原本带着一个时间分隔条；接上更早的消息后，那个断点可能不该再断
+      const lastAt = Date.parse(String(list[list.length - 1]?.at ?? ""));
+      const nextAt = Date.parse(String(boundaryAt ?? ""));
+      if (divider?.isConnected && Number.isFinite(lastAt) && Number.isFinite(nextAt)
+        && Math.abs(nextAt - lastAt) < TIME_DIVIDER_GAP_MS) {
+        divider.remove();
+      }
+      const grown = el.stream.scrollHeight - previousHeight;
+      if (grown) el.stream.scrollTop = previousTop + grown;
+      updateJumpBottom();
+    }
+
+    function maybeLoadOlder() {
+      if (!current || olderLoading) return;
+      if (el.stream.scrollTop > OLDER_LOAD_TOP_GAP) {
+        topTipAtTop = false;
+        return;
+      }
+      if (!hasOlderMessages) {
+        // 已经翻到头了：到顶时说一声，同一个停留里不重复说
+        if (olderTouched && !topTipAtTop) {
+          topTipAtTop = true;
+          showThreadTopTip("没有更早的了", { hold: 1800 });
+        }
+        return;
+      }
+      // 失败之后别每滑一下就重试，隔几秒再说
+      if (Date.now() - olderLoadFailedAt < 4000) return;
+      void loadOlderOnce(current, threadViewSeq);
+    }
+
+    /** 一页填不满屏幕时接着往前补，免得她看到一屏空白还要自己滑 */
+    async function fillOlderUntilScrollable(agentId, viewSeq) {
+      let guard = 0;
+      while (hasOlderMessages && guard < 4
+        && el.stream.clientHeight > 0
+        && el.stream.scrollHeight <= el.stream.clientHeight + 1
+        && current === agentId && viewSeq === threadViewSeq) {
+        if (!(await loadOlderOnce(agentId, viewSeq))) break;
+        guard += 1;
+      }
+    }
+
     async function reloadCurrentThread(agentId = current, viewSeq = threadViewSeq) {
       if (!agentId || current !== agentId || viewSeq !== threadViewSeq) return false;
-      const data = await api("GET", `thread/${encodeURIComponent(agentId)}`);
+      // 按已加载的条数重拉：撤回、编辑只动这一段，往前翻过的历史也要一起核对
+      const limit = Math.max(THREAD_PAGE_SIZE, currentMessages.length);
+      const data = await api("GET", `thread/${encodeURIComponent(agentId)}?limit=${limit}`);
       if (current !== agentId || viewSeq !== threadViewSeq) return false;
-      currentMessages = data.messages || [];
+      absorbThreadPage(data, { reset: true });
       renderAll(currentMessages);
       return true;
     }
@@ -2740,7 +2957,7 @@
       const emoji = actionEmoji.get(m.actionId);
       line.textContent = emoji ? `${emoji} ${m.text}` : m.text;
       row.appendChild(line);
-      el.stream.appendChild(row);
+      place(row, null);
       // 伙伴戳过来那一条可以删掉（她自己的那条走撤回）。删除只清聊天账，不碰记忆。
       if (m.role === "assistant") bindMessageActions(row, m);
       scrollDown();
@@ -2755,16 +2972,17 @@
       const out = new Set();
       const answered = new Set();
       const legacyAnswered = new Set();
-      for (let i = 0; i < list.length; i += 1) {
-        const m = list[i];
-        if (m?.role !== "assistant" || m.recalled) continue;
-        if (m.proactive || m.nudge || ["action", "tavern-opening"].includes(m.kind)) continue;
-        if (m.repliedTo) {
-          answered.add(String(m.repliedTo));
-          continue;
+      // 一遍过：记住「这条之前最近的一条用户原话」，别每条都回头 slice 一次。
+      // 往前翻之后窗口会上千条，O(n²) 会变成每轮轮询的固定开销。
+      let previousUser = null;
+      for (const m of list) {
+        const silent = m?.role !== "assistant" || m.recalled
+          || m.proactive || m.nudge || ["action", "tavern-opening"].includes(m.kind);
+        if (!silent) {
+          if (m.repliedTo) answered.add(String(m.repliedTo));
+          else if (previousUser?.id && !previousUser.unreadResetAt) legacyAnswered.add(previousUser.id);
         }
-        const previous = list.slice(0, i).findLast((row) => row?.role === "user" && !row.recalled);
-        if (previous?.id && !previous.unreadResetAt) legacyAnswered.add(previous.id);
+        if (m?.role === "user" && !m.recalled) previousUser = m;
       }
       for (const m of list) {
         if (m?.role === "user" && (m.readAt || answered.has(m.id) || (!m.unreadResetAt && legacyAnswered.has(m.id)))) out.add(m.id);
@@ -2989,6 +3207,7 @@
             imageNode.className = "message-image";
             imageNode.alt = m.attachment.name || "发送的图片";
             imageNode.loading = "lazy";
+            imageNode.dataset.visionNote = String(m.visionNote ?? "");
             appendImageToBubble(lastBubble, imageNode);
             mountAttachmentImage(imageNode, m.attachment.id, current, Boolean(opts.keepBottom));
           }
@@ -2999,6 +3218,7 @@
             imageNode.className = "message-image";
             imageNode.alt = m.attachment.name || "发送的图片";
             imageNode.loading = "lazy";
+            imageNode.dataset.visionNote = String(m.visionNote ?? "");
             appendImageToBubble(regular.bubble, imageNode);
             mountAttachmentImage(imageNode, m.attachment.id, current, Boolean(opts.keepBottom));
           }
@@ -3106,10 +3326,10 @@
      */
     async function markAllSeen(agentId, viewSeq = threadViewSeq) {
       try {
-        const data = await api("GET", `thread/${agentId}`);
+        const data = await api("GET", `thread/${agentId}?limit=${THREAD_PAGE_SIZE}`);
         if (current !== agentId || viewSeq !== threadViewSeq) return;
-        currentMessages = data.messages || [];
-        for (const m of currentMessages) if (m?.id) seenIds.add(m.id);
+        // 只记这一页：轮询也只拿这一页，不能顺手把已加载窗口改小
+        for (const m of data?.messages ?? []) if (m?.id) seenIds.add(m.id);
       } catch { /* 记不上就下一轮轮询自己会处理 */ }
     }
 
@@ -3124,10 +3344,15 @@
         updateJumpBottom();
         return value;
       };
-      const data = await api("GET", `thread/${agentId}`);
+      const data = await api("GET", `thread/${agentId}?limit=${THREAD_PAGE_SIZE}`);
       if (current !== agentId || viewSeq !== threadViewSeq || generation !== renderGeneration) return restoreScroll(0);
-      currentMessages = data.messages || [];
+      // 只并最近一页：往前翻过的旧页留在窗口里，不能拿这一页把它冲掉
+      const absorbed = absorbThreadPage(data);
       reconcilePendingImage(currentMessages);
+      if (absorbed.gap) {
+        renderAll(currentMessages);
+        return restoreScroll(currentMessages.length);
+      }
       autoScrollAllowed = stickToBottom;
       const voiceChanged = currentMessages.some((message) => {
         if (!message?.id || !message.voice) return false;
@@ -3410,7 +3635,7 @@
       threadViewSeq += 1;
       closeMessageActions();
       current = null;
-      currentMessages = [];
+      resetThreadWindow();
       seenIds = new Set();
       voiceStates.clear();
       transcriptOpen.clear();
@@ -3465,7 +3690,9 @@
         const currentPartner = partners.find((p) => p.id === current);
         if (currentPartner?.background) void syncChatBackground(current, currentPartner.background);
         el.imageButton.disabled = !(currentPartner?.imageCapability?.allowed);
-        el.imageButton.title = currentPartner?.imageCapability?.allowed ? "发送图片" : "当前伙伴没有通过测试的识图模型";
+        el.imageButton.title = currentPartner?.imageCapability?.allowed
+          ? (currentPartner?.imageCapability?.native ? "发送图片（ta 自己的模型就能看）" : "发送图片")
+          : "这位伙伴的模型看不了图，识图也没配好";
       }
       if (currentWasRemoved) {
         const next = partners[0]?.id;
@@ -4154,8 +4381,11 @@
       if (showMessageAvatars) void loadAvatar("__user");
       el.input.disabled = false;
       el.send.disabled = false;
-      el.imageButton.disabled = !(partner?.imageCapability?.allowed);
-      el.imageButton.title = partner?.imageCapability?.allowed ? "发送图片" : "当前伙伴没有通过测试的识图模型";
+      const canPickImage = Boolean(partner?.imageCapability?.allowed);
+      el.imageButton.disabled = !canPickImage;
+      el.imageButton.title = canPickImage
+        ? (partner?.imageCapability?.native ? "发送图片（ta 自己的模型就能看）" : "发送图片")
+        : "这位伙伴的模型看不了图，识图也没配好";
       el.emojiButton.disabled = false;
       el.appearanceButton.disabled = false;
       closeAppearance();
@@ -4182,14 +4412,17 @@
       resetWaitCup();
       clearChatBackground(); // 新的人进来，先把上一位的房间收走
       seenIds = new Set();
+      resetThreadWindow();
       voiceStates.clear();
       transcriptOpen.clear();
       try {
-        const data = await api("GET", `thread/${agentId}`);
+        const data = await api("GET", `thread/${agentId}?limit=${THREAD_PAGE_SIZE}`);
         if (openSeq !== openPartnerSeq || current !== agentId || viewSeq !== threadViewSeq) return;
-        currentMessages = data.messages || [];
+        absorbThreadPage(data, { reset: true });
         reconcilePendingImage(currentMessages);
         renderAll(currentMessages);
+        // 一页没填满屏幕就接着往前补（短消息、大屏幕会遇到）
+        void fillOlderUntilScrollable(agentId, viewSeq);
         const draft = pendingDrafts.get(agentId);
         if (draft && inputOwner === agentId) {
           el.input.value = draft.text;
@@ -4220,6 +4453,58 @@
         reader.onerror = () => reject(new Error("图片没读出来"));
         reader.readAsDataURL(file);
       });
+    }
+
+    /**
+     * 进库前先压一道，省空间也省传输。
+     *
+     * 只动长边超过两千的图。截屏、小图、表情包本来就在线内，原样走——
+     * 字被压糊了等于没存，这是那条线不能随意往下调的原因。
+     * GIF 不碰：过一道 canvas 就只剩第一帧，动画没了。
+     * 压完反而更大就不换，说明这张本来就很省。
+     */
+    const IMAGE_MAX_EDGE = 2048;
+    const IMAGE_QUALITY = 0.9;
+
+    function shrinkImage(dataUrl, mimeType) {
+      const passthrough = { data: dataUrl, mimeType };
+      return new Promise((resolve) => {
+        if (!dataUrl || mimeType === "image/gif") return resolve(passthrough);
+        const img = new Image();
+        img.onload = () => {
+          const edge = Math.max(img.naturalWidth || 0, img.naturalHeight || 0);
+          if (!edge || edge <= IMAGE_MAX_EDGE) return resolve(passthrough);
+          const scale = IMAGE_MAX_EDGE / edge;
+          const width = Math.max(1, Math.round(img.naturalWidth * scale));
+          const height = Math.max(1, Math.round(img.naturalHeight * scale));
+          try {
+            const canvas = document.createElement("canvas");
+            canvas.width = width;
+            canvas.height = height;
+            const brush = canvas.getContext("2d");
+            if (!brush) return resolve(passthrough);
+            // 透明底的 PNG 压成 JPEG 会变黑，先铺一层白。
+            brush.fillStyle = "#ffffff";
+            brush.fillRect(0, 0, width, height);
+            brush.drawImage(img, 0, 0, width, height);
+            const out = canvas.toDataURL("image/jpeg", IMAGE_QUALITY);
+            if (!out || out.length >= dataUrl.length) return resolve(passthrough);
+            resolve({ data: out, mimeType: "image/jpeg" });
+          } catch {
+            resolve(passthrough);
+          }
+        };
+        img.onerror = () => resolve(passthrough);
+        img.src = dataUrl;
+      });
+    }
+
+    /** 换了格式就把扩展名跟着换掉，不然存下来的名字跟内容对不上。 */
+    function renameForMime(name, mimeType) {
+      const clean = String(name || "").trim() || "图片";
+      if (mimeType !== "image/jpeg") return clean;
+      const stem = clean.replace(/\.[a-z0-9]{2,5}$/i, "");
+      return `${stem || "图片"}.jpg`;
     }
 
     function reconcilePendingImage(messages) {
@@ -4333,11 +4618,23 @@
 
     async function loadAttachmentImage(imageNode, attachmentId, agentId, keepBottom = false) {
       if (!imageNode || !attachmentId || !agentId) return;
+      // 原图可能已经按她定的期限清掉了。清掉不等于没发生过：
+      // 当时那段描述还在消息里，拿它顶上去，别在老对话里留一块空白。
+      const fallback = () => {
+        if (!imageNode.isConnected) return;
+        const note = String(imageNode.dataset.visionNote ?? "").trim();
+        const box = document.createElement("div");
+        box.className = "message-image-gone";
+        box.textContent = note
+          ? `这张图已经清掉了。当时看到的是：${note.slice(0, 220)}${note.length > 220 ? "…" : ""}`
+          : "这张图已经清掉了。";
+        imageNode.replaceWith(box);
+      };
       try {
         const res = await hana.api.fetch(`attachment/${encodeURIComponent(agentId)}/${encodeURIComponent(attachmentId)}`, { method: "GET" });
-        if (!res.ok) return;
+        if (!res.ok) return fallback();
         const blob = await res.blob();
-        if (!blob.size) return;
+        if (!blob.size) return fallback();
         const url = URL.createObjectURL(blob);
         if (!imageNode.isConnected || current !== agentId) {
           URL.revokeObjectURL(url);
@@ -4347,7 +4644,7 @@
           if (current === agentId) scrollDown();
         }, { once: true });
         imageNode.src = url;
-      } catch { /* 历史图片读不到时保留占位，不影响文字聊天 */ }
+      } catch { fallback(); }
     }
 
     function appendInlineImage(rendered, image) {
@@ -4530,16 +4827,21 @@
       el.imageButton.setAttribute("aria-busy", "true");
       setStatus("正在读取图片…");
       if (!current) return setStatus("先选一位伙伴");
-      if (file.size > 10 * 1024 * 1024) return setStatus("图片太大了，单张上限 10MB");
+      // 单张上限看的是压下之后的大小：十几兆的原图缩到两千边之后往往只剩几百 K。
+      if (file.size > 40 * 1024 * 1024) return setStatus("图片太大了，单张上限 10MB（大图会先自动压）");
       const owner = current;
       const choice = ++imageChoiceSeq;
       try {
-        const data = await readImageFile(file);
+        const rawData = await readImageFile(file);
         if (current !== owner || choice !== imageChoiceSeq) return;
+        const shrunk = await shrinkImage(rawData, file.type);
+        if (current !== owner || choice !== imageChoiceSeq) return;
+        // dataURL 的正文是 base64，长度乘 0.75 就是字节数。
+        if (shrunk.data.length * 0.75 > 10 * 1024 * 1024) return setStatus("图片太大了，单张上限 10MB");
         pendingImage = {
-          name: file.name || "剪贴板图片.png",
-          mimeType: file.type,
-          data,
+          name: renameForMime(file.name || "剪贴板图片", shrunk.mimeType),
+          mimeType: shrunk.mimeType,
+          data: shrunk.data,
           clientMessageId: `img_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
         };
         renderPendingImage();

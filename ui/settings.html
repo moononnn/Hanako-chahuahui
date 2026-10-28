@@ -325,10 +325,17 @@
         <small class="detail-field-note" id="global-recognition-model-note"></small>
       </article>
       <article class="setting-card">
-        <div class="card-title"><div><h3>全局辅助识图</h3><p>聊天模型看不懂图片时，先由这位模型看一眼。只有测试通过后，茶话会才会允许发送图片。</p></div></div>
+        <div class="card-title"><div><h3>全局辅助识图</h3><p>聊天模型看不懂图片时，先由这位模型看一眼。配好之后，看不懂图的伙伴也能收图。测试过通才算配置可用；没配或没测过，图还是照收，只是这次看不清，她会补一句交代。</p></div></div>
         <div class="detail-field" id="global-vision-host"></div>
         <div class="detail-actions"><button class="soft-button" id="global-vision-test" type="button">测试识图</button></div>
         <small class="detail-field-note" id="global-vision-note"></small>
+      </article>
+      <article class="setting-card">
+        <div class="card-title"><div><h3>图片存储</h3><p>她发过来的图存在本机。留多久你定；到期的不会自己消失，你按一下才清。旁白里还会单列一类「已不在聊天记录里」的：聊天账每本只存两千条，老消息被挤出去之后，图还占着地方但已经没人在用它。删的都是原图本体，聊天里那段话照旧在。</p></div></div>
+        <div class="detail-field" id="global-image-retention-host"></div>
+        <small class="detail-field-note" id="global-image-storage-note"></small>
+        <div class="detail-actions"><button class="soft-button" id="global-image-cleanup" type="button">清理过期图片</button></div>
+        <small class="detail-field-note" id="global-image-cleanup-note"></small>
       </article>
     </section>
 
@@ -573,7 +580,7 @@
 
     // 这一页自己的版本号：后端读同一个文件里的这一行，两边对不上就说明她眼前是旧的。
     // （以前用文件哈希当戳，但那个值是后端给的，页面旧了它照样显示新值，等于没测。）
-    const UI_BUILD = "20261020.5";
+    const UI_BUILD = "20261027.2";
 
     const el = {
       status: document.getElementById("status"),
@@ -604,6 +611,8 @@
     let styleCatalog = [];
     let modelCatalog = [];
     let visionModelCatalog = [];
+    /** 图片存储的账：张数、占用、几张过了她定的期。GET settings 带回来。 */
+    let imageStorage = null;
     let voiceChoices = [];
     let voiceGroups = [];
     let voiceTiers = [];
@@ -1042,6 +1051,11 @@
         try {
           const data = await api("PUT", "settings/global", payload);
           globalSettings = data.global;
+          // 保存回包里带了新账就接住：改了保留期限，旁边那些数字得当场改口。
+          if (data.imageStorage) {
+            imageStorage = data.imageStorage;
+            paintGlobalImageStorage();
+          }
           if (Array.isArray(data.voiceChoices)) voiceChoices = data.voiceChoices;
           if (Array.isArray(data.voiceGroups)) voiceGroups = data.voiceGroups;
           say(successText, "ok");
@@ -1190,6 +1204,7 @@
       paintGlobalModel();
       paintGlobalRecognitionModel();
       paintGlobalVision();
+      paintGlobalImageStorage();
       paintGlobalVoiceModel();
       paintSearchEngine();
     }
@@ -1483,12 +1498,20 @@
     }
 
     function visionRefFromKey(key) {
-      if (!key || key === "follow") return null;
+      if (!key || key === "follow" || key === "none") return null;
       const hit = visionModelCatalog.find((item) => item.key === key);
-      return hit ? { provider: hit.provider, model: hit.model } : null;
+      if (hit) return { provider: hit.provider, model: hit.model };
+      // `keep:` 就是那个「已经配了、但目录里没认出能识图」的原值：原样还回去，
+      // 不能因为它不在列表里就当没配——那等于把她配好的东西默默抹掉。
+      if (key.startsWith("keep:")) {
+        const rest = key.slice(5);
+        const cut = rest.indexOf("/");
+        if (cut > 0) return { provider: rest.slice(0, cut), model: rest.slice(cut + 1) };
+      }
+      return null;
     }
 
-    function buildVisionSelect(currentKey) {
+    function buildVisionSelect(currentKey, currentRef = null) {
       const sel = document.createElement("select");
       const none = document.createElement("option");
       none.value = "none";
@@ -1500,7 +1523,17 @@
         opt.textContent = `${item.name || item.model}${item.isCurrent ? "（当前）" : ""}`;
         sel.appendChild(opt);
       }
-      sel.value = visionModelCatalog.some((item) => item.key === currentKey) ? currentKey : "none";
+      // 已经配了一个目录没标成能识图的模型时，得让它在下拉里露头并保持选中。
+      // 否则框上写着「暂不配置」，实际发图还在用它，两边对不上；她改别的项时更容易以为这里本来就空着。
+      const known = visionModelCatalog.some((item) => item.key === currentKey);
+      const keepKey = currentRef?.provider && currentRef?.model ? `keep:${currentRef.provider}/${currentRef.model}` : "";
+      if (!known && keepKey) {
+        const keep = document.createElement("option");
+        keep.value = keepKey;
+        keep.textContent = `${currentRef.model}（已配置，目录没标它能识图）`;
+        sel.appendChild(keep);
+      }
+      sel.value = known ? currentKey : (keepKey || "none");
       return sel;
     }
 
@@ -1759,7 +1792,7 @@
       if (!host || !note || !test) return;
       const vision = globalSettings.vision ?? {};
       host.replaceChildren();
-      const sel = buildVisionSelect(visionKeyOf(vision));
+      const sel = buildVisionSelect(visionKeyOf(vision), vision.model);
       sel.setAttribute("aria-label", "全局辅助识图模型");
       sel.addEventListener("change", async () => {
         const model = visionRefFromKey(sel.value);
@@ -1785,10 +1818,102 @@
         }
       };
       if (!visionModelCatalog.length) note.textContent = "Hana 没有把可识图模型列出来，暂时不能配置。";
-      else if (!vision.model) note.textContent = "没配置全局识图模型，发送图片会被拦住。";
+      else if (!vision.model) note.textContent = "没配置全局识图模型：自己的模型就能看图的伙伴不受影响，其余的收得下图但看不清。";
+      else if (!visionKeyOf(vision)) note.textContent = "这个模型眼下不在可识图名单里，但配置还留着——点「测试识图」能确认它到底看不看得见图。";
       else if (vision.status === "verified") note.textContent = "已通过测试，未单独配置识图模型的伙伴可以使用。";
       else if (vision.status === "failed") note.textContent = `上次测试没通过：${vision.error || "模型暂时不可用"}`;
       else note.textContent = "模型已选，但还没通过测试。";
+    }
+
+    /** 保留期限那几档：0 就是永久，不删任何一张。 */
+    const RETENTION_LABELS = [[0, "永久不删"], [30, "30 天"], [45, "45 天"], [60, "60 天"], [90, "90 天"]];
+
+    function formatBytes(bytes) {
+      const n = Number(bytes) || 0;
+      if (n < 1024) return `${n} B`;
+      if (n < 1048576) return `${Math.round(n / 1024)} KB`;
+      return `${(n / 1048576).toFixed(1)} MB`;
+    }
+
+    function formatStorageDay(iso) {
+      if (!iso) return "";
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return "";
+      const pad = (v) => String(v).padStart(2, "0");
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    }
+
+    /**
+     * 图片存储那张卡。
+     *
+     * 只摆事实和一个按钮：多少张、占多大、几张过了期、几张是没人认领的孤儿。不会自己删——
+     * 期限在她眼里是把尺子，不是把刀，这一点写在卡上的字里。
+     */
+    function paintGlobalImageStorage() {
+      const host = document.getElementById("global-image-retention-host");
+      const note = document.getElementById("global-image-storage-note");
+      const button = document.getElementById("global-image-cleanup");
+      if (!host || !note || !button) return;
+      const storage = imageStorage ?? { count: 0, bytes: 0, expiredCount: 0, orphanCount: 0, cleanupCount: 0, cleanupBytes: 0, retentionDays: 30, keepsForever: false };
+      host.replaceChildren();
+      const sel = document.createElement("select");
+      sel.setAttribute("aria-label", "图片保留期限");
+      for (const [value, label] of RETENTION_LABELS) {
+        const opt = document.createElement("option");
+        opt.value = String(value);
+        opt.textContent = label;
+        sel.appendChild(opt);
+      }
+      sel.value = String(storage.retentionDays ?? 30);
+      sel.addEventListener("change", async () => {
+        const days = Number(sel.value);
+        await saveGlobal({ imageRetentionDays: days }, days ? `图片留 ${days} 天` : "图片改成永久不删");
+      });
+      host.appendChild(sel);
+      dressSelects(host);
+
+      const parts = [`现在 ${Number(storage.count) || 0} 张，占 ${formatBytes(storage.bytes)}`];
+      const oldest = formatStorageDay(storage.oldestAt);
+      if (oldest) parts.push(`最老一张是 ${oldest} 的`);
+      note.textContent = `${parts.join("，")}。`;
+
+      const cleanupCount = Number(storage.cleanupCount) || 0;
+      const orphanCount = Number(storage.orphanCount) || 0;
+      button.onclick = async () => {
+        if (button.disabled) return;
+        button.disabled = true;
+        const before = button.textContent;
+        button.textContent = "正在清理…";
+        try {
+          const data = await apiWith("POST", "images/cleanup", {}, 20000);
+          if (data.storage) imageStorage = data.storage;
+          const removed = Number(data.removed) || 0;
+          const skipped = Number(data.skipped) || 0;
+          if (removed) {
+            const tail = skipped ? `；有 ${skipped} 张没删成，下次再试` : "";
+            say(`清了 ${removed} 张，腾出 ${formatBytes(data.bytes)}${tail}`, "ok");
+          } else {
+            say(skipped ? `有 ${skipped} 张没删成，可能正被占用` : "这会儿没有可清的了", "err");
+          }
+        } catch (error) {
+          say(`没清成：${error.message}`, "err");
+          button.textContent = before;
+        } finally {
+          paintGlobalImageStorage();
+        }
+      };
+      if (storage.keepsForever) {
+        button.disabled = true;
+        button.textContent = "永久保留中";
+      } else if (!cleanupCount) {
+        button.disabled = true;
+        button.textContent = "清理过期图片";
+      } else {
+        button.disabled = false;
+        // 孤儿占大头时得说清楚：它不是「过期」，是聊天记不了那么长之后没人认了。
+        const explain = orphanCount ? `，其中 ${orphanCount} 张已不在聊天记录里` : "";
+        button.textContent = `清理 ${cleanupCount} 张（可腾 ${formatBytes(storage.cleanupBytes)}${explain}）`;
+      }
     }
 
     function paintVideoSharing() {
@@ -4053,10 +4178,10 @@
       }
       detailPanels.model.appendChild(modelCard);
 
-      const visionCard = detailCard("ta 的识图模型", "不选就跟全局辅助识图。只有测试通过后，这位伙伴才允许接收图片。");
+      const visionCard = detailCard("ta 的识图模型", "不选就跟全局辅助识图。ta 自己的模型能看图时用不上这一项；没配好也不挡发图，只是这回看不清。");
       const visionHost = document.createElement("div");
       visionHost.className = "detail-field";
-      const visionSel = buildVisionSelect(visionKeyOf(s.vision));
+      const visionSel = buildVisionSelect(visionKeyOf(s.vision), s.vision?.model);
       visionSel.setAttribute("aria-label", `${partner.name}的识图模型`);
       visionHost.appendChild(visionSel);
       visionCard.appendChild(visionHost);
@@ -4074,7 +4199,8 @@
       const paintPartnerVision = () => {
         const currentVision = s.vision ?? {};
         visionTest.disabled = !currentVision.model;
-        if (!currentVision.model) visionNote.textContent = globalSettings.vision?.status === "verified" ? "当前跟随全局辅助识图。" : "没配置可用识图模型，发送图片会被拦住。";
+        if (!currentVision.model) visionNote.textContent = globalSettings.vision?.status === "verified" ? "当前跟随全局辅助识图。" : "没配置可用识图模型：图照收，只是这回看不清。";
+        else if (!visionKeyOf(currentVision)) visionNote.textContent = "这个模型眼下不在可识图名单里，但配置还留着——点「测试识图」能确认它到底看不看得见图。";
         else if (currentVision.status === "verified") visionNote.textContent = "这位伙伴的识图测试已通过。";
         else if (currentVision.status === "failed") visionNote.textContent = `上次测试没通过：${currentVision.error || "模型暂时不可用"}`;
         else visionNote.textContent = "模型已选，但还没通过测试。";
@@ -4492,6 +4618,7 @@
         styleCatalog = data.styles ?? [];
         modelCatalog = data.models ?? [];
         visionModelCatalog = data.visionModels ?? [];
+        imageStorage = data.imageStorage ?? null;
         voiceChoices = data.voiceChoices ?? [];
         voiceGroups = data.voiceGroups ?? [];
         voiceTiers = data.voiceTiers ?? [];

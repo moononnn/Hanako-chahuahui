@@ -4,6 +4,7 @@ import {
   MEMORY_FEEDBACK_TAG, normalizeLongterm, selectLongterm, longtermBlock,
   buildLongtermSpec, parseLongtermResult, memoryFeedbackPrompt,
   extractMemoryFeedback, mergeLongterm, applyMemoryFeedback, removeLongtermBySource,
+  rankByOverlap,
 } from "../lib/longterm.js";
 
 const at = "2020-01-01T00:00:00.000Z";
@@ -391,4 +392,22 @@ test("恒驻条自己超预算就不进来，不硬塞", () => {
   const picked = selectLongterm(entries, "雨夜捡猫", { residentEntries: 2, residentChars: 10 });
   assert.equal(picked.some((e) => e.kind === "symbol"), false);
   assert.equal(picked.some((e) => e.kind === "event"), true);
+});
+
+test("旧记录按字面重合排序：稀有词算数，天天见的词不算", () => {
+  const rows = [
+    { day: "2026-09-14", text: "今天和你聊了茶话会，她说小满的事。" },
+    { day: "2026-09-15", text: "今天你忙，我们聊了茶话会和语音。" },
+    { day: "2026-09-16", text: "今天你说很累，后来早睡了。" },
+    { day: "2026-09-17", text: "今天聊了茶话会的页面和测试。" },
+    { day: "2026-09-18", text: "今天你吃了辣锅，很开心。" },
+    { day: "2026-09-19", text: "今天聊了涮鱼和蘸磟，没提别的。" },
+    { day: "2026-09-20", text: "今天你修了 LineageOS 的包。" },
+    { day: "2026-09-21", text: "今天你说想歇一歇。" },
+  ];
+  const byName = rankByOverlap("你还记得小满那事吗", rows);
+  assert.deepEqual(byName.map((item) => item.row.day), ["2026-09-14"], "两字名字只要只在一两天出现过就算锚点");
+  const byProduct = rankByOverlap("LineageOS 那个包还在吗", rows);
+  assert.deepEqual(byProduct.map((item) => item.row.day), ["2026-09-20"], "拉丁词按整词命中");
+  assert.deepEqual(rankByOverlap("今天真的好累", rows), [], "今天/我们这种常见词不当锚点");
 });
