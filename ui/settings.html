@@ -985,13 +985,30 @@
       if (avatarPageHidden || box.dataset.avatarWant !== want) return;
       if (url) {
         applyAvatarImage(box, url);
-        if (retiredAvatarUrls.size) {
-          for (const node of document.querySelectorAll("[data-avatar-want]")) {
-            if (node.dataset.avatarWant === want) applyAvatarImage(node, url);
-          }
+        // 同一位的已挂载头像一起换图：刷新时换新图，第一次成功时把先前失败的那些行也补上。
+        for (const node of document.querySelectorAll("[data-avatar-want]")) {
+          if (node.dataset.avatarWant === want) applyAvatarImage(node, url);
         }
+        box.dataset.avatarRetry = "0";
+      } else {
+        // 拉失败不把这一格留在首字上：过一会儿再替它试一次。
+        retryAvatarPaint(box, agentId, fallbackText);
       }
       collectAvatarUrls();
+    }
+
+    /**
+     * 头像没拉到时，过一会儿再替这个位置试一次。
+     * 抖一下、宿主正忙、图太大超了预算——都会让一次拉图空手而归，自己再试一次才算修好。
+     */
+    function retryAvatarPaint(box, agentId, fallbackText) {
+      const tries = Number(box.dataset.avatarRetry || 0);
+      if (tries >= 2 || avatarPageHidden) return;
+      if (!agentId) return;
+      // 这一格已经不在页面里了（重画过），没人会看见它，不必再试。
+      if (box.isConnected === false) return;
+      box.dataset.avatarRetry = String(tries + 1);
+      setTimeout(() => { void paintAvatar(box, agentId, fallbackText); }, 1200 * (tries + 1));
     }
 
     function avatar(agent, size = "normal") {

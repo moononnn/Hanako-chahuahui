@@ -114,7 +114,7 @@ function avatarHarness(source = panel) {
   const state = source === panel
     ? source.slice(source.indexOf("const AVATAR_TTL_MS"), source.indexOf("    /**\n     * 表情包："))
     : source.slice(source.indexOf("const AVATAR_TTL_MS"), source.indexOf("    function saveGlobal("));
-  vm.runInContext(`const avatarCache = new Map();\n${state.replace(/const avatarCache = new Map\(\);/, "")}\n${source === panel ? functionSource(panel, "applyAvatarImage", true) + "\n" + functionSource(panel, "paintAvatar") : ""}`, context);
+  vm.runInContext(`const avatarCache = new Map();\n${state.replace(/const avatarCache = new Map\(\);/, "")}\n${source === panel ? functionSource(panel, "applyAvatarImage", true) + "\n" + functionSource(panel, "paintAvatar") + "\n" + functionSource(panel, "retryAvatarPaint") : ""}`, context);
   return {
     context, root, requests, revoked, images, listeners,
     get calls() { return calls; }, expire() { now += 300001; },
@@ -170,6 +170,34 @@ for (const [page, source] of [["panel", panel], ["settings", settings]]) {
     assert.equal(h.calls, 2);
     timers[1](); assert.equal(await retry, null);
     assert.equal(h.revoked.length, 2);
+  });
+  test(`${page}: a failed avatar load is backfilled by the next successful one`, async () => {
+    const h = avatarHarness(source);
+    const oldBox = avatarBox(h.root);
+    const first = h.paint(oldBox, "__user", "我");
+    await h.settleAll(false); await first;
+    assert.equal(oldBox.querySelector(".im").src, "", "拉不到图时先退回首字");
+    assert.equal(oldBox.querySelector(".ph").hidden, false);
+
+    const newBox = avatarBox(h.root);
+    const second = h.paint(newBox, "__user", "我");
+    await h.settleAll(); await second;
+    assert.ok(newBox.querySelector(".im").src, "新位置应该拿到图");
+    assert.ok(oldBox.querySelector(".im").src, "先前失败的那一行也要被补上图");
+    assert.equal(oldBox.querySelector(".ph").hidden, true);
+  });
+  test(`${page}: a failed avatar load retries itself instead of sticking to the letter`, async () => {
+    const h = avatarHarness(source); const timers = [];
+    h.context.setTimeout = (callback) => { timers.push(callback); return timers.length; };
+    h.context.clearTimeout = () => {};
+    const box = avatarBox(h.root);
+    const first = h.paint(box, "__user", "我");
+    await h.settleAll(false); await first;
+    assert.ok(timers.length, "拉失败要安排一次重试");
+    timers.at(-1)();
+    await h.settleAll(); await flush();
+    assert.ok(box.querySelector(".im").src, "重试之后应该拿到图");
+    assert.equal(box.querySelector(".ph").hidden, true);
   });
 }
 

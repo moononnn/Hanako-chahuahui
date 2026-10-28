@@ -1554,14 +1554,34 @@
       if (avatarPageHidden || box.dataset.avatarWant !== want) return;
       if (url) {
         applyAvatarImage(box, url);
-        // 刷新成功后让同一位伙伴的已挂载头像一起换图，再回收没人引用的旧 URL。
-        if (retiredAvatarUrls.size) {
-          for (const node of document.querySelectorAll("[data-avatar-want]")) {
-            if (node.dataset.avatarWant === want) applyAvatarImage(node, url);
-          }
+        // 同一位的已挂载头像一起换图：刷新时换新图，第一次成功时把先前失败的那些行也补上。
+        // 只在「有旧图被回收」时才补是不行的——首轮拉图一旦失败，没有旧图可回收，
+        // 那些行就会永远停在首字上，直到整个聊天窗重画。
+        for (const node of document.querySelectorAll("[data-avatar-want]")) {
+          if (node.dataset.avatarWant === want) applyAvatarImage(node, url);
         }
+        box.dataset.avatarRetry = "0";
+      } else {
+        // 拉失败不把这一行留在首字上：过一会儿再替它试一次。
+        // 同一个头像的请求仍然合并成一笔，不会因为重试多打几趟。
+        retryAvatarPaint(box, agentId, fallbackText);
       }
       collectAvatarUrls();
+    }
+
+    /**
+     * 头像没拉到时，过一会儿再替这个位置试一次。
+     * 网络抖一下、宿主正忙、图太大超了预算——这些都会让一次拉图空手而归，
+     * 光等下一条消息才补图太慢，自己再试一次才算修好。
+     */
+    function retryAvatarPaint(box, agentId, fallbackText) {
+      const tries = Number(box.dataset.avatarRetry || 0);
+      if (tries >= 2 || avatarPageHidden) return;
+      if (!agentId) return;
+      // 这一格已经不在页面里了（重画过），没人会看见它，不必再试。
+      if (box.isConnected === false) return;
+      box.dataset.avatarRetry = String(tries + 1);
+      setTimeout(() => { void paintAvatar(box, agentId, fallbackText); }, 1200 * (tries + 1));
     }
 
     /**
