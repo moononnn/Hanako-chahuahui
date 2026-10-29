@@ -531,3 +531,31 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 .persona-usage-track > i { display: block; height: 100%; border-radius: 999px; background: var(--mint); }
 .persona-usage-track > i.over { background: var(--blossom); }
 .persona-usage-cut { margin: -6px 0 0; color: var(--ink-soft); font-size: 12.5px; line-height: 1.6; overflow-wrap: anywhere; }
+
+/* ── 气泡装扮：一排可选的框，每一格里画两枚小气泡当样张 ── */
+.skin-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; margin-top: 14px; }
+/* 分组标题铺满整行，把二十几套分成三段 */
+.skin-group-title {
+  grid-column: 1 / -1;
+  margin: 4px 0 -2px;
+  font-size: 12px; font-weight: 600; letter-spacing: .08em;
+  color: var(--ink-faint);
+}
+.skin-group-title:first-child { margin-top: 0; }
+.skin-pick {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px; text-align: left;
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface); color: var(--ink); cursor: pointer;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 120ms var(--ease-out);
+}
+.skin-pick:hover { border-color: var(--mint); }
+.skin-pick.on { border-color: var(--mint); background: var(--mint-soft); box-shadow: 0 0 0 2px rgba(93, 174, 142, .16); }
+.skin-pick:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
+.skin-pick .skin-sample { flex: none; width: 96px; padding: 8px 7px; }
+.skin-pick-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.skin-pick-text strong { font-size: 13.5px; color: var(--ink); }
+.skin-pick-text small { font-size: 12px; color: var(--ink-soft); line-height: 1.5; }
+/* 伙伴那侧不归这里管：一句说明摆在选择器下面，不占卡片也不伪装成开关 */
+.skin-partner-note { margin: 12px 0 0; font-size: 12px; color: var(--ink-faint); line-height: 1.6; }
+

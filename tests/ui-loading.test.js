@@ -279,6 +279,9 @@ function panelHarness(names) {
     olderTouched: false, topTipAtTop: false, topTipTimer: null, topTipDelay: null,
     lastRenderedConversationAt: null, paintedWithAvatars: null, showMessageAvatars: false,
     renderGeneration: 0, SCROLL_BOTTOM_GAP: 24, TIME_DIVIDER_GAP_MS: 600000, SHOW_UNREAD_BADGES: true, THREAD_PAGE_SIZE: 40, OLDER_LOAD_TOP_GAP: 240,
+    // 气泡皮：这两样是模块级状态与函数，不在被切的函数片里。
+    // 这几条只验加载流程，给桩就够（皮肤本身在 bubble-skins.test.js 里验）。
+    lastPartnerSkin: null, applyPartnerSkin: () => {},
     draggedPartnerId: "", draggedPartnerNode: null, dragOriginIds: [], dragCommitted: false,
     partnerOrderRevision: 0, orderSavePending: false, openPartnerSeq: 0, threadViewSeq: 0,
     imageChoiceSeq: 0, inputRevision: 0, inputOwner: null, obPending: new Set(),

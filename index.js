@@ -48,6 +48,8 @@ import {
   withModelDeadline,
 } from "./lib/model.js";
 import { createStore, createDiagnostics } from "./lib/store.js";
+import { BUBBLE_SKINS, BUBBLE_SKIN_GROUPS, normalizeBubbleSkin, PARTNER_SKIN_IDS } from "./lib/bubble-skins.js";
+import { pickPartnerSkin } from "./lib/bubble-skin-mood.js";
 import { registerUsageQuery } from "./lib/usage-query.js";
 import { collectUsage } from "./lib/usage-stats.js";
 import { recordUsageCall } from "./lib/usage-book.js";
@@ -392,6 +394,8 @@ import {
   introducedTextFrom,
   pickReason,
 } from "./lib/proactive-reasons.js";
+// __PROACTIVE_MIX_20261029__ 来源交错：素材、种子、关系式三类轮着上，别让一类连着占住。
+import { groupsFromMessages, noteSentSource, planSourceMix, recentMixGroups, sourceGroupOf } from "./lib/proactive-mix.js";
 import {
   claimWeatherOwner,
   dayOf as publicEventDayOf,
@@ -472,6 +476,37 @@ function readManifestVersion() {
 }
 
 export const version = readManifestVersion();
+
+/**
+ * __LAB_BUDGET_20261028__ 主动消息配比实验
+ *
+ * 起因：视频分享（2026-10-17）和新闻（2026-10-20）是后加进来的两条通道，各自带着
+ * 「有货就发、发到上限为止」的配额，而兴趣种子只有一个「每天最多 1 条」的天花板。
+ * 一个是保底的量，一个是封顶的闸，跑满八天的结果是视频 34 条、新闻 23 条、兴趣种子 1 条，
+ * 关系式由头（没事也想找她）被挤到几乎为零。
+ *
+ * 这一块只改「每类能拿几条」和「这一轮谁先挑」，不动任何通道自己的取材、提示词与门禁。
+ * 回滚：把 enabled 改成 false，下一个 tick 就回到原配比，不用改别的行。
+ * 回滚与验收步骤见 EXPERIMENT-daily-budget-20261028.md。
+ */
+export const LAB_BUDGET = Object.freeze({
+  enabled: true,
+  /** 每天最多几条视频。原值来自 videoShareMaxPerDay（默认 5），这里取与用户设置里较小的那个。 */
+  video: 2,
+  /** 每天最多几条新闻。原值 NEWS_MAX_PER_DAY（4）。 */
+  news: 1,
+  /** 每天目标几条兴趣（种子 / 探索发现）。原来只有「最多 1 条」的封顶，现在同时当上限和保底口径。 */
+  interest: 2,
+  /** 当天兴趣还没发够时，让种子先挑这一轮，视频退到下一个落点。 */
+  seedFirst: true,
+});
+
+/**
+ * 来源交错（2026-10-29）：素材、种子、关系式三类轮着上，同一类不连续占两轮。
+ * 回滚：把这里改成 false，下一个 tick 就回到原来的优先级排队，其余代码一行不用动。
+ * 回滚与验收步骤见 EXPERIMENT-source-mix-20261029.md。
+ */
+export const PROACTIVE_MIX = true;
 
 const PERSONA_TTL_MS = 10 * 60 * 1000;
 /**
@@ -555,6 +590,30 @@ export function apply(ctx) {
     }
   };
 
+  /**
+   * 伙伴自己那侧的气泡装扮（2026-10-28 晚）。
+   *
+   * 一天只看一次、跟着心情日盘走，规则在 lib/bubble-skin-mood.js。
+   * 这里只负责把三样东西凑到一起：今天的日盘、脸上的账、他的 id。
+   * 算不出来就回 null（界面就不挂这枚属性，退回原来的取色），
+   * 不让外观那边把聊天拖垮。
+   */
+  const partnerSkinFor = (agentId, now = new Date()) => {
+    try {
+      const settings = store.getPartnerSettings(agentId);
+      const mood = store.getTodayMood(agentId, { now, sleepHours: hoursToday(settings?.sleep, now) });
+      const book = store.getPartnerSkinBook(agentId);
+      const picked = pickPartnerSkin(book, { mood, now, agentId });
+      // 只有钉位真变了才写盘：每天看一次就走，不该每天都落一次盘。
+      if (picked.book.dayKey !== book.dayKey || picked.book.skin !== book.skin) {
+        store.savePartnerSkinBook(agentId, picked.book);
+      }
+      return picked.skin;
+    } catch {
+      return null;
+    }
+  };
+
   try { registerPersonalityTool(ctx, { store, listPartners }); }
   catch { ctx.logger?.error?.("[chahuahui] 性格档案工具注册失败，其余功能继续装载"); }
   // 凭据仅供B站内部请求，公开状态不带凭据，且不进入设置、诊断或模型上下文。
@@ -599,16 +658,20 @@ export function apply(ctx) {
     return videoLoginNoticeDue(login, store.getGlobalRuntime().videoLoginNotice, now);
   }
   function videoQuota(now = new Date()) {
-    return videoQuotaAvailable(store.getGlobalRuntime().videoShares,
-      videoShareLimit(store.getGlobalSettings().videoShareMaxPerDay), dayKey(now));
+    const shared = videoShareLimit(store.getGlobalSettings().videoShareMaxPerDay);
+    // __LAB_BUDGET_20261028__ 实验期取「用户设置」与配比表里较小的那个，她自己调低照样生效。
+    const limit = LAB_BUDGET.enabled ? Math.min(shared, LAB_BUDGET.video) : shared;
+    return videoQuotaAvailable(store.getGlobalRuntime().videoShares, limit, dayKey(now));
   }
   /**
    * 新闻每天的天（2026-10-20）。跟视频分开记：视频一天最多 5 条是「她想刷就刷」，
    * 新闻是主动插进来的，一天两条封顶，再多就变成推送了。
    */
   function newsQuota(now = new Date()) {
-    return newsQuotaAvailable(store.getGlobalRuntime().newsShares,
-      newsShareLimit(store.getGlobalSettings().newsShareMaxPerDay), dayKey(now));
+    const shared = newsShareLimit(store.getGlobalSettings().newsShareMaxPerDay);
+    // __LAB_BUDGET_20261028__ 同上。
+    const limit = LAB_BUDGET.enabled ? Math.min(shared, LAB_BUDGET.news) : shared;
+    return newsQuotaAvailable(store.getGlobalRuntime().newsShares, limit, dayKey(now));
   }
   // App service 注册是入口登记，不在装载期请求宿主数据或调用模型；能力未授权时茶话会本体仍照常加载。
   try {
@@ -999,6 +1062,8 @@ export function apply(ctx) {
   const GLOBAL_SETTING_KEYS = new Set([
     "model", "recognitionModel", "vision", "userNameOverride", "daybookEnabled", "workfeedEnabled",
     "globalGate", "quiet", "actionStyle", "messageAvatars", "messageRefine", "typingIndicator", "myActionTail",
+    // 聊天气泡的装扮：换一套壳，认白名单里的那几套。
+    "bubbleSkin",
     "rhythmEnabled", "rhythmStyleEnabled", "rhythmProactiveEnabled", "rhythmResetAt", "voiceEnabled", "voiceDelivery", "voiceProfiles", "voiceProfile", "videoShareMaxPerDay",
     // 公共事件（2026-10-24）：节目祝福与天气提醒各自一个开关，总闸关了两个都不发。
     "publicEventsEnabled", "festivalGreetingEnabled", "weatherAlertEnabled",
@@ -1035,6 +1100,12 @@ export function apply(ctx) {
     if (Object.prototype.hasOwnProperty.call(patch, "userNameOverride")) {
       const name = String(patch.userNameOverride ?? "").trim().slice(0, 40);
       patch.userNameOverride = name || null;
+    }
+    // 气泡装扮：只收认得的那几套，不认得的当场说清楚，别默默吞掉。
+    if (Object.prototype.hasOwnProperty.call(patch, "bubbleSkin")) {
+      const skin = String(patch.bubbleSkin ?? "").trim();
+      if (!BUBBLE_SKINS.some((row) => row.id === skin)) throw new Error("气泡装扮没有这一套");
+      patch.bubbleSkin = normalizeBubbleSkin(skin);
     }
     // 图片留多久：只收认得的那几档，其余一律回默认。
     if (Object.prototype.hasOwnProperty.call(patch, "imageRetentionDays")) {
@@ -4013,13 +4084,13 @@ export function apply(ctx) {
         }
       }
       const videoLoginState = videoPartnerEnabled(agentId) ? await videoLoginManager.status() : null;
-      const candidateVideo = (
+      const videoCandidateReady = (
         // __CHAHUAHUI_DEV_ONLY__
         devForceInterest === agentId ? null :
         // __CHAHUAHUI_DEV_ONLY_END__
         followup
       ) || !videoPartnerEnabled(agentId) || !videoQuota(now) ? null : nextVideoCandidate(store.getVideoBook(agentId), now);
-      const candidateSeed = followup?.read || candidateVideo
+      const seedCandidate = followup?.read
         ? null
         : pickSeed(seedBook, {
             now,
@@ -4027,9 +4098,44 @@ export function apply(ctx) {
             mutedIds: mutedMotifIds(moodBook),
             perMotifCooldown: cooldownByMotif(moodBook),
           });
+      // __LAB_BUDGET_20261028__ 当天兴趣还没发到配比表的条数时，种子先挑这一轮，视频退到下一个落点。
+      // 以前是反的：手上一有视频就先发视频，种子要等视频配额用光才可能被看一眼。
+      const interestSentToday = countTodayObservation(store.getThread(agentId).messages, now);
+      const interestRoom = interestSentToday < OBSERVATION_MAX_PER_DAY;
+      // __PROACTIVE_MIX_20261029__ 来源交错（2026-10-29）：上一轮是哪一类，这一轮就换一类。
+      // 先把手上的候选和「这一轮该让谁上」算清楚，再拿它去压种子优先和素材候选；
+      // 只压素材和种子这两头，关系式那一档要等确认有由头可抽，放在下面出站前再让。
+      const discoveryReady = followup?.read ? null : nextDiscovery(state.interestLearning, now);
+      const newsReady = followup?.read || !newsQuota(now)
+        ? null
+        : nextNewsItem(normalizeNewsBook(state.newsBook, now), now);
+      const mixHistory = recentMixGroups(state.proactiveSources);
+      const mixPlan = !PROACTIVE_MIX ? null : planSourceMix({
+        // 交错账还是空的时候拿聊天账兜底：头一轮就接着历史往下交替，不用等它自己攒几轮。
+        recent: mixHistory.length ? mixHistory : groupsFromMessages(thread.messages),
+        material: Boolean(videoCandidateReady) || Boolean(newsReady),
+        interest: Boolean(seedCandidate && interestRoom) || Boolean(discoveryReady && interestRoom),
+      });
+      if (mixPlan) {
+        diagnostics({ event: "proactive.mix", agentId, prefer: mixPlan.prefer, why: mixPlan.why });
+      }
+      const seedPriority = mixPlan?.prefer === "interest"
+        ? true
+        : mixPlan?.prefer === "material"
+          ? false
+          : Boolean(LAB_BUDGET.enabled && LAB_BUDGET.seedFirst);
+      const seedFirst = Boolean(seedPriority && seedCandidate && interestRoom);
+      const candidateVideo = seedFirst ? null : videoCandidateReady;
+      const candidateSeed = !seedCandidate
+        ? null
+        : mixPlan?.prefer === "material"
+          ? null
+          : seedFirst || !videoCandidateReady
+            ? seedCandidate
+            : null;
       const candidateDiscovery = followup?.read || candidateSeed || candidateVideo
         ? null
-        : nextDiscovery(state.interestLearning, now);
+        : discoveryReady;
       /**
        * 观察式每天封顶一条（2026-10-20）。
        *
@@ -4052,7 +4158,9 @@ export function apply(ctx) {
       // 以前这里多挂了一个 observationLeft，结果是当天发过一条观察式之后，新闻整天都死了，
       // 和“一天给新闻两条”直接打架。
       const newsBook = normalizeNewsBook(state.newsBook, now);
-      const candidateNews = followup?.read || candidateVideo || !newsQuota(now)
+      // __LAB_BUDGET_20261028__ 这里用闸后的 cappedSeed，不是候选本身：
+      // 观察式当天已经发满时种子根本不会上，新闻不该被一个上不了的候选挤掉。
+      const candidateNews = followup?.read || candidateVideo || cappedSeed || !newsQuota(now)
         ? null
         : nextNewsItem(newsBook, now);
       const topic = null;
@@ -4122,12 +4230,33 @@ export function apply(ctx) {
       // 锚点门原本是为了拦“ta 自己的观察写成小作文”——那类东西没有外部依据，需要她那边有点动静才算有资格开口。
       // 新闻和视频本身就是外面真实存在的东西，不需要她先说话才能分享；拿锚点卡它，
       // 结果就是她一整天不聊天，一条新闻视频都收不到。
-      const discovery = gate.exception || !anchor.ok
+      let discovery = gate.exception || !anchor.ok
         ? null
         : discoveryForProactiveMessage(cappedDiscovery, { exception: gate.exception });
-      const seed = gate.exception || !anchor.ok ? null : cappedSeed;
-      const video = gate.exception ? null : candidateVideo;
-      const news = gate.exception ? null : candidateNews;
+      let seed = gate.exception || !anchor.ok ? null : cappedSeed;
+      let video = gate.exception ? null : candidateVideo;
+      let news = gate.exception ? null : candidateNews;
+      // __PROACTIVE_MIX_20261029__ 这一轮轮到关系式：把素材和种子整份让出来。
+      // 让之前要先确认真有由头可抽（跟下面 pickReason 用的是同一组输入，interestAvailable 置否，
+      // 所以候选非空这件事到出站那一步不会变卦）；抽不出来就原样放回去，宁可连着两个同源。
+      if (mixPlan?.prefer === "relational") {
+        const mixBlocked = Boolean(todoHere || farewellSend || wakeEcho || followup
+          || gate.exception || videoLoginNotice || publicEvent);
+        const mixProbe = mixBlocked
+          ? null
+          : pickReason({
+              relationship: effectiveRelationship(knowing),
+              personality: knowing.personality,
+              interestAvailable: false,
+              hasContext: Boolean(sceneEcho) || workActivity.active === true,
+            });
+        if (!mixBlocked && mixProbe?.reason) {
+          discovery = null;
+          seed = null;
+          video = null;
+          news = null;
+        }
+      }
       const hobby = video
         ? knowing.hobbies.find((row) => row.id === video.interestId) ?? { id: video.interestId, name: video.interestName }
         : seed
@@ -4195,6 +4324,11 @@ export function apply(ctx) {
         // __CHAHUAHUI_DEV_ONLY_END__
         publicEvent
           ? { reason: publicEvent.reason, candidates: [], basis: null, temperament: null }
+          :
+        // __PROACTIVE_MIX_20261029__ 这一轮定的是兴趣，就别让它再被关系式由头抢走：
+        // 非兴趣由头会把种子整条吞掉（非兴趣不带兴趣素材），交错就白算了。
+        reasonEligible && mixPlan?.prefer === "interest" && (seed || discovery)
+          ? { reason: { kind: "interest" }, candidates: [], basis: null, temperament: null }
           :
         reasonEligible
           ? pickReason({
@@ -4375,6 +4509,21 @@ export function apply(ctx) {
           ? { ...sent.interest, at: now.toISOString() }
           : store.getProactiveState(agentId).lastInterestUse ?? null,
       });
+      // __PROACTIVE_MIX_20261029__ 这一轮是哪一类来源开的口，记下来，下一轮好换一类。
+      // 待办、睡前收尾、醒来回声、读过没回的跟进、节日天气、纯招呼都是机动，不参与交错也不记账。
+      const sentGroup = sourceGroupOf({
+        routine: Boolean(publicEvent || todoHere || farewellSend || wakeEcho || followup || greetingOnly || videoLoginNotice),
+        video,
+        news,
+        seed,
+        discovery,
+        reason: reasonForSend,
+      });
+      if (sentGroup) {
+        store.setProactiveState(agentId, {
+          proactiveSources: noteSentSource(store.getProactiveState(agentId).proactiveSources, sentGroup, sent.sentAt),
+        });
+      }
       // 这件事说过了，今天就不再提：指纹变了（她又添了新的到点待办）自然会再来一次。
       if (todoHere && sent.carriedTodo) {
         store.setGlobalRuntime({ todoNudge: { key: todoNudge.key, at: now.toISOString(), agentId } });
@@ -4712,8 +4861,11 @@ export function apply(ctx) {
 
   /** 试过一次之后多久才允许再试（性格初稿与爱好共用这条节流） */
   const HOBBY_SEED_RETRY_MS = 6 * 60 * 60 * 1000;
-  /** 观察式主动消息每天上限（2026-10-20）：一天一条，其余名额给新闻和视频。 */
-  const OBSERVATION_MAX_PER_DAY = 1;
+  /**
+   * 观察式主动消息每天上限（2026-10-20）：一天一条，其余名额给新闻和视频。
+   * __LAB_BUDGET_20261028__ 实验期改成配比表里的目标条数（默认 2）；关掉实验就回到 1。
+   */
+  const OBSERVATION_MAX_PER_DAY = LAB_BUDGET.enabled ? LAB_BUDGET.interest : 1;
   /** 一轮视频取料最多试几条（2026-10-20 从 3 抬到 10：以前剩下十几条根本没被看过）。 */
   const VIDEO_TRY_PER_ROUND = 10;
   const DRAFT_RETRY_MS = 6 * 60 * 60 * 1000;
@@ -7783,6 +7935,10 @@ export function apply(ctx) {
             messageRefine: Boolean(globalSettings.messageRefine),
             // 等待回复时用哪套动效：dots（三个点，原来的）/ cup（杯中有话）
             typingIndicator: globalSettings.typingIndicator === "cup" ? "cup" : "dots",
+            // 聊天气泡的装扮：「我」这一侧。伙伴那一侧不在这里——
+            // 它跟着人跟人走，由 /thread/:agentId 单独给（partnerSkin）。
+            bubbleSkin: globalSettings.bubbleSkin,
+            partnerSkins: PARTNER_SKIN_IDS,
             // 聊天窗那条淡字前面的表情：跟叫法表同源，不在前端另拄一份
             actionStyles: ACTION_STYLES.map((s) => ({ id: s.id, emoji: s.emoji })),
           });
@@ -7795,6 +7951,24 @@ export function apply(ctx) {
         const agentId = c.req.param("agentId");
         try {
           return c.json({ ok: true, ...adaptationSnapshot(agentId) });
+        } catch (error) {
+          return c.json({ ok: false, error: { message: describeError(error) } }, 500);
+        }
+      });
+
+      /**
+       * 伙伴现在那一侧的气泡装扮（只读）。
+       *
+       * 设置页拿它写一句「ta 现在戴着 xx」，别让人以为那侧也能自己设。
+       * 只返回名字，不带心情数值——心情日盘是不给用户看的（见 lib/mood-daily.js）。
+       */
+      app.get("/bubble-skin/partner/:agentId", (c) => {
+        const agentId = c.req.param("agentId");
+        try {
+          const skin = partnerSkinFor(agentId);
+          const meta = skin ? BUBBLE_SKINS.find((row) => row.id === skin) : null;
+          // skin 为 null 只表示「还没定」：没结算过心情，或者今天的心情还没人认领。
+          return c.json({ ok: true, skin: skin ?? null, label: meta?.label ?? null });
         } catch (error) {
           return c.json({ ok: false, error: { message: describeError(error) } }, 500);
         }
@@ -7916,6 +8090,9 @@ export function apply(ctx) {
             }),
             pref: store.getPref(agentId),
             persona: { readAt: persona.readAt, errors: persona.errors },
+            // 伙伴那一侧的气泡：ta 自己挑的，跟人跟人走，一天最多翻一次。
+            // null 表示还没定（没结算过心情 / 心情没对应皮肤），界面就不挂这枚属性。
+            partnerSkin: partnerSkinFor(agentId),
           });
         } catch (error) {
           return c.json({ ok: false, error: describeError(error) }, 500);
@@ -8701,12 +8878,19 @@ export function apply(ctx) {
               settings: partnerSettings,
               agentModel,
               effectiveModel: choice ? { provider: choice.provider, model: choice.model, source: choice.source } : null,
+              // ta 那一侧的气泡：只给名字，给设置页写一句「ta 现在戴着 xx」。
+              // 这是个只读字段，设置页不提供改它的入口。
+              bubbleSkin: partnerSkinFor(row.id),
             });
           }
           return c.json({
             ok: true,
             global: globalSettingsView(),
             daybookInstalled: await shiguangjiInstalled(),
+            // 气泡装扮的清单：设置页照着这份画预览，前端不再自己抄一套。
+            bubbleSkins: BUBBLE_SKINS,
+            // 分组只给设置页分段用（淡雅 / 可爱 / 花哨），不影响存哪一套。
+            bubbleSkinGroups: BUBBLE_SKIN_GROUPS,
             partners,
             models,
             visionModels,

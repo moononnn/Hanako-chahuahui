@@ -5,12 +5,14 @@ import vm from "node:vm";
 
 const source = fs.readFileSync(new URL("../index.js", import.meta.url), "utf8");
 
-function threadRoute({ messages = [], listPartners = async () => [], query = {} } = {}) {
+function threadRoute({ messages = [], listPartners = async () => [], query = {}, partnerSkin = null } = {}) {
   let handler;
   vm.runInNewContext(source.slice(source.indexOf('      app.get("/thread/:agentId"'), source.indexOf('      app.post("/thread/:agentId/read"')), {
     app: { get(_path, callback) { handler = callback; } },
     store: { getThread: () => ({ messages }), setLastPartner() {}, getPref: () => ({}) },
     getPersona: async () => ({ readAt: null, errors: {} }), listPartners,
+    // 伙伴那侧的气泡：这张测试只关心路由自己的行为，这里给个不落盘的桩
+    partnerSkinFor: () => partnerSkin,
     turns: new Map(), deliveringReplies: new Set(),
     recallEligibility: () => ({ allowed: true }), describeError: (error) => ({ message: error.message }),
   });
@@ -75,6 +77,8 @@ test("伙伴列表路由：未读、忙碌和背景共用已读快照，不再�
   const settings = { sleep: {}, awaiting: {}, phone: {}, vision: {}, background: { file: "room.png" } };
   vm.runInNewContext(source.slice(source.indexOf('      app.get("/partners"'), source.indexOf('      app.get("/adaptation/:agentId"')), {
     app: { get(_path, callback) { handler = callback; } }, listPartners: async () => [{ id: "nova" }],
+    // 伙伴那侧的皮肤清单与映射：这张测试只数聊天账读了几次，给个静态值就够
+    PARTNER_SKIN_IDS: [], partnerSkinFor: () => null,
     store: {
       getThread() { threadReads += 1; return thread; },
       getPartnerSettings: () => settings,

@@ -318,6 +318,9 @@ test("reload的慢旧GET与集中保存共用队列，两个调用顺序都不�
     h.context.currentId = "yes";
     h.context.paintGlobal = () => h.run("paintVideoSharing()");
     h.context.paintPartnerList = () => {};
+    // reloadSettings 末尾会重写「ta 那侧戴着 xx」那句话。这张测试只验队列顺序，
+    // 给个不做事的桩；那句话的渲染在 bubble-skins.test.js 里验。
+    h.context.paintPartnerSkinNote = () => {};
     h.context.openPartner = async () => {
       h.status.textContent = h.run('partners.find((p) => p.id === "yes").settings.videoSharingEnabled') === true ? "参与B站分享" : "不参与B站分享";
     };

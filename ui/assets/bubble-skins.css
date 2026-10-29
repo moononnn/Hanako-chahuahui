@@ -1,0 +1,651 @@
+/* ============================================================
+   气泡装扮：像 QQ 的付费气泡那样，聊天框不再只是「一张纸」，
+   而是有边框、有渐变、有尾巴的一套壳。
+
+   两侧各挂各的（2026-10-28 晚拆开）：
+     [data-me-skin="xxx"]  → 只管「我」这一侧，变量全是 --skin-me-*
+     [data-ta-skin="xxx"]  → 只管伙伴那一侧，变量全是 --skin-ta-*
+   两枚属性挂在同一个容器上（聊天窗的 .chat、预览的 .skin-sample），
+   两侧各自继承自己那组变量，你那边跟 ta 那边可以完全不是同一套。
+   同一个容器上只挂一枚也行：那一侧就从来没定义的变量，回落原来的取色。
+
+   变量清单：
+     --skin-me-bg / --skin-me-border-color / --skin-me-fg / --skin-me-shadow / --skin-me-tail
+     --skin-ta-bg / --skin-ta-border-color / --skin-ta-fg / --skin-ta-shadow / --skin-ta-tail
+   没定义的那一项照旧走原来的取色逻辑（原味就是什么都没定义）。
+
+   --skin-*-bg 写的是完整的 background 简写值（可以叠好几层渐变，
+   每层自带 position/size），所以花哨那几套的纹理、光环、扫描线
+   都在这一个变量里，不用另开一套写法。
+
+   挑选权分开：设置页只挑自己那枚 data-me-skin；伙伴那枚 data-ta-skin
+   由后端按 ta 当天的心情定（lib/bubble-skin-mood.js），���天最多翻一次。
+
+   目前 12 套（2026-10-28 删了便签、宣纸、亚麻、缎带、糖果、奶油泡芙、
+   猫爪、云朵、液态金属、星球、极光、烈焰这十二套）。删掉的原文留在
+   临时目录的 bubble-skins-24-full-20261028.css，要捡回来照抄即可。
+
+   ── 以后加新样式 ──
+   一份变量按前缀拆两次写（--skin-me-* 一块、--skin-ta-* 一块），
+   每块前面分别加 [data-me-skin="新id"] / [data-ta-skin="新id"]，
+   再按需补 .row.me / .row.ta 那几条具名规则。清单在 lib/bubble-skins.js。
+   ============================================================ */
+
+/* ── 青瓷：青灰釉色，左上打一点釉光，边上一道内亮线 ── */
+[data-me-skin="celadon"] {
+  --skin-me-bg:
+    radial-gradient(ellipse 120% 88% at 28% 0%, rgba(255, 255, 255, .9), transparent 62%),
+    linear-gradient(165deg, #e9f3ee 0%, #d2e6dc 100%);
+  --skin-me-border-color: #a8c8ba;
+  --skin-me-fg: #2c5343;
+  --skin-me-shadow: 0 3px 10px rgba(70, 110, 92, .14), inset 0 1px 0 rgba(255, 255, 255, .9);
+}
+[data-ta-skin="celadon"] {
+  --skin-ta-bg:
+    radial-gradient(ellipse 120% 88% at 28% 0%, rgba(255, 255, 255, .88), transparent 62%),
+    linear-gradient(165deg, #f1f8f4 0%, #e2efe8 100%);
+  --skin-ta-border-color: #b6d0c4;
+  --skin-ta-fg: #365647;
+  --skin-ta-shadow: 0 3px 10px rgba(70, 110, 92, .12), inset 0 1px 0 rgba(255, 255, 255, .9);
+}
+
+/* ── 描边：两像素的线勾出轮廓，里面再套一圈浅线，像双线信封 ──
+   底色半透，背景图会从气泡里透上来。透太多字就没依靠了，
+   所以留到 .8 左右：还能看出「下面是照片」，字始终踩得实。 */
+[data-me-skin="outline"] {
+  --skin-me-bg: rgba(228, 244, 235, .8);
+  --skin-me-border-color: #4f9c7f;
+  --skin-me-fg: #24513c;
+  --skin-me-shadow: inset 0 0 0 3px rgba(93, 174, 142, .16), inset 0 0 0 1px rgba(255, 255, 255, .5);
+}
+[data-ta-skin="outline"] {
+  --skin-ta-bg: rgba(255, 253, 247, .84);
+  --skin-ta-border-color: #a5916d;
+  --skin-ta-fg: #3d3831;
+  --skin-ta-shadow: inset 0 0 0 3px rgba(165, 145, 109, .14), inset 0 0 0 1px rgba(255, 255, 255, .45);
+}
+
+/* ============================================================
+   可爱那四套
+   ============================================================ */
+
+/* ── 小熊：奶油棕的皮，顶上一对圆耳朵 ──
+   这是全套皮肤里唯一改砺廓的一套：耳朵从气泡上沿探出来，
+   远远扫一眼就能认（颜色再换，剪影还是这只熊）。
+   两只耳朵画在同一个伪元素的 background 里（两层径向渐变，各自带内耳和一圈边），
+   不用堆元素，两只完全对称；只拿 box-shadow 复制的话第二只没有内耳。
+   耳朵得比气泡顶部深半档：同色的话它不是耳朵，是两块褪色的印子。 */
+[data-me-skin="bear"] {
+  --skin-me-bg:
+    radial-gradient(circle at 6px 7px, rgba(160, 120, 80, .08) 0 1px, transparent 1.5px) 0 0 / 13px 12px,
+    radial-gradient(ellipse 70% 52% at 30% 6%, rgba(255, 255, 255, .8), transparent 64%),
+    linear-gradient(170deg, #f9ebd8 0%, #f0d8b8 100%);
+  --skin-me-border-color: #d2a877;
+  --skin-me-fg: #57391c;
+  --skin-me-shadow: 0 5px 14px rgba(180, 140, 90, .28), inset 0 1px 0 rgba(255, 255, 255, .7);
+}
+[data-ta-skin="bear"] {
+  --skin-ta-bg:
+    radial-gradient(circle at 6px 7px, rgba(160, 120, 80, .06) 0 1px, transparent 1.5px) 0 0 / 13px 12px,
+    radial-gradient(ellipse 70% 52% at 30% 6%, rgba(255, 255, 255, .85), transparent 64%),
+    linear-gradient(170deg, #fffaf3 0%, #f7e9d6 100%);
+  --skin-ta-border-color: #ddc0a0;
+  --skin-ta-fg: #5b4227;
+  --skin-ta-shadow: 0 5px 14px rgba(180, 140, 90, .22), inset 0 1px 0 rgba(255, 255, 255, .8);
+}
+/* 小熊的耳朵：一只用 ::before 画，另一只用 ::after（那条规则排在文件后半的
+   「小尖尾」之后：公用规则同权重且更靠后，会盖住这里的尺寸）。
+   形状是压扁的半椭圆，底边正好落在气泡顶边上，底部那道 1px 描边和气泡的上边框线
+   重合，看起来是气泡自己的轮廓起了两个包，不是贴上去的两片。
+   尺寸跟着气泡走：min(36px, max(0px, calc((100% - 32px) / 2)))，离角 16px
+   （正好让过 16px 的圆角）。气泡窄到放不下时耳朵自己缩小，不会飞出去。
+   布点纹理跟气泡同一套（11px 的格），内耳是偏上的一团浅色，顶上一道高光。 */
+[data-me-skin="bear"] .row.me .bubble::before,
+.skin-sample-bubble[data-me-skin="bear"].me::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  --ear-w: min(36px, max(0px, calc((100% - 32px) / 2)));
+  right: calc(16px + var(--ear-w));
+  width: var(--ear-w);
+  height: auto;
+  aspect-ratio: 10 / 5.5;
+  transform: translateY(-100%);
+  transform-origin: 50% 100%;
+  border-radius: 50% 50% 0 0 / 100% 100% 0 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 3px 4px, rgba(160, 120, 80, .11) 0 1px, transparent 1.4px) 0 0 / 11px 10px,
+    radial-gradient(ellipse 27% 31% at 50% 60%, rgba(242, 196, 174, .88) 0 56%, rgba(242, 196, 174, 0) 84%),
+    linear-gradient(178deg, #fbf0de 0%, #f5e3c8 60%, #f0dcc0 100%);
+  box-shadow: inset 0 0 0 1px rgba(198, 152, 96, .5), inset 0 2px 3px rgba(255, 255, 255, .62), inset 0 -6px 6px -4px rgba(186, 143, 92, .38);
+}
+[data-ta-skin="bear"] .row.ta .bubble::before,
+.skin-sample-bubble[data-ta-skin="bear"].ta::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  --ear-w: min(36px, max(0px, calc((100% - 32px) / 2)));
+  left: calc(16px + var(--ear-w));
+  width: var(--ear-w);
+  height: auto;
+  aspect-ratio: 10 / 5.5;
+  transform: translateY(-100%);
+  transform-origin: 50% 100%;
+  border-radius: 50% 50% 0 0 / 100% 100% 0 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 3px 4px, rgba(165, 125, 85, .09) 0 1px, transparent 1.4px) 0 0 / 11px 10px,
+    radial-gradient(ellipse 27% 31% at 50% 60%, rgba(245, 209, 188, .86) 0 56%, rgba(245, 209, 188, 0) 84%),
+    linear-gradient(178deg, #fdf8f0 0%, #f8ead6 60%, #f3e2c9 100%);
+  box-shadow: inset 0 0 0 1px rgba(210, 168, 116, .45), inset 0 2px 3px rgba(255, 255, 255, .7), inset 0 -6px 6px -4px rgba(191, 150, 100, .32);
+}
+/* 设置页那两枚小气泡只有 12px 字，耳朵跟着缩一档，离边也近一点 */
+.skin-sample-bubble[data-me-skin="bear"].me::before,
+.skin-sample-bubble[data-ta-skin="bear"].ta::before {
+  --ear-w: min(15px, max(0px, calc((100% - 16px) / 2)));
+  width: var(--ear-w);
+  aspect-ratio: 10 / 5.5;
+}
+.skin-sample-bubble[data-me-skin="bear"].me::before {
+  right: calc(8px + var(--ear-w));
+}
+.skin-sample-bubble[data-ta-skin="bear"].ta::before {
+  left: calc(8px + var(--ear-w));
+}
+
+/* ── 小熊会动 ──
+   两件事：新消息把整列往上顶的那一下，耳朵被压一下再弹回来；
+   没人说话的时候隔一阵自己抖一下（随机由 JS 挑一条，见 panel.html 的 syncIdleFlick）。
+
+   这里刻意不用 transform 做动画。耳朵的底边是靠 top: 0 + translateY(-100%) 钉在
+   气泡顶边上的，一旦用 scale/rotate，变换是绕原点整体变形，底边两端会一抬一压，
+   根部就露到气泡框外面去了（第一版就是这么穿帮的）。
+   现在只动两个东西：height（压扁/弹起）和 border-radius 的水平分量（歪一下）。
+   元素框的底边始终钉在气泡顶边上，上半截怎么变，根都不会跑。
+   歪的方向靠 --ear-dir：me 侧在气泡右边取 1，ta 侧在左边取 -1，两只耳朵都往外歪。 */
+:is(.chat[data-me-skin="bear"], .chat[data-ta-skin="bear"]) .stream.is-shoving .row:nth-last-child(-n+4) .bubble::before,
+:is(.chat[data-me-skin="bear"], .chat[data-ta-skin="bear"]) .stream.is-shoving .row:nth-last-child(-n+4) .bubble::after {
+  animation: bear-ear-shove .46s cubic-bezier(.28, .72, .36, 1);
+}
+/* 越靠下的行晚一点点：一整列齐步走会像机械 */
+:is(.chat[data-me-skin="bear"], .chat[data-ta-skin="bear"]) .stream.is-shoving .row:nth-last-child(2) .bubble::before,
+:is(.chat[data-me-skin="bear"], .chat[data-ta-skin="bear"]) .stream.is-shoving .row:nth-last-child(2) .bubble::after { animation-delay: .025s; }
+:is(.chat[data-me-skin="bear"], .chat[data-ta-skin="bear"]) .stream.is-shoving .row:nth-last-child(1) .bubble::before,
+:is(.chat[data-me-skin="bear"], .chat[data-ta-skin="bear"]) .stream.is-shoving .row:nth-last-child(1) .bubble::after { animation-delay: .05s; }
+/* 往哪边倒：两只耳朵都往外甩。me 侧在气泡右边，顺时针为正；ta 侧在左边，取负 */
+.chat[data-me-skin="bear"] .row.me .bubble::before,
+.chat[data-me-skin="bear"] .row.me .bubble::after { --ear-dir: 1; }
+.chat[data-ta-skin="bear"] .row.ta .bubble::before,
+.chat[data-ta-skin="bear"] .row.ta .bubble::after { --ear-dir: -1; }
+@keyframes bear-ear-shove {
+  0% {
+    translate: 0 0;
+    aspect-ratio: 10 / 5.5;
+    border-radius: 50% 50% 0 0 / 100% 100% 0 0;
+  }
+  20% {
+    translate: calc(var(--ear-dir, 1) * -2px) 0;
+    aspect-ratio: 10 / 4.7;
+    border-radius: calc(50% + var(--ear-dir, 1) * 9%) calc(50% - var(--ear-dir, 1) * 9%) 0 0 / 100% 100% 0 0;
+  }
+  52% {
+    translate: calc(var(--ear-dir, 1) * 1.2px) 0;
+    aspect-ratio: 10 / 5.9;
+    border-radius: calc(50% - var(--ear-dir, 1) * 5%) calc(50% + var(--ear-dir, 1) * 5%) 0 0 / 100% 100% 0 0;
+  }
+  78% {
+    translate: calc(var(--ear-dir, 1) * -.5px) 0;
+    aspect-ratio: 10 / 5.3;
+    border-radius: calc(50% + var(--ear-dir, 1) * 2%) calc(50% - var(--ear-dir, 1) * 2%) 0 0 / 100% 100% 0 0;
+  }
+  100% {
+    translate: 0 0;
+    aspect-ratio: 10 / 5.5;
+    border-radius: 50% 50% 0 0 / 100% 100% 0 0;
+  }
+}
+:is(.chat[data-me-skin="bear"], .chat[data-ta-skin="bear"]) .stream .row.ear-flick .bubble::before,
+:is(.chat[data-me-skin="bear"], .chat[data-ta-skin="bear"]) .stream .row.ear-flick .bubble::after {
+  animation: bear-ear-idle .72s ease-in-out;
+}
+@keyframes bear-ear-idle {
+  0%, 100% {
+    translate: 0 0;
+    aspect-ratio: 10 / 5.5;
+    border-radius: 50% 50% 0 0 / 100% 100% 0 0;
+  }
+  16% {
+    translate: calc(var(--ear-dir, 1) * -1.2px) 0;
+    aspect-ratio: 10 / 4.9;
+    border-radius: calc(50% + var(--ear-dir, 1) * 7%) calc(50% - var(--ear-dir, 1) * 7%) 0 0 / 100% 100% 0 0;
+  }
+  42% {
+    translate: calc(var(--ear-dir, 1) * .8px) 0;
+    aspect-ratio: 10 / 5.8;
+    border-radius: calc(50% - var(--ear-dir, 1) * 4%) calc(50% + var(--ear-dir, 1) * 4%) 0 0 / 100% 100% 0 0;
+  }
+  66% {
+    translate: 0 0;
+    aspect-ratio: 10 / 5.4;
+    border-radius: calc(50% + var(--ear-dir, 1) * 1.5%) calc(50% - var(--ear-dir, 1) * 1.5%) 0 0 / 100% 100% 0 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.chat[data-me-skin="bear"], .chat[data-ta-skin="bear"]) .stream .row .bubble::before,
+  :is(.chat[data-me-skin="bear"], .chat[data-ta-skin="bear"]) .stream .row .bubble::after { animation: none; }
+}
+/* ── 棉花糖：淡紫配奶黄，软得没有棱角 ──
+   这套只干一件事：圆。圆角拉到 26px、外加一圈雾状的自己（不另加影），
+   再加一层细糖粉（1px 的点，不到一成 opacity）：它不是纸，是一块可以捏扁的东西。
+   跟奶糖的区别在光：奶糖是一束硬糖光，棉花糖是没高光、只有一片均匀的亮。
+   另一侧故意不选薄荷：青瓷已经是青绿，两套摆在一起会像同一家的。 */
+[data-me-skin="marshmallow"] {
+  --skin-me-bg:
+    radial-gradient(circle at 7px 9px, rgba(140, 110, 200, .07) 0 1.1px, transparent 1.6px) 0 0 / 15px 14px,
+    radial-gradient(ellipse 66% 50% at 26% 4%, rgba(255, 255, 255, .92), transparent 68%),
+    radial-gradient(ellipse 78% 64% at 92% 108%, rgba(150, 120, 210, .22), transparent 70%),
+    linear-gradient(178deg, #f7f2ff 0%, #ece1ff 60%, #e0d1fb 100%);
+  --skin-me-border-color: #cdbaf0;
+  --skin-me-fg: #483467;
+  --skin-me-shadow: 0 6px 18px rgba(160, 130, 220, .24), inset 0 2px 0 rgba(255, 255, 255, .85), inset 0 -6px 12px -8px rgba(150, 120, 210, .3);
+}
+[data-ta-skin="marshmallow"] {
+  --skin-ta-bg:
+    radial-gradient(circle at 7px 9px, rgba(180, 150, 90, .08) 0 1.1px, transparent 1.6px) 0 0 / 15px 14px,
+    radial-gradient(ellipse 66% 50% at 26% 4%, rgba(255, 255, 255, .94), transparent 68%),
+    radial-gradient(ellipse 78% 64% at 92% 108%, rgba(190, 160, 90, .22), transparent 70%),
+    linear-gradient(178deg, #fffdf2 0%, #fdf5dc 60%, #f8ecd0 100%);
+  --skin-ta-border-color: #e6d6a8;
+  --skin-ta-fg: #564a26;
+  --skin-ta-shadow: 0 6px 18px rgba(200, 175, 120, .24), inset 0 2px 0 rgba(255, 255, 255, .85), inset 0 -6px 12px -8px rgba(190, 160, 90, .26);
+}
+[data-me-skin="marshmallow"] .row.me .bubble { border-radius: 26px 26px 10px 26px; }
+[data-ta-skin="marshmallow"] .row.ta .bubble { border-radius: 26px 26px 26px 10px; }
+.skin-sample-bubble[data-me-skin="marshmallow"].me { border-radius: 20px 20px 8px 20px; }
+.skin-sample-bubble[data-ta-skin="marshmallow"].ta { border-radius: 20px 20px 20px 8px; }
+
+/* ── 奶糖：果冻质感。左上斜一个糖光，底下一道内亮，身子发软 ── */
+[data-me-skin="jelly"] {
+  --skin-me-bg:
+    radial-gradient(ellipse 62% 46% at 26% 10%, rgba(255, 255, 255, .95), transparent 62%),
+    linear-gradient(168deg, #ffd7e6 0%, #ffe9f1 52%, #ffcedf 100%);
+  --skin-me-border-color: #f8c3d6;
+  --skin-me-fg: #753048;
+  --skin-me-shadow: 0 6px 16px rgba(238, 150, 180, .3), inset 0 -3px 8px rgba(255, 255, 255, .75), inset 0 2px 0 rgba(255, 255, 255, .9);
+  --skin-me-tail: #ffcedf;
+}
+[data-ta-skin="jelly"] {
+  --skin-ta-bg:
+    radial-gradient(ellipse 62% 46% at 26% 10%, rgba(255, 255, 255, .95), transparent 62%),
+    linear-gradient(168deg, #dbe8ff 0%, #eff5ff 52%, #d4e3ff 100%);
+  --skin-ta-border-color: #bdd3f7;
+  --skin-ta-fg: #2f4570;
+  --skin-ta-shadow: 0 6px 16px rgba(150, 180, 235, .26), inset 0 -3px 8px rgba(255, 255, 255, .75), inset 0 2px 0 rgba(255, 255, 255, .9);
+  --skin-ta-tail: #d4e3ff;
+}
+[data-me-skin="jelly"] .row.me .bubble { border-radius: 22px 22px 7px 22px; }
+[data-ta-skin="jelly"] .row.ta .bubble { border-radius: 22px 22px 22px 7px; }
+.skin-sample-bubble[data-me-skin="jelly"].me { border-radius: 18px 18px 6px 18px; }
+.skin-sample-bubble[data-ta-skin="jelly"].ta { border-radius: 18px 18px 18px 6px; }
+
+/* ── 樱花：粉白底上飘着几朵小花 ──
+   花用一小段 SVG 拼：五瓣围一个心，加一个浅色花蕊。一格里大小各一朵，
+   再加上两片掉下来的单瓣，看起来才是「飘着」而不是「贴着壁纸」。
+   透明度在 .2～.4 之间：这是纸面的暗纹，不是撒在字底下的色块。 */
+[data-me-skin="sakura"] {
+  --skin-me-bg:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Cg fill='%23ef9ec4' fill-opacity='.38'%3E%3Cellipse cx='27.6' cy='26' rx='3.4' ry='2.3' transform='rotate(0 27.6 26)'/%3E%3Cellipse cx='25.11' cy='29.42' rx='3.4' ry='2.3' transform='rotate(72 25.11 29.42)'/%3E%3Cellipse cx='21.09' cy='28.12' rx='3.4' ry='2.3' transform='rotate(144 21.09 28.12)'/%3E%3Cellipse cx='21.09' cy='23.88' rx='3.4' ry='2.3' transform='rotate(216 21.09 23.88)'/%3E%3Cellipse cx='25.11' cy='22.58' rx='3.4' ry='2.3' transform='rotate(288 25.11 22.58)'/%3E%3C/g%3E%3Cg fill='%23ffe6f0' fill-opacity='.62'%3E%3Ccircle cx='24' cy='26' r='1.9'/%3E%3C/g%3E%3Cg fill='%23f7b9d3' fill-opacity='.3'%3E%3Cellipse cx='72.6' cy='64' rx='2.4' ry='1.6' transform='rotate(0 72.6 64)'/%3E%3Cellipse cx='70.8' cy='66.5' rx='2.4' ry='1.6' transform='rotate(72 70.8 66.5)'/%3E%3Cellipse cx='67.9' cy='65.5' rx='2.4' ry='1.6' transform='rotate(144 67.9 65.5)'/%3E%3Cellipse cx='67.9' cy='62.5' rx='2.4' ry='1.6' transform='rotate(216 67.9 62.5)'/%3E%3Cellipse cx='70.8' cy='61.5' rx='2.4' ry='1.6' transform='rotate(288 70.8 61.5)'/%3E%3C/g%3E%3Cg fill='%23f7b9d3' fill-opacity='.26'%3E%3Cellipse cx='48' cy='16' rx='3' ry='1.6' transform='rotate(-28 48 16)'/%3E%3C/g%3E%3Cg fill='%23f7b9d3' fill-opacity='.22'%3E%3Cellipse cx='20' cy='72' rx='2.6' ry='1.4' transform='rotate(34 20 72)'/%3E%3C/g%3E%3C/svg%3E") 0 0 / 96px 96px,
+    linear-gradient(158deg, #fff8fb 0%, #ffe6ef 100%);
+  --skin-me-border-color: #f0b7cf;
+  --skin-me-fg: #6f2f47;
+  --skin-me-shadow: 0 4px 14px rgba(240, 150, 185, .26);
+  --skin-me-tail: #ffe6ef;
+}
+[data-ta-skin="sakura"] {
+  --skin-ta-bg:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Cg fill='%23f2a8c8' fill-opacity='.33'%3E%3Cellipse cx='74.6' cy='22' rx='3.2' ry='2.2' transform='rotate(0 74.6 22)'/%3E%3Cellipse cx='72.21' cy='25.19' rx='3.2' ry='2.2' transform='rotate(72 72.21 25.19)'/%3E%3Cellipse cx='68.43' cy='23.96' rx='3.2' ry='2.2' transform='rotate(144 68.43 23.96)'/%3E%3Cellipse cx='68.43' cy='20.04' rx='3.2' ry='2.2' transform='rotate(216 68.43 20.04)'/%3E%3Cellipse cx='72.21' cy='18.81' rx='3.2' ry='2.2' transform='rotate(288 72.21 18.81)'/%3E%3C/g%3E%3Cg fill='%23ffe9f2' fill-opacity='.7'%3E%3Ccircle cx='71' cy='22' r='1.8'/%3E%3C/g%3E%3Cg fill='%23f7b9d3' fill-opacity='.26'%3E%3Cellipse cx='24.2' cy='64.6' rx='2.3' ry='1.5' transform='rotate(0 24.2 64.6)'/%3E%3Cellipse cx='22.5' cy='67' rx='2.3' ry='1.5' transform='rotate(72 22.5 67)'/%3E%3Cellipse cx='19.8' cy='66.1' rx='2.3' ry='1.5' transform='rotate(144 19.8 66.1)'/%3E%3Cellipse cx='19.8' cy='63.3' rx='2.3' ry='1.5' transform='rotate(216 19.8 63.3)'/%3E%3Cellipse cx='22.5' cy='62.4' rx='2.3' ry='1.5' transform='rotate(288 22.5 62.4)'/%3E%3C/g%3E%3Cg fill='%23f2a8c8' fill-opacity='.24'%3E%3Cellipse cx='52' cy='74' rx='2.9' ry='1.5' transform='rotate(-22 52 74)'/%3E%3C/g%3E%3C/svg%3E") 0 0 / 96px 96px,
+    linear-gradient(158deg, #fffbfd 0%, #fff0f6 100%);
+  --skin-ta-border-color: #f4c6d9;
+  --skin-ta-fg: #6a3247;
+  --skin-ta-shadow: 0 4px 14px rgba(240, 150, 185, .22);
+  --skin-ta-tail: #fff0f6;
+}
+
+/* ============================================================
+   花哨那几套
+   ============================================================ */
+
+/* ── 彩虹糖：白底，外面套一圈七色渐变的框 ──
+   双层 background 是这么叠的：内层白底只铺到 padding-box，
+   外层彩渐变铺到 border-box，边框本身设为透明，
+   于是边框那一圈露出来的就是彩虹。
+   框里再透一道内 glow：不然彩色边就像贴上去的胶条。 */
+[data-me-skin="rainbow"] {
+  --skin-me-bg:
+    linear-gradient(#fffdf9, #fffdf9) padding-box,
+    linear-gradient(100deg, #ff9a9a, #ffd66e, #8ce6a0, #7cc7ff, #c79aff, #ff9ad5) border-box;
+  --skin-me-border-color: transparent;
+  --skin-me-fg: #4a4458;
+  --skin-me-shadow: 0 6px 20px rgba(150, 130, 200, .28), inset 0 0 16px rgba(186, 160, 255, .3);
+}
+[data-ta-skin="rainbow"] {
+  --skin-ta-bg:
+    linear-gradient(#fbfaff, #fbfaff) padding-box,
+    linear-gradient(100deg, #7cc7ff, #c79aff, #ff9ad5, #ff9a9a, #ffd66e, #8ce6a0) border-box;
+  --skin-ta-border-color: transparent;
+  --skin-ta-fg: #443f56;
+  --skin-ta-shadow: 0 6px 20px rgba(150, 130, 200, .24), inset 0 0 16px rgba(170, 170, 255, .26);
+}
+[data-me-skin="rainbow"] .row.me .bubble,
+[data-ta-skin="rainbow"] .row.ta .bubble { border-width: 3px; }
+.skin-sample-bubble[data-me-skin="rainbow"].me,
+.skin-sample-bubble[data-ta-skin="rainbow"].ta { border-width: 3px; }
+
+/* ── 波点：浅底上一颗颗圆圆的小点 ──
+   点只管当底纹：颗粒缩到 2.4px、间距放大到 28px、颜色减淡到四成，
+   压在字底下也不抢字。之前那版点又大又密，读一行像在数豆子。
+   一大一小两档点错开排：只有一档的话它是张印刷网点纸，两档才像印在布上的波点。 */
+[data-me-skin="polka"] {
+  --skin-me-bg:
+    radial-gradient(circle at 8px 8px, rgba(240, 150, 186, .38) 2.6px, transparent 3.2px) 0 0 / 28px 28px,
+    radial-gradient(circle at 21px 21px, rgba(240, 150, 186, .22) 1.4px, transparent 2px) 6px 5px / 28px 28px,
+    linear-gradient(160deg, #fffbfc 0%, #fff0f6 100%);
+  --skin-me-border-color: #ebafc9;
+  --skin-me-fg: #74344f;
+  --skin-me-shadow: 0 4px 12px rgba(220, 150, 180, .24);
+  --skin-me-tail: #fff0f6;
+}
+[data-ta-skin="polka"] {
+  --skin-ta-bg:
+    radial-gradient(circle at 8px 8px, rgba(140, 186, 238, .36) 2.6px, transparent 3.2px) 0 0 / 28px 28px,
+    radial-gradient(circle at 21px 21px, rgba(140, 186, 238, .2) 1.4px, transparent 2px) 6px 5px / 28px 28px,
+    linear-gradient(160deg, #fafcff 0%, #eef5fe 100%);
+  --skin-ta-border-color: #a3c6ec;
+  --skin-ta-fg: #34547d;
+  --skin-ta-shadow: 0 4px 12px rgba(150, 180, 220, .22);
+  --skin-ta-tail: #eef5fe;
+}
+
+/* ── 镭射：白底上盖一层虹彩，斜着看会变色 ──
+   虹彩是半透的，底得是实白，不然叠到聊天背景上就跟泥一样。 */
+[data-me-skin="holo"] {
+  --skin-me-bg:
+    linear-gradient(112deg, rgba(255, 255, 255, .8) 0 10%, rgba(255, 255, 255, 0) 30%),
+    linear-gradient(108deg, rgba(255, 170, 214, .5) 0%, rgba(176, 214, 255, .46) 24%, rgba(180, 255, 232, .42) 48%, rgba(214, 184, 255, .48) 72%, rgba(255, 200, 226, .5) 100%),
+    linear-gradient(160deg, #fffdfd, #fdfbff);
+  --skin-me-border-color: #d9c6f0;
+  --skin-me-fg: #3b2f55;
+  --skin-me-shadow: 0 6px 20px rgba(170, 150, 220, .26), inset 0 1px 0 rgba(255, 255, 255, .9);
+}
+[data-ta-skin="holo"] {
+  --skin-ta-bg:
+    linear-gradient(112deg, rgba(255, 255, 255, .8) 0 10%, rgba(255, 255, 255, 0) 30%),
+    linear-gradient(108deg, rgba(176, 214, 255, .5) 0%, rgba(180, 255, 240, .42) 26%, rgba(200, 190, 255, .46) 52%, rgba(255, 208, 232, .44) 76%, rgba(255, 236, 200, .48) 100%),
+    linear-gradient(160deg, #fdfdff, #fbfaff);
+  --skin-ta-border-color: #cbc6ee;
+  --skin-ta-fg: #332f52;
+  --skin-ta-shadow: 0 6px 20px rgba(150, 160, 220, .24), inset 0 1px 0 rgba(255, 255, 255, .9);
+}
+
+/* ── 星夜：深蓝紫底、一层星云、三层碎星 ──
+   只有渐变的时候它就是块深紫色卡纸；星云一叠上去才有「夜空」的感觉。
+   碎星分三档大小错开排：一档星星是撒芝麻，三档才像天。
+   星点别调太亮：它一白，压在字底下的那点地方就比字还跳。 */
+[data-me-skin="star"] {
+  --skin-me-bg:
+    radial-gradient(circle at 11px 14px, rgba(255, 255, 255, .37) 1.4px, transparent 2px) 0 0 / 46px 44px,
+    radial-gradient(circle at 38px 32px, rgba(255, 255, 255, .26) 1.1px, transparent 1.7px) 19px 11px / 67px 61px,
+    radial-gradient(circle at 28px 9px, rgba(206, 226, 255, .2) .9px, transparent 1.4px) 7px 23px / 37px 35px,
+    radial-gradient(ellipse 72% 62% at 78% 10%, rgba(198, 130, 255, .4), transparent 64%),
+    radial-gradient(ellipse 62% 56% at 10% 92%, rgba(96, 170, 255, .3), transparent 66%),
+    linear-gradient(135deg, #3d4c80 0%, #5b4a92 100%);
+  --skin-me-border-color: #9384dd;
+  --skin-me-fg: #f6f3ff;
+  --skin-me-shadow: 0 4px 18px rgba(88, 74, 158, .38), inset 0 1px 0 rgba(255, 255, 255, .14);
+}
+[data-ta-skin="star"] {
+  --skin-ta-bg:
+    radial-gradient(circle at 16px 10px, rgba(255, 255, 255, .34) 1.3px, transparent 1.9px) 8px 6px / 52px 49px,
+    radial-gradient(circle at 40px 30px, rgba(255, 255, 255, .24) .9px, transparent 1.4px) 23px 17px / 43px 41px,
+    radial-gradient(ellipse 68% 58% at 22% 12%, rgba(160, 126, 255, .36), transparent 62%),
+    radial-gradient(ellipse 56% 50% at 84% 86%, rgba(96, 160, 255, .24), transparent 64%),
+    linear-gradient(135deg, #2e3c66 0%, #473d78 100%);
+  --skin-ta-border-color: #8477cc;
+  --skin-ta-fg: #f2f0ff;
+  --skin-ta-shadow: 0 4px 18px rgba(60, 50, 120, .34), inset 0 1px 0 rgba(255, 255, 255, .12);
+}
+
+/* ── 赛博：近黑底 + 网格 + 扫描线，边上带荧光 ──
+   只有扫描线时它就像块黑玻璃；加一层竖网格才有屏幕的感觉。 */
+[data-me-skin="neon"] {
+  --skin-me-bg:
+    repeating-linear-gradient(90deg, rgba(120, 255, 230, .045) 0 1px, transparent 1px 13px),
+    repeating-linear-gradient(0deg, rgba(120, 255, 230, .055) 0 2px, transparent 2px 5px),
+    linear-gradient(160deg, #0b1220 0%, #131c33 100%);
+  --skin-me-border-color: #35f0d0;
+  --skin-me-fg: #d5fff6;
+  --skin-me-shadow: 0 0 14px rgba(53, 240, 208, .34), 0 6px 18px rgba(6, 12, 26, .4), inset 0 0 12px rgba(53, 240, 208, .12);
+}
+[data-ta-skin="neon"] {
+  --skin-ta-bg:
+    repeating-linear-gradient(90deg, rgba(255, 120, 220, .045) 0 1px, transparent 1px 13px),
+    repeating-linear-gradient(0deg, rgba(255, 120, 220, .055) 0 2px, transparent 2px 5px),
+    linear-gradient(160deg, #150d24 0%, #241539 100%);
+  --skin-ta-border-color: #ff5fd2;
+  --skin-ta-fg: #ffd9f4;
+  --skin-ta-shadow: 0 0 14px rgba(255, 95, 210, .3), 0 6px 18px rgba(10, 6, 22, .4), inset 0 0 12px rgba(255, 95, 210, .1);
+}
+
+/* ── 霓虹雨：近黑底，斜着落一层雨丝 ──
+   雨丝只有 17% 的白：它得看起来像外头下雨，不能像气泡上划了道划痕。 */
+[data-me-skin="rain"] {
+  --skin-me-bg:
+    repeating-linear-gradient(76deg, rgba(120, 255, 235, .17) 0 1px, transparent 1px 7px),
+    linear-gradient(160deg, #0e1726 0%, #191230 100%);
+  --skin-me-border-color: #2ee6c8;
+  --skin-me-fg: #d8fff8;
+  --skin-me-shadow: 0 0 12px rgba(46, 230, 200, .26), 0 6px 18px rgba(6, 12, 26, .4);
+}
+[data-ta-skin="rain"] {
+  --skin-ta-bg:
+    repeating-linear-gradient(76deg, rgba(255, 120, 220, .17) 0 1px, transparent 1px 7px),
+    linear-gradient(160deg, #170e22 0%, #251135 100%);
+  --skin-ta-border-color: #ff6ad3;
+  --skin-ta-fg: #ffe2f7;
+  --skin-ta-shadow: 0 0 12px rgba(255, 106, 211, .24), 0 6px 18px rgba(14, 6, 24, .4);
+}
+
+/* ── 像素：直角硬边，像老游戏里的对话框；影子也是硬的，不带模糊 ──
+   两边底色分开（自己这边薄荷纸、ta 那边奶白），不然两句话看着是同一块砖。
+   底边压一排 45 度的斜纹，那是八位机时代的抖动过渡；没它就是个纯色方块。
+   斜纹只有 4px 高、一成多的黑，它得停在内边，不能爬到字底下去。 */
+[data-me-skin="pixel"] {
+  --skin-me-bg:
+    repeating-linear-gradient(45deg, rgba(43, 51, 80, .1) 0 2px, transparent 2px 4px) bottom 1px left / 100% 4px no-repeat,
+    #eaf8ef;
+  --skin-me-border-color: #2b3350;
+  --skin-me-fg: #2b3350;
+  --skin-me-shadow: 3px 3px 0 #2b3350, inset 2px 2px 0 rgba(255, 255, 255, .95), inset -2px -2px 0 rgba(43, 51, 80, .16);
+}
+[data-ta-skin="pixel"] {
+  --skin-ta-bg:
+    repeating-linear-gradient(45deg, rgba(43, 51, 80, .08) 0 2px, transparent 2px 4px) bottom 1px left / 100% 4px no-repeat,
+    #fff8e6;
+  --skin-ta-border-color: #2b3350;
+  --skin-ta-fg: #2b3350;
+  --skin-ta-shadow: 3px 3px 0 #2b3350, inset 2px 2px 0 rgba(255, 255, 255, .95), inset -2px -2px 0 rgba(43, 51, 80, .16);
+}
+[data-me-skin="pixel"] .row.me .bubble,
+[data-ta-skin="pixel"] .row.ta .bubble {
+  border-radius: 0;
+  border-width: 2px;
+  font-family: "Consolas", ui-monospace, "LXGW WenKai", monospace;
+}
+.skin-sample-bubble[data-me-skin="pixel"].me,
+.skin-sample-bubble[data-ta-skin="pixel"].ta {
+  border-radius: 0;
+  border-width: 2px;
+  font-family: "Consolas", ui-monospace, "LXGW WenKai", monospace;
+}
+
+/* ============================================================
+   聊天窗里的实际气泡
+   ============================================================ */
+
+/* 皮肤没给的那一项，回落到原来那套（背景取色 / 默认描边 / 默认影）。
+   皮肤自带颜色时，这一层就被皮肤的颜色盖住。 */
+[data-me-skin] .row.me .bubble {
+  background: var(--skin-me-bg, var(--bubble-me-bg, #dff0e8));
+  border-color: var(--skin-me-border-color, var(--bubble-me-border, #c5e4d6));
+  color: var(--skin-me-fg, var(--bubble-me-fg, var(--ink)));
+  box-shadow: var(--skin-me-shadow, var(--sh-1));
+}
+[data-ta-skin] .row.ta .bubble {
+  background: var(--skin-ta-bg, var(--bubble-ta-bg, #fff));
+  border-color: var(--skin-ta-border-color, var(--bubble-ta-border, var(--line)));
+  color: var(--skin-ta-fg, var(--bubble-ta-fg, var(--ink)));
+  box-shadow: var(--skin-ta-shadow, var(--sh-1));
+}
+/* 等回复的三个点也换成这套皮，别让它跟别的气泡不是一家人 */
+[data-ta-skin] .typing {
+  background: var(--skin-ta-bg, var(--bubble-ta-bg, #fff));
+  border-color: var(--skin-ta-border-color, var(--bubble-ta-border, var(--line)));
+}
+[data-ta-skin] .typing i {
+  background: var(--skin-ta-fg, var(--bubble-ta-fg, var(--primary)));
+}
+
+/* 小尖尾：挂在气泡下角，跟气泡同色，连成一片。
+   形状是公用的；哪几套要这条尾巴，由下面按皮肤点名。
+   没点名的皮肤不写 content，伪元素根本不生成，不会在那儿留个透明方块。 */
+[data-me-skin] .bubble, [data-ta-skin] .bubble,
+.skin-sample-bubble { position: relative; }
+[data-me-skin] .row.me .bubble::after,
+[data-ta-skin] .row.ta .bubble::after,
+.skin-sample-bubble[data-me-skin].me::after,
+.skin-sample-bubble[data-ta-skin].ta::after {
+  position: absolute;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  transform: rotate(45deg);
+  border-radius: 2px;
+}
+[data-me-skin="sakura"] .row.me .bubble::after,
+.skin-sample-bubble[data-me-skin="sakura"].me::after { content: ""; right: 14px; background: var(--skin-me-tail); }
+[data-ta-skin="sakura"] .row.ta .bubble::after,
+.skin-sample-bubble[data-ta-skin="sakura"].ta::after { content: ""; left: 14px; background: var(--skin-ta-tail); }
+[data-me-skin="polka"] .row.me .bubble::after,
+.skin-sample-bubble[data-me-skin="polka"].me::after { content: ""; right: 14px; background: var(--skin-me-tail); }
+[data-ta-skin="polka"] .row.ta .bubble::after,
+.skin-sample-bubble[data-ta-skin="polka"].ta::after { content: ""; left: 14px; background: var(--skin-ta-tail); }
+[data-me-skin="jelly"] .row.me .bubble::after,
+.skin-sample-bubble[data-me-skin="jelly"].me::after { content: ""; right: 14px; background: var(--skin-me-tail); }
+[data-ta-skin="jelly"] .row.ta .bubble::after,
+.skin-sample-bubble[data-ta-skin="jelly"].ta::after { content: ""; left: 14px; background: var(--skin-ta-tail); }
+/* 小熊的右耳画在 ::after 上。上面那条公用规则（10px 方块、转 45°、压在下角）
+   跟这里同权重，只能排在它后面才盖得住，所以这只耳朵离自己的伙伴有一大段距离。 */
+[data-me-skin="bear"] .row.me .bubble::after,
+.skin-sample-bubble[data-me-skin="bear"].me::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: auto;
+  --ear-w: min(36px, max(0px, calc((100% - 32px) / 2)));
+  right: 16px;
+  width: var(--ear-w);
+  height: auto;
+  aspect-ratio: 10 / 5.5;
+  transform: translateY(-100%);
+  transform-origin: 50% 100%;
+  border-radius: 50% 50% 0 0 / 100% 100% 0 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 3px 4px, rgba(160, 120, 80, .11) 0 1px, transparent 1.4px) 0 0 / 11px 10px,
+    radial-gradient(ellipse 27% 31% at 50% 60%, rgba(242, 196, 174, .88) 0 56%, rgba(242, 196, 174, 0) 84%),
+    linear-gradient(178deg, #fbf0de 0%, #f5e3c8 60%, #f0dcc0 100%);
+  box-shadow: inset 0 0 0 1px rgba(198, 152, 96, .5), inset 0 2px 3px rgba(255, 255, 255, .62), inset 0 -6px 6px -4px rgba(186, 143, 92, .38);
+}
+[data-ta-skin="bear"] .row.ta .bubble::after,
+.skin-sample-bubble[data-ta-skin="bear"].ta::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: auto;
+  --ear-w: min(36px, max(0px, calc((100% - 32px) / 2)));
+  left: 16px;
+  width: var(--ear-w);
+  height: auto;
+  aspect-ratio: 10 / 5.5;
+  transform: translateY(-100%);
+  transform-origin: 50% 100%;
+  border-radius: 50% 50% 0 0 / 100% 100% 0 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 3px 4px, rgba(165, 125, 85, .09) 0 1px, transparent 1.4px) 0 0 / 11px 10px,
+    radial-gradient(ellipse 27% 31% at 50% 60%, rgba(245, 209, 188, .86) 0 56%, rgba(245, 209, 188, 0) 84%),
+    linear-gradient(178deg, #fdf8f0 0%, #f8ead6 60%, #f3e2c9 100%);
+  box-shadow: inset 0 0 0 1px rgba(210, 168, 116, .45), inset 0 2px 3px rgba(255, 255, 255, .7), inset 0 -6px 6px -4px rgba(191, 150, 100, .32);
+}
+.skin-sample-bubble[data-me-skin="bear"].me::after,
+.skin-sample-bubble[data-ta-skin="bear"].ta::after { width: min(15px, max(0px, calc((100% - 16px) / 2))); }
+.skin-sample-bubble[data-me-skin="bear"].me::after { right: 8px; }
+.skin-sample-bubble[data-ta-skin="bear"].ta::after { left: 8px; }
+/* 转述那条不是气泡，别给它挂尾巴 */
+[data-ta-skin] .voice-transcript::after { content: none; }
+
+/* 描边这套要两像素的线才撑得住形状 */
+[data-me-skin="outline"] .row.me .bubble,
+[data-ta-skin="outline"] .row.ta .bubble { border-width: 2px; }
+
+/* 深底那几套（星夜、赛博、霓虹雨）：语音胶囊那几样自带颜色会糊掉，换成浅的。
+   写成 :is() 一份名单：以后再加一套深底皮，只改这一行就行。 */
+:is([data-ta-skin="star"], [data-ta-skin="neon"], [data-ta-skin="rain"]) .voice-play {
+  background: rgba(255, 255, 255, .18);
+  color: #f3f0ff;
+  border-color: rgba(255, 255, 255, .42);
+}
+:is([data-ta-skin="star"], [data-ta-skin="neon"], [data-ta-skin="rain"]) .voice-wave { color: #dcd6ff; }
+:is([data-ta-skin="star"], [data-ta-skin="neon"], [data-ta-skin="rain"]) .voice-duration { color: rgba(236, 234, 255, .72); }
+:is([data-ta-skin="star"], [data-ta-skin="neon"], [data-ta-skin="rain"]) .voice-unplayed-dot { box-shadow: 0 0 0 2px rgba(255, 255, 255, .18); }
+:is([data-ta-skin="star"], [data-ta-skin="neon"], [data-ta-skin="rain"]) .voice-transcript { color: #eceaff; }
+
+/* ============================================================
+   设置页的小预览：用同一组变量，画两枚小气泡
+   ============================================================ */
+.skin-sample {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 10px;
+  border-radius: var(--r-md);
+  background: var(--sunken, #f1ece1);
+}
+.skin-sample-bubble {
+  max-width: 78%;
+  padding: 6px 10px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.skin-sample-bubble.ta {
+  align-self: flex-start;
+  background: var(--skin-ta-bg, #fff);
+  border-color: var(--skin-ta-border-color, var(--line, #e7dfd0));
+  color: var(--skin-ta-fg, var(--ink, #43403a));
+  border-bottom-left-radius: 6px;
+  box-shadow: var(--skin-ta-shadow, none);
+}
+.skin-sample-bubble.me {
+  align-self: flex-end;
+  background: var(--skin-me-bg, #dff0e8);
+  border-color: var(--skin-me-border-color, #c5e4d6);
+  color: var(--skin-me-fg, var(--ink, #43403a));
+  border-bottom-right-radius: 6px;
+  box-shadow: var(--skin-me-shadow, none);
+}

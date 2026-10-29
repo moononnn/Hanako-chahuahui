@@ -1,5 +1,108 @@
 # TESTING · 茶话会
 
+## 气泡装扮两侧拆开（2026-10-28 晚）
+
+- 起因：玥儿要「我只能选我自己的气泡，伙伴的气泡由 ta 自己决定、按性格心情自己换，频率不要高，以后还会加更多样式」。
+- 做法：CSS 属性从一枚 `data-bubble-skin`（挂在 `.chat` 上，一套管两个人）拆成两枚 `data-me-skin` / `data-ta-skin`，变量块按 `--skin-me-*` / `--skin-ta-*` 前缀劈成两块。两枚属性都挂在同一个容器（聊天窗 `.chat`、预览 `.skin-sample`）上，靠继承各管一侧；缺哪枚哪侧就回落原来的取色。
+- 原味不再算一种皮肤：它是「没打扮」，所以 `me`/`ta` 是 `plain` 或空时直接 `delete dataset`，不靠一份什么都不定义的皮肤块假装。
+- 伙伴挑选（`lib/bubble-skin-mood.js`，纯逻辑）：三条护栏写在代码里——① 现在这套本来就搭今天的心情就不换；② 一天只看一次（按凌晨四点切生活日，记在 `bubble-skin.json`）；③ 当天心情没任何皮肤认领（比如「委屈」「生气」）就保住上一套，不硬塞。挑哪套用 `daySeed` 算，同一天同一伙伴重启也不变。`SWITCH_CHANCE = 0.55` 是「换日子时有一半机会换」。
+- 心情来源直接用现成的心情日盘（`lib/mood-daily.js` 那十三格），不新开一套状态。每套皮肤在 `BUBBLE_SKINS` 里用 `moods` 声明自己在哪些心情下成立；没写 `moods` 的不进伙伴池（原味就是这样）。
+- 接口：`/partners` 多回一个 `partnerSkins`（伙伴可选池）与原有的 `bubbleSkin`（我这一侧）；`/thread/:agentId` 多回一个 `partnerSkin`（ta 那一侧，可能为 null）；`/settings` 的每位伙伴多回一个只读 `bubbleSkin`；新增只读 `GET /bubble-skin/partner/:agentId`。
+- 前端：`applyBubbleSkin(me, ta)` 分两枚属性各写各的；`lastPartnerSkin` 单独存一份，因为好友轮询（`loadPartners`）只知道自己那侧，拿它去覆盖会把 ta 的壳冲掉。换人时先摘掉上一位的壳，新人的头几条消息不会顶着别人的颜色。
+- 设置页只画「我」那一枚预览（画两枚会让人以为 ta 那侧也能设），底下用一句只读的「ta 那边现在戴着 xx」。
+- 迁移：老的 `bubbleSkin` 配置原样保留当「我」这侧，不丢设置；伙伴那侧的账是新建的，第一次拉到线程时才开始挑。
+- 以后加样式：`lib/bubble-skins.js` 加一行（带 `label` / `hint` / `moods`），`ui/assets/bubble-skins.css` 补 `[data-me-skin="新id"]` 与 `[data-ta-skin="新id"]` 两组变量，再按需补 `.row.me` / `.row.ta` 的具名规则。伙伴那边不用改逻辑。
+- 测试：`tests/bubble-skins.test.js` 从 12 项扩到 20 项，新增两侧拆分、伙伴池、心情映射、`moods` 只能是真心情、皮肤账单独存这几组。另外补了三个隔舱测试的桩（`tests/loading-routes.test.js` 的 `partnerSkinFor` / `PARTNER_SKIN_IDS`、`tests/ui-loading.test.js` 的 `lastPartnerSkin` / `applyPartnerSkin`、`tests/video-settings-ui.test.js` 的 `paintPartnerSkinNote`）——那三处用 `vm` 把源码切片单独跑，新加的模块级名字不在切片里。
+- 已知未验：真实 App 里的观感（两侧同时挂不同皮肤时，小熊耳朵、像素字体这类改轮廓的规则会不会互相影响）；伙伴那侧一天一次的翻页没有实际跑过一整天；预览里只看得到自己那侧，看不出「两个人不同套」的实际效果。
+
+## 主动消息配比实验（2026-10-28，临时可回滚）
+
+- 背景：2026-10-21 到 10-28 八天里，主动消息中 B站视频 34 条、新闻 23 条、兴趣种子 1 条、关系式主动 5 条。视频分享（10-17）和新闻（10-20）是后加的通道，各自带着「有货就发到上限」的配额；兴趣种子只有一个「每天最多 1 条」的天花板。视频 5 加新闻 4 等于 9，而实际每天主动消息平均 8.25 条，等于产能天花板由这两条后加通道定。
+- 范围：只改 `index.js`，四处，全带 `__LAB_BUDGET_20261028__` 标记。新增 `LAB_BUDGET` 常量块；`videoQuota()` 与 `newsQuota()` 取用户设置与配比表的较小值；`OBSERVATION_MAX_PER_DAY` 改读配比表；候选层把 `seedCandidate` 与 `seedFirst` 拆开，当天兴趣没发够时种子先挑这一轮；`candidateNews` 加一个 `cappedSeed` 排除项（用闸后的值，不是候选本身）。没碰取材、提示词、锚点门、门禁。
+- 配比：视频 5→2，新闻 4→1，兴趣上限 1→目标 2。关系式由头不改，素材配额降下来它自己会回来。
+- 测试：`node --test --test-timeout=120000 "tests/*.test.js"` → **2468 条，2464 通过，0 失败**（其余 skip/todo）。比上一轮多的几条来自新增的 `tests/lab-budget.test.js`。
+- 跟着改的两处旧断言：`tests/ui.test.js` 两条源码形状断言把 `candidateSeed` 换成 `seedCandidate`；`tests/proactive-reasons.test.js` 的「观察式用满新闻照样轮得到」把已发种子从 1 条改成 2 条（实验期上限是 2，回滚后 2 条同样算用满，两边都过）。
+- 已知未验：没在真实 App 里跑满一天看效果；`maybeExploreInterest` 里视频开着时纯兴趣探索仍产不出 discovery，这轮没动，种子库存 30 条用完会见底。
+- 回滚：`index.js` 的 `LAB_BUDGET.enabled` 改 `false` 即可，详细步骤与备份路径见 `EXPERIMENT-daily-budget-20261028.md`。
+
+## 气泡动效：被顶的那一下有惯性，没事自己会动（2026-10-28）
+
+- 起因：玥儿说气泡本来就是个装饰物，希望它自己偶尔动一下；发消息把旧消息顶上去的时候，那一下要有点惯性。
+- 滚动那一半（`ui/panel.html` 的 `scrollDown`）：从 `scrollTop = scrollHeight` 硬跳改成缓动，easeOutCubic，130～300ms 按距离给；一次跳超过 1200px、批量渲染（`renderAll` 末尾传 `smooth=false`）、系统开了减动效、或者环境里没有 `requestAnimationFrame` 时仍然瞬移。缓动期间 scroll 事件不重算 `autoScrollAllowed`（否则自己滚到一半就被当成“用户往上翻了”而停车），`updateJumpBottom` 也不报那个小按钮（中间几帧本来就不在底部，一闪像卡了）；用户一动 `wheel` / `touchstart` 就交还控制权。
+- 耳朵那一半（`ui/assets/bubble-skins.css` 的「小熊会动」）：被顶时 `is-shoving` 给最后 4 条挂动画，耳朵被横向甩一下再弹回；没事时由 JS 隔 5～13 秒随机挑一条在视口里的气泡加 `ear-flick`，抖完就拆。
+- 第一版用 `scale` / `rotate` 做，被玥儿一眼看出穿帮：耳朵根部露出到气泡框外面。原因是变换是绕原点整体变形，绕耳根（`transform-origin: 50% 100%`）转或压时，元素框的底边两端会一抬一压，和气泡那条边框线错开。
+- 现在只动三个不改底边的属性：① `aspect-ratio`（高度随之变化，而 `translateY(-100%)` 用的是元素自身高度，高度变多少就上移多少，底边永远钉在气泡顶边）；② `translate` 做水平惯性（平移不改变高度，底边仍在同一条水平线上）；③ `border-radius` 的水平分量做「歪」（只改形状）。整条动画里没有任何 `transform` 和 `scale`。
+- 第二个坑：`--ear-w` 里带百分比，写成 `height: calc(var(--ear-w) * .55)` 是不对的——CSS 变量是文本替换，那里的 `100%` 会跑到 height 语境按父元素高度解。所以高度只能用 `aspect-ratio` 从宽度派生，`--ear-w` 只用在 width / right / left 这三个横向属性上。
+- 左右两只耳朵分居两侧，用 `--ear-dir`（me 为 1、ta 为 -1）分开方向，不分开会出现“一边往外甩、一边往里扭”。
+- 随机那一半故意不认皮肤 id：JS 只发 `ear-flick` 这个信号，哪套皮肤响应交给 CSS（目前只有小熊有规则）。面板里也就不必再拄一份皮肤名单。
+- 测试：`node --test tests/bubble-skins.test.js tests/ui.test.js tests/ui-loading.test.js` → **196 条全通过**（新增一条守动画的：两个 keyframes 不能出现 `transform` / `scale` / `rotate`，必须有 `aspect-ratio`、分左右方向的 `translate` 与 `border-radius`，只给 `nth-last-child(-n+4)` 挂，减动效要关）。
+- 可调参数：缓动时长在 `scrollDown` 的 `duration`，压扁幅度在 `@keyframes bear-ear-shove`，随机间隔在 `scheduleIdleFlick` 的 `5000 + Math.random() * 8000`。
+- 已知未验：手感（时长、幅度、间隔）无法自动测，只能人眼；没在真实 App 里连发几十条试探重叠情况；打字气泡、茶杯那几条路径也会调 `scrollDown`，所以“她开始打字”时耳朵也会被顶一下，目前当彩蛋留着。
+
+## 气泡装扮：可爱组补两套，14 套（2026-10-28）
+
+- 起因：删掉十二套以后可爱组只剩奶糖、樱花两套，九宫格摆不满一行。玥儿要求补两套，且「差别大点、可爱一点」。
+- 新增：小熊（`bear`）、棉花糖（`marshmallow`）。两套走的是完全不同的路子——小熊改**轮廓**（气泡上沿探出一对耳朵，全套里唯一靠剪影就能认出来的一套），棉花糖改**软度**（26px 圆角、雾状自影、1px 糖粉底纹，没有一处硬边）。
+- 小熊的耳朵：`::before` 画一只、`::after` 画另一只（`::after` 那条规则得摆在文件后半「小尖尾」之后，因为那条公用规则同权重且排得更后）。形状是压扁的半椭圆，`translateY(-100%)` 让底边正好落在气泡顶边上，底部那道 1px 描边和气泡的上边框线重合，所以看起来是气泡自己的轮廓起了两个包，不是贴上去的两片。内耳偏上，顶上一道高光，布点纹理跟气泡同一套（11px 的格）。
+  - 尺寸跟着气泡宽度走：`width: min(36px, max(0px, calc((100% - 32px) / 2)))`，两只相邻、离角 16px（正好让过 16px 的圆角）。分母里那个 2 是两只耳朵，32px 是两边让的角；所以「嗯」这种几十像素宽的气泡里耳朵自己缩到看不见，不会悬在角外面。
+  - 踩过的坑，记一下：① `radial-gradient(circle at 50% 46%, …)` 不写尺寸时默认 `farthest-corner`，半径撑到格子四角，视觉上就是一整块方色块，必须 `circle closest-side`；② 用「只有十几像素高的窗口去裁半圆」的写法，窄气泡上窗口一收窄，两只耳朵被裁成一根竖条；③ `border-bottom: 0` 配底部小圆角，会在两个下角漏出两道白缝，就是「贴纸感」的主要来源；④ 用 `border` 画耳朵轮廓，侧边框到底边收尾处会留两个 1px 竖线头，换成 `inset 0 0 0 1px` 的阴影环就没了；⑤ 耳朵底边和气泡边框线错开几个像素时会出现两条平行线，那才是最像「拼接」的东西，对齐后消失。
+- 棉花糖的奶黄侧故意不选薄荷：青瓷已经是青绿，两套摆一起会像同一家的。
+- 对比度实测（14 套 × 3 种底色 × 两侧 = 84 样本，方法同上：固定格子 + 截图采样 + WCAG 相对亮度）：小熊 `ta` 7.64 / `me` 7.40，棉花糖 `ta` 7.42 / `me` 7.78。全局最差仍是星夜的 4.57（那颗 1.4px 星点落在采样格里），`ta` 侧 5.74（波点），水位没被这两套拉低。
+- 测试：`node --test tests/bubble-skins.test.js tests/ui.test.js` → 160 条全通过（其中气泡装扮 12 条，含一条守耳朵的：半椭圆形状 + 描边环 + 宽度让过圆角）。
+- 只改 `ui/assets/bubble-skins.css`、`lib/bubble-skins.js`、`tests/bubble-skins.test.js` 三处；没碰消息渲染、存储、接口。
+- 已知未验：没在真实 App 里点一遍；设置页小预览里的耳朵缩到 15px 一带，只有个轮廓，看不出内耳；首页气泡宽度不到一百像素时耳朵几乎看不见（公式自己收窄的结果，不是漏画）。
+
+## 气泡装扮：下架十二套，只剩十二套（2026-10-28）
+
+- 玥儿点名删掉：便签、宣纸、亚麻、缎带、糖果、奶油泡芙、猫爪、云朵、液态金属、星球、极光、烈焰。
+- 范围：`lib/bubble-skins.js`（目录 24 → 12）、`ui/assets/bubble-skins.css`（变量、尾巴、圆角、动画、深底名单一起擦干净，重写成 12 套的干净版本）、`tests/bubble-skins.test.js`（白名单改成 12 条，并新增一条「下架的皮肤不再留变量」的守卫）。没碰消息渲染、存储、请求。
+- 顺手清掉的：几处早期编辑留下的重复注释；删掉的十二套里有两套带小尖尾的规则写了半截，这次一并收。
+- 删掉的变量原文整份留在 `C:\Users\laotv\AppData\Local\Temp\bubble-preview\bubble-skins-24-full-20261028.css`（临时目录，重启不保证还在）。要捡回来：把对应 `[data-bubble-skin="xxx"]` 块贴回样式表，再在目录里加一行就行。
+- 老配置不会报错：`normalizeBubbleSkin` 认不出就回原味。存过 abovelisted 任一皮肤的，设置里会显示成「原味」。
+- 剩余分组：淡雅 3（原味、青瓷、描边）、可爱 2（奶糖、樱花）、花哨 7（彩虹糖、波点、镭射、星夜、赛博、霓虹雨、像素）。
+- 对比度重测（12 套 × 3 种底色 × 两侧 = 72 样本）：`ta` 侧最差 **5.74**（波点），`me` 侧最差 **4.57**（星夜的 1.4px 星点落在采样格里，不是字压不住底）；其余中位在 6.08～16.81。
+- 测试：`node --test tests/bubble-skins.test.js tests/ui.test.js tests/ui-loading.test.js tests/load.test.js` → **200 条全通过**（比上一轮多一条，新加的那条守卫）。
+- 已知未验：没在真实 App 里点一遍；临时目录里的备份文件不保证长期存在，真当资产的话得另存。
+
+## 气泡装扮：旧版九套按材质重做（2026-10-28）
+
+- 范围：只动 `ui/assets/bubble-skins.css`（缎带、描边、糖果、星夜、波点、星球、烈焰、像素、奶油泡芙）与 `lib/bubble-skins.js` 里对应几条 hint。没碰结构、存储、消息渲染。
+- 起因：这九套是第一轮做的，多半只有一层渐变加一条边，跟后加的那九套（纸 / 布 / 釉 / 果冻 / 爪印 / 镭射 / 金属 / 霓虹雨）摆一起显得单薄。改法统一成「每套一个能认出来的材质」。
+- 逐套：
+  - 缎带：底色压深半档（#c8e9d8 → #bde2cf、奶白 → 米黄），斜 150° 的白光才照得出来；光的宽度靠 stop 缓缓没收。试过用 `background-size` 单独圈 48% 宽的一层，右侧会留一道硬切边，已回退。
+  - 描边：2px 外线套一圈内亮线，像双线信封。
+  - 糖果：糖纸扭纹从 .34 收到 .19（2px / 12px 一格），之前蓝底上直接变成了警戒线。
+  - 星夜：三层碎星（大小不一、错开排）加紫 / 蓝两团星云。原来星星太淡，远看就是块深紫卡纸。
+  - 波点：一大一小两档点错开排。单档是印刷网点纸，两档才像印在布上的波点。
+  - 星球：加「地平线」一道 2px 亮线（从边框内缩 1px，贴最底会被 1px 边框完全盖住，试过看不见）+ 右上角明暗交界。
+  - 烈焰：渐变末端 #c9451c → #dd5f1a、文字压到 #2b0e02，对比度从 5.08 升到 8.06（me）/ 9.85（ta）；补了竖向热浪条；**撤掉小尖尾**，平色尾巴接在竖向渐变上会露一个深色三角。
+  - 像素：底边压 4px 的 45° 斜纹当八位机抖动过渡。
+  - 奶油泡芙：加糖粒底纹与右下暖芯影，底色拉回奶白（上一版偏焦糖）。
+- 对比度实测（还是那套固定 274×62 格子的量尺）：24 套 × 3 种底色 × 两侧共 144 个样本，中位 5.29～16.83。`ta` 侧最差 **5.74**（波点），`me` 侧最差 **4.57**。
+  - 4.57 这个数是星夜里 1.4px 的星点正好落在采样格里，不是字压不住底；把星夜除外，其余最差 5.13（缎带）。星点亮度已从 .46 收到 .37，再压就看不出星了。
+- 测试：`node --test tests/bubble-skins.test.js tests/ui.test.js tests/ui-loading.test.js tests/load.test.js` → **199 条全通过**。
+- 已知未验：没在真实 App 里逐套点一遍（需要宿主与已安装的 App 实例）；多层 `background` 与内联 SVG 在宿主 WebView 里的合成开销仍只做静态判断。
+
+## 气泡装扮：扩到 24 套、删磨砂（2026-10-28）
+
+- 范围：`lib/bubble-skins.js`（重写目录，加 `group` 与 `BUBBLE_SKIN_GROUPS`）、`ui/assets/bubble-skins.css`（删磨砂、重做樱花、加九套）、`ui/settings.html` + `ui/assets/settings.css`（设置页按组分段）、`index.js`（多给一个 `bubbleSkinGroups`）、`tests/bubble-skins.test.js`。没碰消息渲染、存储、请求。
+- 设计参照：QQ 空间装扮平台的气泡规范（300×80 九宫格切图 + 每套自带一个文字色），它的分类词是唯美/简约/炫酷/可爱/潮流/鲜明。本项目对应成淡雅/可爱/花哨三组，文字色仍然写在每套自己的变量里。
+- 渲染核对：24 套 × 两侧 × 3 种底色用 Edge headless 直接加载 App 的 `panel.css` + `bubble-skins.css` 逐套看；预览页与量尺页的皮肤名单由脚本从 `lib/bubble-skins.js` 读出来生成，不在脚本里另抄一份。设置页的预览用一份静态 mock（同一份 `settings.css` + `bubble-skins.css`）看分组标题和栅格。
+- 对比度实测（不只靠眼看）：每套皮肤做成固定 274×62 的格子、里面只放全角空格，截图后用 `System.Drawing` 采样中间带（内缩 24/20，避开通写两头与圆角），按 WCAG 相对亮度算「文字 vs 底色」，每种底色取最差一档。
+  - 修前：磨砂在深底 3.65（就是这轮被删的原因之一）、星球 1.98（星环横穿文字）。
+  - 现在：24 套 × 3 种底色，`ta` 侧全局最差 **5.66**，`me` 侧全局最差 **5.08**（烈焰），其余绝大多数在 7 以上。
+- 顺手修的：宣纸的纤维从等距斜线换成十几根长短不一的短线（等距斜线看着像条纹纸）；猫爪的爪印放大一档才看得见；云朵从拉长的白斑换成画出来的云形（椭圆一拉长就是一道斜光）。
+- `node --check index.js`、`node --check lib/bubble-skins.js` 通过；`node --test --test-timeout=30000 tests/bubble-skins.test.js tests/ui.test.js tests/ui-loading.test.js tests/load.test.js` → **199 条全通过**。不是全应用回归。
+- 已知未验：没在真实 App 里逐套点一遍（需要宿主与已安装的 App 实例）；新套的纹理都靠 `background` 多层渐变与内联 SVG，宿主 WebView 的实际合成开销只做了静态判断，没量过四百条以上的会话。
+
+## 气泡装扮：文字可读性与六套重做（2026-10-28）
+
+- 范围：`ui/assets/bubble-skins.css`（重做描边、磨砂、星夜、星球、烈焰、像素、波点、樱花、便签的变量与纹理，加磨砂的 `backdrop-filter`，收尾已改成跟渐变末端同色）、`lib/bubble-skins.js`（三条 hint 跟着改）、`ui/panel.html`（删掉前端那份皮肤白名单抄本）、`tests/bubble-skins.test.js`（换成「不该出现皮肤 id」用例）。只动样式与这一处校验，没碰消息渲染、存储、请求。
+- 渲染核对：16 套 × 3 种底色（素纸 / 照片感图案 / 接近纯黑）× 两侧，用 Edge headless 直接加载 `panel.css` + `bubble-skins.css` 截图逐套看。截图必须关掉 `.bubble` 的入场动画（`pop` 起始 `opacity:0`，headless 恰好截在那一帧，整页会看着像蒙了一层雾）——第一轮就是被这个假象误导的。
+- 对比度实测：把每套皮肤的气泡做成固定 274×62 的格子、里面只放全角空格，截图后用 `System.Drawing` 采样中间带（避开圆角和描边），按 WCAG 相对亮度算「文字色 vs 底色」的对比度，取最差一档。修前最低是磨砂在深底上的 3.65、星球的 1.98（星环横穿文字）。现在两侧 16 套 × 3 种底色里最差一档：磨砂 4.00（纯黑壁纸、遮罩 0% 的极端情形），其余全部 ≥4.64，多数 ≥5.5。磨砂那个数已经抬到极限：再抬白就彻底不透光了。
+- `node --check index.js` 通过；`node --test --test-timeout=30000 tests/bubble-skins.test.js tests/ui.test.js tests/ui-loading.test.js tests/load.test.js` → **198 条全通过**。不是全应用回归。
+- 已知未验：没在真实 App 里逐套点一遍（需要宿主与已安装的 App 实例）；`backdrop-filter` 在宿主 WebView 里的实际开销只做了静态判断（只对可见气泡生效），没量过几百条消息长的会话。
+
 ## 发链接看视频工具：补接画面（2026-10-24）
 
 - 修前基线：实际聊天工具执行器只有collectInboundVideo→packMaterials，没有enhance；同模型缓存中存在画面事实，工具仍回标题档。真路由回归先失败、接入后通过，未用修后成功倒推修前情况。

@@ -499,10 +499,16 @@ test("行为：观察式今天已经用满，新闻照样轮得到", { skip: SKI
   const nowIso = new Date().toISOString();
 
   store.appendMessage(AGENT, { role: "user", text: "你那个台灯还亮着吗", readAt: nowIso, at: nowIso });
-  // 今天已经发过一条带种子的观察式：剩下的一天里观察这类就不能再占位。
+  // 今天已经发过两条带种子的观察式：剩下的一天里观察这类就不能再占位。
+  // 2026-10-28 配比实验把上限从 1 抬到 2，所以这里凑两条才算「用满」；
+  // 回滚之后上限回到 1，两条同样算用满，这条用例两边都成立。
   store.appendMessage(AGENT, {
     role: "assistant", text: "我总觉得那盏灯搁窗台才顺眼", proactive: true,
     seedId: "seed_test_1", at: nowIso,
+  });
+  store.appendMessage(AGENT, {
+    role: "assistant", text: "台灯挪来挪去，最后还是老位置最顺", proactive: true,
+    seedId: "seed_test_2", at: nowIso,
   });
 
   const calls = stubUtility(app, "刚看到某家手机把耳机孔塞回来了，评论区已经在怀旧");

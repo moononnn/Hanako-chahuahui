@@ -10,7 +10,7 @@
     // 宿主给静态文件挂了长缓存，于是出过这样的事：代码改了、重启了，界面还是老样子
     // （背景铺不上、选图预览还是裁的）。给地址挂一个本次加载的时间戳，每次都对一次。
     // 脚本同步跑在 head 里，body 还没开始画，不会闪。
-    for (const href of ["assets/panel.css"]) {
+    for (const href of ["assets/panel.css", "assets/bubble-skins.css"]) {
       const link = document.createElement("link");
       link.rel = "stylesheet";
       link.href = `${href}?t=${Date.now()}`;
@@ -382,6 +382,15 @@
     let typingStyle = "dots";
     /** 默认关闭：打开后才给伙伴回复显示修正入口，戳一戳只提供删除。 */
     let messageRefineEnabled = false;
+    /**
+     * 聊天气泡用哪套装扮（像 QQ 的付费气泡那样换一套框）。
+     * 原味是 "plain"：什么都不改，气泡颜色照旧跟着聊天背景的取色走。
+     * 整套挂在 .chat 的 data-bubble-skin 上，样式见 assets/bubble-skins.css。
+     */
+    let bubbleSkin = "plain";
+    // 伙伴那一侧现在挂的哪一套。拉线程时由后端给；换人、拉回包都会更新它。
+    // 单独存一份是因为好友轮询（loadPartners）只知道自己这侧，不该把 ta 那侧碰掉。
+    let lastPartnerSkin = null;
     const MESSAGE_SOUND_KEY = "messageSound";
     // 旧版只存了一个开关；没有新键时把那次的手动关闭接过来，别让人白关一次。
     const LEGACY_MESSAGE_SOUND_KEY = "messageSoundEnabled";
@@ -1775,22 +1784,93 @@
 
     function updateJumpBottom() {
       if (renderingAll) return;
+      // 自己正滚着的时候不报按钮：中间那几帧本来就不在底部，一闪一下像卡了
+      if (scrollAnim) { el.jumpBottom.hidden = true; return; }
       const shouldShow = el.stream.scrollHeight > el.stream.clientHeight && !isAtBottom();
       el.jumpBottom.hidden = !shouldShow;
     }
 
-    function scrollDown(force = false) {
+    /*
+     * 滚到底那一下：以前是 `scrollTop = scrollHeight` 硬跳。现在改成带走势的缓动，
+     * 新消息把上面整列顶上去的那一瞬才有速度感（这就算「惯性」的来源：位移本身带缓动）。
+     *
+     * 几条约定：
+     *   · 距离超过 1200px（比如第一次渲染、翻回底部）就直接瞬移，拖太久反而袂；
+     *   · 动画期间不更新 autoScrollAllowed，否则自己轮一下就被当成「用户往上翻了」而停车；
+     *   · 来新消息后重算目标，用当前 scrollTop 重新起步，不会跳。
+     */
+    let scrollAnim = null;
+    let scrollAnimRaf = 0;
+
+    function scrollDown(force = false, smooth = true) {
       if (renderingAll || prepending) return;
       if (!force && !autoScrollAllowed) {
         updateJumpBottom();
         return;
       }
-      el.stream.scrollTop = el.stream.scrollHeight;
+      const stream = el.stream;
+      const to = stream.scrollHeight - stream.clientHeight;
+      const from = stream.scrollTop;
+      const distance = to - from;
+      if (distance < 1) {
+        scrollAnim = null;
+        updateJumpBottom();
+        return;
+      }
+      const reduceMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      // 批量渲染（一次上 50 条历史）不走缓动：那是“换了一页”，没有“被顶”这回事
+      if (!smooth || reduceMotion || distance > 1200 || typeof requestAnimationFrame !== "function") {
+        scrollAnim = null;
+        // 写 scrollHeight 而不是 to：浏览器自己会夹到最大值，也是改动前的写法
+        stream.scrollTop = stream.scrollHeight;
+        updateJumpBottom();
+        return;
+      }
+      // 距离越远跑得越久，但封顶 300ms：拖太久会让人等它。
+      const duration = Math.max(130, Math.min(300, 120 + distance * 0.9));
+      scrollAnim = { from, to, start: performance.now(), duration };
+      if (!scrollAnimRaf) scrollAnimRaf = requestAnimationFrame(stepScrollDown);
+      shoveSpark();
       updateJumpBottom();
     }
 
+    function stepScrollDown(now) {
+      if (!scrollAnim) { scrollAnimRaf = 0; return; }
+      const t = Math.min(1, (now - scrollAnim.start) / scrollAnim.duration);
+      // easeOutCubic：一开始就快，尾巴慢慢贴上去，急停在这个距离上会显得硬
+      const eased = 1 - Math.pow(1 - t, 3);
+      el.stream.scrollTop = scrollAnim.from + (scrollAnim.to - scrollAnim.from) * eased;
+      if (t < 1) { scrollAnimRaf = requestAnimationFrame(stepScrollDown); return; }
+      scrollAnim = null;
+      scrollAnimRaf = 0;
+      updateJumpBottom();
+    }
+
+    /*
+     * 被顶的那一下：耳朵被惯性向后拖一下再弹回来。
+     * 连发时不要每条都抄一遍，260ms 内只演一次，否则会变成一直抽。
+     */
+    let shoveTimer = null;
+    let lastShoveAt = 0;
+
+    function shoveSpark() {
+      if (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+      const now = performance.now();
+      if (now - lastShoveAt < 260) return;
+      lastShoveAt = now;
+      const stream = el.stream;
+      stream.classList.remove("is-shoving");
+      void stream.offsetWidth;
+      stream.classList.add("is-shoving");
+      clearTimeout(shoveTimer);
+      shoveTimer = setTimeout(() => {
+        stream.classList.remove("is-shoving");
+        shoveTimer = null;
+      }, 560);
+    }
+
     function playBottomFeedback(deltaY) {
-      const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      const reduceMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
       if (reduceMotion) return;
       const maxPull = Math.max(1, Math.round(el.stream.clientHeight / 3));
       const pull = Math.min(maxPull, Number(el.stream.dataset.bottomPull || 0) + Math.max(4, Math.abs(deltaY) * 0.55));
@@ -1807,10 +1887,14 @@
     }
 
     el.stream.addEventListener("wheel", (event) => {
+      // 用户一动手就把缓动交还给他，别跟他抢滚动条
+      scrollAnim = null;
       if (event.deltaY > 0 && isAtBottom()) playBottomFeedback(event.deltaY);
     }, { passive: true });
+    el.stream.addEventListener("touchstart", () => { scrollAnim = null; }, { passive: true });
     el.stream.addEventListener("scroll", () => {
-      autoScrollAllowed = isAtBottom();
+      // 缓动途中不判「用户往上翻了」，否则跑到一半就被自己当成手动滚动而停车
+      if (!scrollAnim) autoScrollAllowed = isAtBottom();
       updateJumpBottom();
       maybeLoadOlder();
     }, { passive: true });
@@ -2456,6 +2540,15 @@
       threadTotalCount = Number.isFinite(total) ? total : currentMessages.length;
       loadedOldestSeq = threadSeqOf(currentMessages[0]) || null;
       hasOlderMessages = currentMessages.length < threadTotalCount;
+      // 伙伴那侧的气泡搭这页回包一起跟：心情一天只翻一次，
+      // 但跨过凌晨四点那一刻（账上的日子变了）就会换，不跟它就会拖到重开窗。
+      if (data && Object.prototype.hasOwnProperty.call(data, "partnerSkin")) {
+        const next = data.partnerSkin ?? null;
+        if (next !== lastPartnerSkin) {
+          lastPartnerSkin = next;
+          applyPartnerSkin(next);
+        }
+      }
       return { page, gap };
     }
 
@@ -3337,7 +3430,7 @@
       } finally {
         renderingAll = false;
         autoScrollAllowed = previousAutoScroll;
-        scrollDown(true);
+        scrollDown(true, false);
       }
     }
 
@@ -3676,6 +3769,76 @@
       clearChatBackground();
     }
 
+    /**
+     * 换气泡装扮。
+     *
+     * 2026-10-28 晚：两侧拆开。「我」这侧挂 data-me-skin（设置页里自己挑的），
+     * 伙伴那侧挂 data-ta-skin（后端按 ta 当天心情定，见 lib/bubble-skin-mood.js）。
+     * 两枚属性互相独立：一枚是 plain（或没挑）就不挂，那一侧退回原来的取色。
+     *
+     * 样式全在 assets/bubble-skins.css，变量靠继承，所以换皮不用重画任何一条消息：
+     * 改一个属性，已有气泡当场变。
+     */
+    function applyBubbleSkin(meSkin, taSkin) {
+      const clean = (value) => {
+        const id = String(value ?? "").trim();
+        return /^[a-z][a-z-]*$/.test(id) ? id : "";
+      };
+      const me = clean(meSkin);
+      const ta = clean(taSkin);
+      bubbleSkin = me || "plain";
+      // 原味等于没打扮：摘掉属性，让 .chat 回到默认那套取色，
+      // 不靠「一份什么都不定义的皮肤块」来假装。
+      if (me && me !== "plain") el.chat.dataset.meSkin = me;
+      else delete el.chat.dataset.meSkin;
+      if (ta && ta !== "plain") el.chat.dataset.taSkin = ta;
+      else delete el.chat.dataset.taSkin;
+      // 换皮以后重排「偶尔自己动一下」的定时器（哪套皮肤响应由 CSS 决定）
+      syncIdleFlick();
+    }
+
+    /** 只换伙伴那侧：拉线程回来时用，不动自己那侧。 */
+    function applyPartnerSkin(taSkin) {
+      applyBubbleSkin(bubbleSkin, taSkin);
+    }
+
+    /*
+     * 气泡自己偶尔动一下。
+     * 不给 CSS 写无限循环，固定周期看久了像呼吸机；改成随机等 5～13 秒，
+     * 随机挑一条「在视口里」的气泡抖一下，抖完拆掉 class。
+     * 这里只发信号，不认皮肤 —— 哪套皮肤愿意响应由 bubble-skins.css 说了算，
+     * 面板里也就不必再抄一份皮肤名单。同一时刻最多只有一个动效在跑。
+     */
+    let idleFlickTimer = null;
+
+    function syncIdleFlick() {
+      clearTimeout(idleFlickTimer);
+      idleFlickTimer = null;
+      if (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+      scheduleIdleFlick();
+    }
+
+    function scheduleIdleFlick() {
+      idleFlickTimer = setTimeout(flickRandomBubble, 5000 + Math.random() * 8000);
+    }
+
+    function flickRandomBubble() {
+      idleFlickTimer = null;
+      const view = el.stream.getBoundingClientRect();
+      const visible = [...el.stream.querySelectorAll(".row .bubble")].filter((bubble) => {
+        const box = bubble.getBoundingClientRect();
+        return box.bottom > view.top + 8 && box.top < view.bottom - 8;
+      });
+      if (visible.length) {
+        const row = visible[Math.floor(Math.random() * visible.length)].closest(".row");
+        if (row) {
+          row.classList.add("ear-flick");
+          setTimeout(() => row.classList.remove("ear-flick"), 760);
+        }
+      }
+      scheduleIdleFlick();
+    }
+
     async function loadPartners() {
       const loadSeq = ++partnersLoadSeq;
       const orderRevision = partnerOrderRevision;
@@ -3693,6 +3856,9 @@
       typingStyle = data.typingIndicator === "cup" ? "cup" : "dots";
       messageRefineEnabled = Boolean(data.messageRefine);
       if (!messageRefineEnabled && actionMessage?.role === "assistant") closeMessageActions();
+      // 气泡装扮同理：我这一侧跟着轮询走，最迟一轮跟上。
+      // 伙伴那侧不在这里——ta 的是按人算的，由拉线程那一轮给（见 openPartner）。
+      applyBubbleSkin(data.bubbleSkin, lastPartnerSkin);
       actionEmoji = new Map((data.actionStyles ?? []).map((style) => [style.id, style.emoji]));
       // 账本读到坏文件时后端会把坏的挪走留档，这里告诉她一声，别让数据静默消失
       if (data.dataWarning) {
@@ -4433,6 +4599,12 @@
       clearChatBackground(); // 新的人进来，先把上一位的房间收走
       seenIds = new Set();
       resetThreadWindow();
+      // 换人时先把上一位那侧的壳摘掉，不然新人的头几条消息会顶着别人的颜色。
+      // 拉到线程后 absorbThreadPage 会把 ta 自己的那套挂上。
+      if (lastPartnerSkin !== null) {
+        lastPartnerSkin = null;
+        applyPartnerSkin(null);
+      }
       voiceStates.clear();
       transcriptOpen.clear();
       try {

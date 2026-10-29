@@ -8,7 +8,7 @@
   <title>茶话会 · 设置</title>
   <script>
     // 样式表得现拉，不能等缓存（同 panel.html：宿主给静态文件挂了长缓存）
-    for (const href of ["assets/settings.css", "assets/beautify-select.css"]) {
+    for (const href of ["assets/settings.css", "assets/beautify-select.css", "assets/bubble-skins.css"]) {
       const link = document.createElement("link");
       link.rel = "stylesheet";
       link.href = `${href}?t=${Date.now()}`;
@@ -117,6 +117,14 @@
           </button>
         </article>
       </div>
+      <article class="setting-card">
+        <div class="setting-copy">
+          <h3>气泡装扮</h3>
+          <p>挑你自己这一侧的气泡。伙伴那一侧由 ta 自己决定，按当天的心情隔一阵换一套——你挑不到 ta 的，也不该挑。</p>
+        </div>
+        <div class="skin-picker" id="bubble-skin-picker"></div>
+        <p class="skin-partner-note" id="bubble-skin-partner-note">伙伴那边不归你管，ta 自己换。</p>
+      </article>
       <article class="setting-card">
         <div class="setting-copy">
           <h3>我在茶话会里叫什么</h3>
@@ -609,6 +617,10 @@
     let messageSound = normalizeSettings(null);
     let daybookInstalled = false;
     let styleCatalog = [];
+    /** 气泡装扮的清单：后端给的那份，设置页照着画预览，不在前端拄一份。 */
+    let bubbleSkinCatalog = [];
+    /** 分组（淡雅 / 可爱 / 花哨）：只影响这一页怎么分段，不影响存的是哪一套。 */
+    let bubbleSkinGroups = [];
     let modelCatalog = [];
     let visionModelCatalog = [];
     /** 图片存储的账：张数、占用、几张过了她定的期。GET settings 带回来。 */
@@ -1216,6 +1228,7 @@
         ? (lastQuietRange ? `关掉之前是 ${lastQuietRange.start} 到 ${lastQuietRange.end}，拨回开关就按那一段恢复。` : "")
         : "";
       document.getElementById("my-action-text").value = globalSettings.myActionTail ?? "";
+      paintBubbleSkins();
       document.getElementById("user-name-override").value = globalSettings.userNameOverride ?? globalSettings.effectiveUserName ?? "";
       paintGlobalChoices();
       paintGlobalModel();
@@ -2045,6 +2058,78 @@
       }
     }
 
+    /**
+     * 气泡装扮：挑你自己这一侧。
+     *
+     * 预览用的是同一份 CSS 变量（bubble-skins.css 里的 [data-me-skin] 那几组），
+     * 所以这里画出来的颜色跟聊天窗里你那侧会出现的颜色是同一份，不会两处跑偏。
+     *
+     * 2026-10-28 晚：这里只管「我」。以前一套皮肤管两个人，现在伙伴那侧
+     * 由 ta 自己按心情挑（lib/bubble-skin-mood.js），设置页不提供入口，
+     * 预览也就不画 ta 那半边——画了会让人以为那是自己能设的。
+     */
+    function paintBubbleSkins() {
+      const host = document.getElementById("bubble-skin-picker");
+      if (!host) return;
+      const current = globalSettings.bubbleSkin ?? "plain";
+      host.replaceChildren();
+      // 二十几套平铺一长条，找起来像在划菜单。分组标题铺满一整行，三个小类各起一段。
+      const groupNames = new Map(bubbleSkinGroups.map((group) => [group.id, group.label]));
+      let lastGroup = null;
+      for (const skin of bubbleSkinCatalog) {
+        if (skin.group && skin.group !== lastGroup && groupNames.has(skin.group)) {
+          lastGroup = skin.group;
+          const title = document.createElement("div");
+          title.className = "skin-group-title";
+          title.textContent = groupNames.get(skin.group);
+          host.appendChild(title);
+        }
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `skin-pick${skin.id === current ? " on" : ""}`;
+        button.setAttribute("aria-pressed", String(skin.id === current));
+        // 预览那一小块自带这套皮肤：变量挂在小气泡自己身上，它就吃上了。
+        // 只画「我」这一枚：ta 那侧不归这里管。
+        const sample = document.createElement("span");
+        sample.className = "skin-sample";
+        const me = document.createElement("span");
+        me.className = "skin-sample-bubble me";
+        me.textContent = "来啦";
+        if (skin.id !== "plain") me.dataset.meSkin = skin.id;
+        sample.append(me);
+        const text = document.createElement("span");
+        text.className = "skin-pick-text";
+        const name = document.createElement("strong");
+        name.textContent = skin.label;
+        const hint = document.createElement("small");
+        hint.textContent = skin.hint;
+        text.append(name, hint);
+        button.append(sample, text);
+        button.addEventListener("click", async () => {
+          if (await saveGlobal({ bubbleSkin: skin.id }, `你这侧的气泡换成「${skin.label}」了`)) paintBubbleSkins();
+        });
+        host.appendChild(button);
+      }
+      paintPartnerSkinNote();
+    }
+
+    /**
+     * 伙伴那侧现在戴着哪一套：只写一句，不提供选择。
+     *
+     * 这不是摆设：它让人看到「ta 真的自己换了」，而不用点进聊天逐条猜。
+     * 拿不到（没算过心情、或那位伙伴今天没得换）就不提具体名字。
+     */
+    function paintPartnerSkinNote() {
+      const note = document.getElementById("bubble-skin-partner-note");
+      if (!note) return;
+      const row = partners.find((p) => p.id === currentId) ?? partners[0] ?? null;
+      const id = row?.bubbleSkin ?? null;
+      const label = id ? (bubbleSkinCatalog.find((skin) => skin.id === id)?.label ?? null) : null;
+      note.textContent = label
+        ? `${row?.name ?? "ta"} 那边现在戴着「${label}」。ta 那边按当天心情自己换，你挑不到。`
+        : "伙伴那边按 ta 当天的心情自己换一套，你挑不到，也不该挑。";
+    }
+
     // 扫码登录局部状态；id 与 SVG 仅留在本页内存，不保存、不打印。
     let videoStatusRevision = 0;
     let videoQrTimer = null;
@@ -2810,6 +2895,7 @@
       currentId = agentId;
       currentDetailTab = detailTab;
       paintPartnerList();
+      paintPartnerSkinNote();
       const partner = partners.find((p) => p.id === agentId);
       if (!partner) { el.partnerBody.replaceChildren(); return; }
       el.partnerBody.innerHTML = '<div class="loading-note">正在翻 ta 的小本子…</div>';
@@ -4633,6 +4719,8 @@
         hiddenPartners = data.hiddenPartners ?? [];
         globalSettings = data.global ?? {};
         styleCatalog = data.styles ?? [];
+        bubbleSkinCatalog = data.bubbleSkins ?? [];
+        bubbleSkinGroups = data.bubbleSkinGroups ?? [];
         modelCatalog = data.models ?? [];
         visionModelCatalog = data.visionModels ?? [];
         imageStorage = data.imageStorage ?? null;
@@ -4658,6 +4746,8 @@
         paintPartnerList();
         if (currentId) await openPartner(currentId);
         else el.partnerBody.replaceChildren();
+        // 伙伴那一侧的皮肤跟人走：换人之后再把那句说明重写一遍
+        paintPartnerSkinNote();
       });
       globalSaveChain = run.then(() => undefined, () => undefined);
       await run;
