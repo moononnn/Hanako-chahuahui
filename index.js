@@ -33,6 +33,14 @@ import { createAvatarReader, looksLikeImage, toBytes } from "./lib/avatar.js";
 import { registerTavernImportService, renderImportedPersona } from "./lib/character-import.js";
 import { buildSystemPrompt, buildTeaseText, identityBlock, replyChoiceBlock, searchToolText, shouldQuietClose, threadToMessages, VOICE_REQUEST_TEXT } from "./lib/prompt.js";
 import { buildAmbientContextText, buildDaybookText, buildFestivalResponseText, daybookAvailable, daybookEntry, daybookHash, daybookQueryTopics, periodNoteDecision, previousAssistantBeforeUser, readDaybook, readDaybookVerbose, shouldUseDaybook } from "./lib/daybook.js";
+// 茶话会自己的一天（2026-10-31）：天气与节日不借拾光记，自己查自己记。
+import {
+  buildOwnDayContext,
+  ownFestivalHasHint,
+  ownFestivalOf,
+  ownWeatherEvents,
+  takeFestivalHint,
+} from "./lib/day-context.js";
 import { dueTodosFromSnapshot, nudgeKey, nudgeSeen, pickTodoNudger, todoNudgeText } from "./lib/todo-nudge.js";
 import { hasProposal, confirmProposal, makeProposal, proposalAskText, proposeFromMessage } from "./lib/todo-propose.js";
 import { isMorningPart, spokenClock, timeBlock, zonedTimestamp } from "./lib/clock.js";
@@ -1099,6 +1107,8 @@ export function apply(ctx) {
     "rhythmEnabled", "rhythmStyleEnabled", "rhythmProactiveEnabled", "rhythmResetAt", "voiceEnabled", "voiceDelivery", "voiceProfiles", "voiceProfile", "videoShareMaxPerDay",
     // 公共事件（2026-10-24）：节目祝福与天气提醒各自一个开关，总闸关了两个都不发。
     "publicEventsEnabled", "festivalGreetingEnabled", "weatherAlertEnabled",
+    // 茶话会自己的天气：地点由她填，填了才查。
+    "weatherEnabled", "weatherLocation", "weatherArea", "weatherIntervalHours", "weatherForecastIntervalHours",
     // 图片留多久：30 / 45 / 60 / 90 天，或 0 = 永久不删。
     "imageRetentionDays",
   ]);
@@ -1146,6 +1156,35 @@ export function apply(ctx) {
     // 拾光记今日情境：只收真布尔，别让 "false" 这种字符串混成真值
     if (Object.prototype.hasOwnProperty.call(patch, "daybookEnabled")) {
       patch.daybookEnabled = patch.daybookEnabled === true;
+    }
+    // 茶话会自己的天气：开关只收真布尔；地点她填，空串就是没填（那就不查）。
+    if (Object.prototype.hasOwnProperty.call(patch, "weatherEnabled")) {
+      patch.weatherEnabled = patch.weatherEnabled === true;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "weatherLocation")) {
+      patch.weatherLocation = String(patch.weatherLocation ?? "").trim().replace(/\s+/g, " ").slice(0, 60);
+    }
+    // 行政区：认得的形状才收，认不得就当没选（退回城市级查询）。
+    if (Object.prototype.hasOwnProperty.call(patch, "weatherArea")) {
+      const area = patch.weatherArea;
+      const code = area && typeof area === "object" ? String(area.code ?? "").trim().slice(0, 12) : "";
+      if (!code) {
+        patch.weatherArea = null;
+      } else {
+        const latitude = Number(area.latitude);
+        const longitude = Number(area.longitude);
+        patch.weatherArea = {
+          code,
+          ...(Number.isFinite(latitude) ? { latitude } : {}),
+          ...(Number.isFinite(longitude) ? { longitude } : {}),
+        };
+      }
+    }
+    for (const key of ["weatherIntervalHours", "weatherForecastIntervalHours"]) {
+      if (!Object.prototype.hasOwnProperty.call(patch, key)) continue;
+      const value = Number(patch[key]);
+      if (!Number.isFinite(value) || value <= 0 || value > 24) throw new Error("天气刷新间隔请填 1 到 24 之间的小时数");
+      patch[key] = value;
     }
     // Hana 主对话近况：同样只收真布尔
     if (Object.prototype.hasOwnProperty.call(patch, "workfeedEnabled")) {
@@ -3894,24 +3933,43 @@ export function apply(ctx) {
     if (!day) return null;
 
     // 节日：一天一人一条，谁说过谁就不再提。
-    if (globalSettings.festivalGreetingEnabled !== false && daybookOn()) {
-      try {
-        const snapshot = await readDaybook(ctx);
-        const festival = festivalOf(snapshot);
-        if (festival && shouldSendFestival({ festival, day, agentId, state: store.getGlobalRuntime() })) {
-          diagnostics({ event: "public-event.festival", agentId, festival });
-          return { kind: "festival", festival, day, reason: { kind: "festival", contextText: "" } };
+    if (globalSettings.festivalGreetingEnabled !== false) {
+      // 茶话会自己的节日表先看：今天是几号、什么节，不用等别人摊出来。
+      const ownFestival = ownFestivalOf(now);
+      if (ownFestival && shouldSendFestival({ festival: ownFestival, day, agentId, state: store.getGlobalRuntime() })) {
+        const hint = ownFestivalHasHint(ownFestival) ? takeFestivalHint(store, ownFestival) : "";
+        diagnostics({ event: "public-event.festival", agentId, festival: ownFestival, source: "own" });
+        return { kind: "festival", festival: ownFestival, day, reason: { kind: "festival", contextText: hint } };
+      }
+      // 自己的节日表今天没有，再看拾光记那天账本里有没有。
+      if (daybookOn()) {
+        try {
+          const snapshot = await readDaybook(ctx);
+          const festival = festivalOf(snapshot);
+          if (festival && shouldSendFestival({ festival, day, agentId, state: store.getGlobalRuntime() })) {
+            diagnostics({ event: "public-event.festival", agentId, festival });
+            return { kind: "festival", festival, day, reason: { kind: "festival", contextText: "" } };
+          }
+        } catch (error) {
+          diagnostics({ event: "public-event.festival.failed", agentId, error: describeError(error) });
         }
-      } catch (error) {
-        diagnostics({ event: "public-event.festival.failed", agentId, error: describeError(error) });
       }
     }
 
     // 天气：抽一位负责人，抽到谁就是谁，别人这一轮不碰。
     if (globalSettings.weatherAlertEnabled !== false) {
       try {
-        const alerts = await readPublicAlerts(ctx);
-        const event = pickWeatherEvent(alerts, now);
+        // 茶话会自己的天气先算一遍；自己这边没有，再问拾光记（那边有预报，算得更细）。
+        const ownEvents = await ownWeatherEvents({
+          store,
+          fetcher: typeof ctx.network?.fetch === "function" ? ctx.network.fetch.bind(ctx.network) : null,
+          now,
+        });
+        let event = pickWeatherEvent({ reason: "ok", events: ownEvents }, now);
+        if (!event) {
+          const alerts = await readPublicAlerts(ctx);
+          event = pickWeatherEvent(alerts, now);
+        }
         if (!event) return null;
         const weights = {};
         for (const row of partners) {
@@ -5724,6 +5782,26 @@ export function apply(ctx) {
       // 读不到时把原因记下来：静默 null 会让人对着一个没反应的待办猜半天。
       if (!daybookSnapshot) diagnostics?.({ event: "daybook.read.unavailable", agentId, reason: read.reason });
     }
+    // 茶话会自己的一天（2026-10-31）：天气与节日自己查、自己记，不借拾光记。
+    // 天气查不动就是没有，不猜；节日跟着自己的节日表走。
+    let ownDayText = "";
+    let ownFestivalText = "";
+    let ownFestival = "";
+    let ownWeather = null;
+    try {
+      const own = await buildOwnDayContext({
+        store,
+        fetcher: typeof ctx.network?.fetch === "function" ? ctx.network.fetch.bind(ctx.network) : null,
+        now: new Date(),
+        userName: USER_NAME,
+      });
+      ownDayText = own.dayText || "";
+      ownFestivalText = own.festivalText || "";
+      ownFestival = own.festival || "";
+      ownWeather = own.weather || null;
+    } catch (error) {
+      diagnostics?.({ event: "own.day-context.failed", agentId, error: describeError(error) });
+    }
     let todoDoneText = "";
     try {
       // 落笔改由她点确认。这一层只攒一条待确认，账本一个字不动，ta 也只能说问句。
@@ -5759,7 +5837,12 @@ export function apply(ctx) {
       diagnostics({ event: "daybook.failed", agentId, error: describeError(error) });
     }
     // 普通日子情境按天去重；节日回应独立于这笔记账，直到当前聊天已经自然提过。
-    daybookText = [daybookText, festivalText].filter(Boolean).join("\n\n");
+    // 自己的那份排在前面：同一件事只说一遍——拾光记那段里重复的节日/天气行就摘掉。
+    let mergedDaybook = daybookText;
+    if (ownFestival) mergedDaybook = mergedDaybook.replace(/^今天是：.*$/m, "");
+    if (ownWeather?.line) mergedDaybook = mergedDaybook.replace(/^窗外：.*$/m, "");
+    mergedDaybook = mergedDaybook.replace(/\n{3,}/g, "\n\n").trim();
+    daybookText = [ownDayText, mergedDaybook, ownFestivalText || festivalText].filter(Boolean).join("\n\n");
     const workfeedText = workfeedOn()
       ? buildWorkfeedText(store.readWorkfeed(), agentId, { lifeDay: dayKey(new Date()), userName: USER_NAME })
       : "";

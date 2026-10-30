@@ -41,7 +41,9 @@
       "www.toutiao.com",
       "api.minimaxi.com",
       "api.xiaomimimo.com",
-      "*.aliyuncs.com"
+      "*.aliyuncs.com",
+      "api.open-meteo.com",
+      "geocoding-api.open-meteo.com"
     ],
     "methods": [
       "GET",

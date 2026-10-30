@@ -261,6 +261,17 @@
         </article>
         <article class="setting-card compact">
           <div class="setting-copy">
+            <h3>茶话会自己的天气</h3>
+            <p id="own-weather-copy">填上你所在的地方，伙伴就知道窗外什么样；空着就不查。跟拾光记各算各的。</p>
+          </div>
+          <div class="detail-field">
+            <input type="text" id="own-weather-location" maxlength="60" placeholder="例如：四川 成都 武侯区" aria-label="天气地点">
+            <button class="soft-button" id="own-weather-save" type="button">保存地点</button>
+            <small class="detail-field-note" id="own-weather-note">只用来查天气（Open-Meteo 免费接口），不会发到别处。</small>
+          </div>
+        </article>
+        <article class="setting-card compact">
+          <div class="setting-copy">
             <h3>节日祝福</h3>
             <p id="festival-copy">节日那天，伙伴会主动来说一句。</p>
           </div>
@@ -638,7 +649,7 @@
 
     // 这一页自己的版本号：后端读同一个文件里的这一行，两边对不上就说明她眼前是旧的。
     // （以前用文件哈希当戳，但那个值是后端给的，页面旧了它照样显示新值，等于没测。）
-    const UI_BUILD = "20261030.1";
+    const UI_BUILD = "20261031.1";
 
     const el = {
       status: document.getElementById("status"),
@@ -1209,27 +1220,36 @@
       document.getElementById("daybook-copy").textContent = daybookInstalled
         ? "打开后，伙伴会知道今天是什么日子、窗外什么天气，还有你们最近过下来的日子。"
         : "需要先装上「拾光记」应用，这一项才有得开。";
-      // 节日与天气都从拾光记读：没装就无从认起，今日情境没开也不会去读。
-      // 两段联动同一把闸，免得开了却在后台一直读不到东西。
+      // 节日与天气：茶话会自己认得节日，天气看自己填的地点；
+      // 拾光记那条路只是补充（它摊得更细）。所以没装拾光记也不该灰着。
+      const ownWeatherReady = Boolean(String(globalSettings.weatherLocation || "").trim());
       const immersionReady = daybookInstalled && Boolean(globalSettings.daybookEnabled);
-      for (const [switchId, copyId, field, hintOn] of [
+      for (const [switchId, copyId, field, hintOn, readyWithoutDaybook] of [
         ["festival-switch", "festival-copy", "festivalGreetingEnabled",
-          "节日那天，伙伴会主动来说一句。只在你允许主动来找的伙伴里说，一人一条，各按各的性格。"],
+          "节日那天，伙伴会主动来说一句。只在你允许主动来找的伙伴里说，一人一条，各按各的性格。", true],
         ["weather-alert-switch", "weather-alert-copy", "weatherAlertEnabled",
-          "天气要变的时候，由一位伙伴提你一句。按亲密度挑一位，别的伙伴不重复。"],
+          "天气要变的时候，由一位伙伴提你一句。按亲密度挑一位，别的伙伴不重复。", ownWeatherReady],
       ]) {
         const button = document.getElementById(switchId);
         const on = globalSettings[field] !== false;
-        const live = on && immersionReady;
+        const ready = readyWithoutDaybook || immersionReady;
+        const live = on && ready;
         button.classList.toggle("on", live);
-        button.disabled = !immersionReady;
+        button.disabled = !ready;
         button.setAttribute("aria-checked", String(live));
-        button.querySelector(".switch-label").textContent = !daybookInstalled
-          ? "未安装"
-          : immersionReady ? (on ? "打开" : "关闭") : "先开今日情境";
-        document.getElementById(copyId).textContent = daybookInstalled
+        button.querySelector(".switch-label").textContent = !ready
+          ? "先填地点"
+          : on ? "打开" : "关闭";
+        document.getElementById(copyId).textContent = ready
           ? hintOn
-          : "需要先装上「拾光记」应用，这一项才有得开。";
+          : (switchId === "weather-alert-switch"
+            ? "需要先填上你所在的地方，伙伴才知道天要变了。"
+            : "需要先装上「拾光记」应用，这一项才有得开。");
+      }
+      // 自己的天气：地点那一栏跟着设置回填。
+      const ownWeatherInput = document.getElementById("own-weather-location");
+      if (ownWeatherInput && document.activeElement !== ownWeatherInput) {
+        ownWeatherInput.value = String(globalSettings.weatherLocation || "");
       }
       const workfeedSwitch = document.getElementById("workfeed-switch");
       const workfeedOn = globalSettings.workfeedEnabled !== false;
@@ -2587,18 +2607,27 @@
       const next = !Boolean(globalSettings.daybookEnabled);
       if (await saveGlobal({ daybookEnabled: next }, next ? "伙伴以后会知道拾光记里的今天了" : "拾光记今日情境已关闭")) paintGlobal();
     });
-    // 节日与天气：跟今日情境同一把闸，没装或没开就不让点。
-    for (const [switchId, field, onSay, offSay] of [
-      ["festival-switch", "festivalGreetingEnabled", "节日那天伙伴会来说一句", "已关闭，节日不再主动开口"],
-      ["weather-alert-switch", "weatherAlertEnabled", "天气要变时会有伙伴提你一句", "已关闭，天气不再主动开口"],
+    // 节日与天气：茶话会自己认得节日；天气看自己填的地点。
+    // 拾光记那条路只是补充，所以不再拿它当前提。
+    for (const [switchId, field, onSay, offSay, needsLocation] of [
+      ["festival-switch", "festivalGreetingEnabled", "节日那天伙伴会来说一句", "已关闭，节日不再主动开口", false],
+      ["weather-alert-switch", "weatherAlertEnabled", "天气要变时会有伙伴提你一句", "已关闭，天气不再主动开口", true],
     ]) {
       document.getElementById(switchId).addEventListener("click", async () => {
-        if (!daybookInstalled) return say("先装上拾光记，这一项才能开", "err");
-        if (!globalSettings.daybookEnabled) return say("先把上面的「拾光记今日情境」打开", "err");
+        if (needsLocation && !String(globalSettings.weatherLocation || "").trim()) {
+          return say("先填上你所在的地方，伙伴才知道天要变了", "err");
+        }
         const next = globalSettings[field] === false;
         if (await saveGlobal({ [field]: next }, next ? onSay : offSay)) paintGlobal();
       });
     }
+    // 自己填的天气地点：填了就生效，伙伴下一轮就知道窗外什么样。
+    document.getElementById("own-weather-save").addEventListener("click", async () => {
+      const input = document.getElementById("own-weather-location");
+      const location = String(input?.value ?? "").trim().replace(/\s+/g, " ").slice(0, 60);
+      const ok = await saveGlobal({ weatherLocation: location }, location ? `天气地点记下了：${location}` : "已清空天气地点，不再查天气");
+      if (ok) paintGlobal();
+    });
     document.getElementById("workfeed-switch").addEventListener("click", async () => {
       const next = globalSettings.workfeedEnabled === false;
       if (await saveGlobal({ workfeedEnabled: next }, next ? "伙伴又能参考 Hana 主对话近况了" : "已关闭，伙伴不再参考 Hana 主对话近况")) paintGlobal();
