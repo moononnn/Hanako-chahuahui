@@ -75,20 +75,48 @@ test("伙伴列表路由：未读、忙碌和背景共用已读快照，不再�
   let threadReads = 0;
   const thread = { messages: [{ role: "assistant", text: "最近一句", at: "2026-10-02T00:00:00Z" }], pendingReply: { due: 1 } };
   const settings = { sleep: {}, awaiting: {}, phone: {}, vision: {}, background: { file: "room.png" } };
+  // 徽章算法现在是 partnerBadgeFor（手机那两条读路径共用同一份）。这张测试要守的是
+  // 「伙伴列表只读一次聊天账」，所以那份算法在宿主侧照抄一份最小实现：吃同一份快照、
+  // 同一个未读数，不许自己再去读第二遍账。
+  const storeStub = {
+    getThread() { threadReads += 1; return thread; },
+    getPartnerSettings: () => settings,
+    unreadCount(_id, snapshot) { assert.equal(snapshot, thread); return 1; },
+    getPendingReply() { throw new Error("不该再读取一次聊天账"); },
+    getGlobalSettings: () => ({}), getLastPartner: () => null, getCorruptNotice: () => null,
+  };
+  const normalizeBadge = () => null;
+  const fallbackBadge = (value) => { assert.equal(value.busy, true); return "busy"; };
+  const dozingNow = () => ({ dozing: false });
+  const isAwaitingThread = () => false;
+  const advancePhone = () => ({ holding: true });
+  const partnerBadgeFor = (agentId, { thread: view = null, settings: partnerSettings = null } = {}) => {
+    const v = view ?? storeStub.getThread(agentId);
+    const ps = partnerSettings ?? storeStub.getPartnerSettings(agentId);
+    const lastMessage = v.messages[v.messages.length - 1] ?? null;
+    const unread = storeStub.unreadCount(agentId, v);
+    const hasHistory = v.messages.some((item) => (
+      (item?.role === "user" || item?.role === "assistant")
+      && item?.kind !== "action" && item?.kind !== "poke"
+    ));
+    const badge = normalizeBadge(ps.badge) ?? fallbackBadge({
+      sleeping: Boolean(dozingNow(new Date(), ps.sleep).dozing),
+      awaiting: isAwaitingThread(v.messages, ps.awaiting),
+      busy: Boolean(v.pendingReply),
+      unread,
+      lastMessage,
+      holdingPhone: advancePhone(ps.phone, Date.now()).holding,
+      hasHistory,
+    });
+    return { badge, unread, lastMessage, hasHistory };
+  };
   vm.runInNewContext(source.slice(source.indexOf('      app.get("/partners"'), source.indexOf('      app.get("/adaptation/:agentId"')), {
     app: { get(_path, callback) { handler = callback; } }, listPartners: async () => [{ id: "nova" }],
     // 伙伴那侧的皮肤清单与映射：这张测试只数聊天账读了几次，给个静态值就够
     PARTNER_SKIN_IDS: [], partnerSkinFor: () => null,
-    store: {
-      getThread() { threadReads += 1; return thread; },
-      getPartnerSettings: () => settings,
-      unreadCount(_id, snapshot) { assert.equal(snapshot, thread); return 1; },
-      getPendingReply() { throw new Error("不该再读取一次聊天账"); },
-      getGlobalSettings: () => ({}), getLastPartner: () => null, getCorruptNotice: () => null,
-    },
-    dozingNow: () => ({ dozing: false }), advancePhone: () => ({ holding: true }),
-    normalizeBadge: () => null, fallbackBadge: (value) => { assert.equal(value.busy, true); return "busy"; },
-    isAwaitingThread: () => false, badgeText: () => "忙着", effectiveVisionConfig: () => ({}),
+    store: storeStub, partnerBadgeFor,
+    dozingNow, advancePhone, normalizeBadge, fallbackBadge, isAwaitingThread,
+    badgeText: () => "忙着", effectiveVisionConfig: () => ({}),
     ACTION_STYLES: [], describeError: (error) => ({ message: error.message }),
   });
   const result = await handler({ json: (value) => value });

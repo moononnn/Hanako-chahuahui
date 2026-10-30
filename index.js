@@ -55,6 +55,7 @@ import { collectUsage } from "./lib/usage-stats.js";
 import { recordUsageCall } from "./lib/usage-book.js";
 import { registerPersonalityTool } from "./lib/personality-tool.js";
 import { createFocusCompanion, focusReminderSpec, focusChatText } from "./lib/focus-companion.js";
+import { createMobileAccess } from "./lib/mobile-access.js";
 import { createInterruptibleComposer, hasNewerUserMessage, isSpeechMessage } from "./lib/turn-window.js";
 import { createThreadRebuildScheduler } from "./lib/rebuild-queue.js";
 import { protectKey, unprotectKey, isProtectedKey, encryptionStatus } from "./lib/crypto.js";
@@ -75,7 +76,7 @@ import {
 } from "./lib/memory.js";
 import { dailySpec, isProfileIdentitySafe, profileSpec, runSummary, segmentSpec } from "./lib/summarize.js";
 import { buildWorkfeedText, normalizeWorkEvent, recentWorkActivity } from "./lib/workfeed.js";
-import { addFeed } from "./lib/feed.js";
+import { addFeed, normalizeFeed } from "./lib/feed.js";
 import {
   addPartnerFeed,
   detectFeedSignal,
@@ -218,6 +219,7 @@ import {
   pickSeed,
   readSeedBook,
   recentSeedMotifs,
+  seedHistoryFor,
   seedSpec,
   usableSeeds,
 } from "./lib/topic-seeds.js";
@@ -613,6 +615,36 @@ export function apply(ctx) {
       return null;
     }
   };
+
+  /**
+   * 这位伙伴现在挂什么状态徽章（本体 /partners 与手机两条读路径共用这一份算法）。
+   *
+   * 她自己表达过的先用她的；没表达过才按睡眠/在不在忙/未读/手机在不在手做只读兜底，
+   * 一个字都没说过的伙伴给 null（不拿默认值冒充 ta 的状态）。
+   * 全程只读：advancePhone 只把「手机在不在手」按时间推到此刻，不落盘。
+   * rnd 只用于「忘了存手机状态/相位已过期」那种需要重掷的兜底；探测指纹会传确定的。
+   */
+  function partnerBadgeFor(agentId, { thread = null, settings = null, rnd = Math.random } = {}) {
+    const view = thread ?? store.getThread(agentId);
+    const partnerSettings = settings ?? store.getPartnerSettings(agentId);
+    const lastMessage = view.messages[view.messages.length - 1] ?? null;
+    const unread = store.unreadCount(agentId, view);
+    const hasHistory = view.messages.some((item) => (
+      (item?.role === "user" || item?.role === "assistant")
+      && item?.kind !== "action"
+      && item?.kind !== "poke"
+    ));
+    const badge = normalizeBadge(partnerSettings.badge) ?? fallbackBadge({
+      sleeping: Boolean(dozingNow(new Date(), partnerSettings.sleep).dozing),
+      awaiting: isAwaitingThread(view.messages, partnerSettings.awaiting),
+      busy: Boolean(view.pendingReply),
+      unread,
+      lastMessage,
+      holdingPhone: advancePhone(partnerSettings.phone, Date.now(), rnd).holding,
+      hasHistory,
+    });
+    return { badge, unread, lastMessage, hasHistory };
+  }
 
   try { registerPersonalityTool(ctx, { store, listPartners }); }
   catch { ctx.logger?.error?.("[chahuahui] 性格档案工具注册失败，其余功能继续装载"); }
@@ -3017,6 +3049,12 @@ export function apply(ctx) {
     }
     // 问句额度（2026-10-06）：连着几条都留了问句，这一条就别再追问，免得像采访。
     const threadRows = store.getThread(agentId).messages;
+    // 这个兴趣方向以前真说出口过什么（2026-10-30）：只给“这一轮真走种子内容”的出站段和那一次语义核查用。
+    // 正文和出处都回到这位伙伴的线程里对（撤回、删除、编辑都不清 usedText，拿它当历史会复活删掉的话）；
+    // 没有种子时是空的，待办、跟进、由头、招呼那些路径不查账，也不多调一次模型。
+    const interestHistory = shareableSeed
+      ? seedHistoryFor(store.getProactiveState(agentId).topicSeeds, shareableSeed, { now, messages: threadRows })
+      : [];
     // 主动开口跟正常聊天一样，把最近这段真聊天直接送进模型请求（2026-10-19）。
     // 跟面对面的 composeReply 用同一套：先滤掉不是话的行（动作、戳、酒馆初见、硬撤回），
     // 再走同一份上下文预算（默认 24 条 / 4000 字），最后交给 threadToMessages 带上角色与时间。
@@ -3034,6 +3072,11 @@ export function apply(ctx) {
       .slice(-3)
       .map((row) => row.text);
     const askSpent = askBudgetSpent(recentAsks, { isAsk: hasOpenHook });
+    // 防重清单包含普通回复，排除撤回和非对话行；recentAsks 仍只管主动问句额度。
+    const recentSentTexts = threadRows
+      .filter((row) => row.role === "assistant" && !row.recalled && isSpeechMessage(row) && String(row.text ?? "").trim())
+      .slice(-3)
+      .map((row) => String(row.text));
     // 「已经介绍过什么」只认这位伙伴实际送出去的正文：后台的种子和探索不算，那只是备料，她还没听过。
     const introducedText = introducedTextFrom(threadRows);
     // 关系式由头的凭据到这一步才拼得全：同一位伙伴的近况正文，以及已经说过、别重复的话。
@@ -3041,7 +3084,7 @@ export function apply(ctx) {
     // 不是“你们最近聊过什么”，让 enrichReasonContext 重拼一遍会把事实直接换掉。
     const reasonResolved = publicEvent
       ? { reason: publicEvent.reason, dropped: false }
-      : enrichReasonContext(reasonAllowed ? reason : null, { sceneEcho, workfeedText, sentTexts: recentAsks });
+      : enrichReasonContext(reasonAllowed ? reason : null, { sceneEcho, workfeedText, sentTexts: recentSentTexts });
     if (reasonResolved.dropped) {
       // 候选时说有凭据，到出站那一步却拿不出来（电脑那边的动静刚好没了、或只剩去重段）。
       // 这不是时机不合适，暂存的意图得留着：不标 preserveIntent，通用失败分支会把「想找你」丢掉。
@@ -3092,7 +3135,7 @@ export function apply(ctx) {
               sleepStart,
               stickerText,
             })
-          : proactiveSpec({ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, video: shareableVideo, news: shareableNews, videoLoginNotice, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, morningFirst: morningFirstScene, askBudgetSpent: askSpent, reason: sendReason, introducedText, moodText: moodLineFor(agentId) });
+          : proactiveSpec({ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, interestHistory, video: shareableVideo, news: shareableNews, videoLoginNotice, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, morningFirst: morningFirstScene, askBudgetSpent: askSpent, reason: sendReason, introducedText, moodText: moodLineFor(agentId) });
 
     let raw = "";
     try {
@@ -3170,8 +3213,9 @@ export function apply(ctx) {
     }
     // 出口兜底：同一句话别换个说法再发一遍。
     // 探索角度另由短期发现索引避重；这里仅挡最近几条成品消息的近似复述。
+    // 普通回复也参与判重，与提示词清单使用相同过滤口径。
     const saidRecently = store.getThread(agentId).messages
-      .filter((row) => row.proactive && row.text)
+      .filter((row) => row.role === "assistant" && !row.recalled && isSpeechMessage(row) && String(row.text ?? "").trim())
       .slice(-6);
     const repeat = isRepeatedPhrasing(saidRecently, text, { now: Date.now() });
     if (repeat.repeated) {
@@ -3185,7 +3229,7 @@ export function apply(ctx) {
     }
     if (text && needsClarityReview({ seed: shareableSeed, discovery: shareableDiscovery, news: shareableNews, exception, kind, todoNudge, followup, greetingOnly, wakeEcho })) {
       const clarity = await reviewProactiveClarity({
-        text, seed: shareableSeed, discovery: shareableDiscovery, news: shareableNews,
+        text, seed: shareableSeed, discovery: shareableDiscovery, news: shareableNews, interestHistory,
         sharedContext: JSON.stringify({
           currentTime: currentTimeText,
           conversationMemory: memoryText,
@@ -7817,8 +7861,15 @@ export function apply(ctx) {
 
   // ─────────────────────────── 路由 ───────────────────────────
 
+  // 手机网关借这条路把请求转进来：内部调用不经过网络，也不碰宿主的鉴权。
+  let mobileRoutes = null;
+  // 手机接入的管理层（配置、密码、启停、探测）在末尾那段建好；
+  // 路由先挂上，等它建好之后再有人点才真的动。
+  let mobileAccess = null;
+
   try {
     ctx.routes.register((app) => {
+      mobileRoutes = app;
       // 路由里没接住的异常不能就这么变成一个只有一句英文的 500：
       // 原因写进账本（含方法与路径），界面给一句她能看懂的话。
       app.onError((error, c) => {
@@ -7879,29 +7930,10 @@ export function apply(ctx) {
           }
           const partners = rows.map((row) => {
             const thread = store.getThread(row.id);
-            const last = thread.messages[thread.messages.length - 1] ?? null;
             const settings = store.getPartnerSettings(row.id);
-            const sleepNow = dozingNow(new Date(), settings.sleep);
-            const unread = store.unreadCount(row.id, thread);
-            // 手机在不在手里得先按流逝的时间推进到现在，不能直接读存的布尔值。
-            // 以前这里只读 holding，untilMs 过期十几个小时了也照样当“拿着”，
-            // 于是所有人的兜底状态都卡在同一级。
-            const phone = advancePhone(settings.phone, Date.now());
-            // 一个字都没说过的 ta 没有可依据的真实状态，这一栏就空着。
-            const hasHistory = thread.messages.some((item) => (
-              (item?.role === "user" || item?.role === "assistant")
-              && item?.kind !== "action"
-              && item?.kind !== "poke"
-            ));
-            const badge = normalizeBadge(settings.badge) ?? fallbackBadge({
-              sleeping: Boolean(sleepNow.dozing),
-              awaiting: isAwaitingThread(thread.messages, settings.awaiting),
-              busy: Boolean(thread.pendingReply),
-              unread,
-              lastMessage: last,
-              holdingPhone: phone.holding,
-              hasHistory,
-            });
+            // 徽章算法抽成 partnerBadgeFor（手机那两条读路径用同一份），行为不变：
+            // 她自己设过的先用她的，否则按睡眠/忙/未读/手机在不在手/最近聊过做兜底。
+            const { badge, unread, lastMessage: last } = partnerBadgeFor(row.id, { thread, settings });
             const vision = effectiveVisionConfig(globalSettings.vision, settings.vision);
             return {
               ...row,
@@ -8280,6 +8312,18 @@ export function apply(ctx) {
         const lastAssistant = thread.messages.findLast((row) => row.role === "assistant" && !row.recalled);
         if (!message || message.role !== "assistant") return c.json({ ok: false, error: { message: "只能调整伙伴的回复" } }, 404);
         if (lastAssistant?.id !== messageId) return c.json({ ok: false, error: { message: "只能调整最后一条伙伴回复" } }, 409);
+        // 乐观并发：expectedText 是她打开编辑框时看到的那句原文。
+        // 比对与下面的 patch 在同一段同步代码里（中间没有 await），
+        // 所以另一端先改过就到此为止，不会把她没看过的句子盖掉。
+        const expected = body?.expectedText;
+        if (expected !== undefined && expected !== null) {
+          if (typeof expected !== "string") {
+            return c.json({ ok: false, error: { code: "EDIT_CONFLICT", message: "打开编辑时的那句原文不对" } }, 400);
+          }
+          if (String(message.text ?? "") !== expected) {
+            return c.json({ ok: false, error: { code: "EDIT_CONFLICT", message: "这条回复已经在另一端改过了，请刷新后再编辑" } }, 409);
+          }
+        }
         if (!text) return c.json({ ok: false, error: { message: "回复不能改成空白" } }, 400);
         const updated = store.patchMessage(agentId, messageId, {
           text,
@@ -10716,6 +10760,36 @@ export function apply(ctx) {
         }),
       );
 
+      // ── 手机接入（只有桌面本机设置页能调） ──
+      // 网关给手机开的那套 op 里没有这三条：密码只回给本机这一页，不进日志，
+      // 也不跟着任何推给手机的数据包出去。
+      app.get("/mobile/status", (c) => {
+        if (!mobileAccess) return c.json({ ok: false, error: { message: "手机接入还没准备好" } }, 503);
+        return c.json({ ok: true, ...mobileAccess.status() });
+      });
+
+      app.post("/mobile/config", async (c) => {
+        if (!mobileAccess) return c.json({ ok: false, error: { message: "手机接入还没准备好" } }, 503);
+        let body = null;
+        try { body = await c.req.json(); } catch { body = null; }
+        if (!body || typeof body !== "object" || Array.isArray(body)) {
+          return c.json({ ok: false, error: { message: "请求不对" } }, 400);
+        }
+        const result = await mobileAccess.setConfig(body);
+        if (!result.ok) return c.json({ ok: false, error: { message: result.error } }, 400);
+        return c.json({ ok: true, ...result, notice: result.notice ?? "" });
+      });
+
+      app.post("/mobile/password", async (c) => {
+        if (!mobileAccess) return c.json({ ok: false, error: { message: "手机接入还没准备好" } }, 503);
+        let body = null;
+        try { body = await c.req.json(); } catch { body = null; }
+        const action = String(body?.action ?? "show").trim() || "show";
+        const result = await mobileAccess.password(action);
+        if (!result.ok) return c.json({ ok: false, error: { message: result.error } }, 400);
+        return c.json({ ok: true, ...result });
+      });
+
       // __CHAHUAHUI_DEV_ONLY__
       // 内测用的手动触发：模拟一位伙伴来找她，只看提醒链路通不通，不写聊天记录。
       // 发布前连同 /probe 一起剥掉。
@@ -10984,6 +11058,882 @@ export function apply(ctx) {
     });
   }, 90 * 1000);
   kick.unref?.();
+
+  // ─────────────── 手机网关 ───────────────
+  // Hana 的应用子进程被 Node 权限模型禁止监听端口，手机要连进来，
+  // 只能另起一个不受那层限制的进程。它守着局域网端口，业务仍在这里做。
+  // 配置、密码、启停、变更探测都在 lib/mobile-access.js；这一段只负责接线：
+  // 手机要的那几件事一律转回茶话会自己的路由，不另造一套业务。
+  {
+    const appRoot = path.dirname(fileURLToPath(import.meta.url));
+    const mobilePagePath = path.join(appRoot, "ui", "mobile.html");
+    const mobileAssetsDir = path.join(appRoot, "ui", "assets");
+    const assetMime = (name) => {
+      const ext = path.extname(String(name || "")).toLowerCase();
+      return ({ ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".woff2": "font/woff2" })[ext] || "application/octet-stream";
+    };
+    /**
+     * 页里引用资源的固定 build 戳。
+     *
+     * 页面本身是 no-store，但手机浏览器、系统 WebView 和中间的代理都可能拿着旧脚本不放；
+     * 引用串跟着这一次安装的文件走，升级后自然换一个，不用她去手动清缓存。
+     * 每次进程里只算一次：文件在运行期不会变。
+     */
+    let mobileAssetBuild = "";
+    const mobileBuildStamp = () => {
+      if (mobileAssetBuild) return mobileAssetBuild;
+      const stamp = [mobilePagePath, path.join(mobileAssetsDir, "mobile-client.js")]
+        .map((file) => {
+          try { return Math.floor(fs.statSync(file).mtimeMs).toString(36); } catch { return "0"; }
+        })
+        .join(".");
+      mobileAssetBuild = `${version}-${stamp}`;
+      return mobileAssetBuild;
+    };
+    // 只改「页里引用资源的那几处」，顺带跳过已经带过 query 的，重复装配不会叠两层。
+    const stampMobileHtml = (html) => {
+      const build = mobileBuildStamp();
+      return String(html ?? "").replace(
+        /(["'(])(\/?assets\/[A-Za-z0-9._-]+\.(?:js|css))(?:\?[^"')]*)?(["')])/gu,
+        (whole, before, url, after) => `${before}${url}?v=${build}${after}`,
+      );
+    };
+
+    // 手机首次只给最近 50 条；她往上翻时手机会要「已加载条数 + 50」把整个窗重新拉一遍
+    // （只 merge 老前缀会把已删消息的原文留在屏幕上）。上限跟桌面 /thread 一致是 2000，
+    // 多要也只给 2000；日常首屏依旧 50，不因为这里放宽就变重。
+    const MOBILE_PAGE_DEFAULT = 50;
+    const MOBILE_PAGE_MAX = 2000;
+    const mobilePageLimit = (value) => {
+      if (value === undefined || value === null || String(value).trim() === "") return MOBILE_PAGE_DEFAULT;
+      const limit = Number(value);
+      if (!Number.isInteger(limit) || limit <= 0) throw new Error("页码不对");
+      return Math.min(limit, MOBILE_PAGE_MAX);
+    };
+    const mobilePageBefore = (value) => {
+      if (value === undefined || value === null || String(value).trim() === "") return 0;
+      const before = Number(value);
+      if (!Number.isInteger(before) || before <= 0) throw new Error("翻页的游标不对");
+      return before;
+    };
+
+    // 把请求转给茶话会自己的路由：手机走的是同一套业务逻辑，
+    // 打盹、排队、撤回、真实感那一堆全都不用重写。
+    const viaRoutes = async (pathname, init) => {
+      if (!mobileRoutes) throw new Error("routes_not_ready");
+      const response = await mobileRoutes.request(pathname, init);
+      let data = null;
+      try { data = await response.json(); } catch { data = null; }
+      if (!data) throw new Error(`route_empty:${response.status}`);
+      if (!data.ok) throw new Error(data?.error?.message || `route_failed:${response.status}`);
+      return data;
+    };
+    // 二进制（图、语音）：同样是转给现有路由，只把字节和类型带回来。
+    const viaBinary = async (pathname, fallbackType = "application/octet-stream") => {
+      if (!mobileRoutes) throw new Error("routes_not_ready");
+      const response = await mobileRoutes.request(pathname);
+      if (response.ok === false) throw new Error(`route_failed:${response.status}`);
+      const buf = Buffer.from(await response.arrayBuffer());
+      if (!buf.length) throw new Error("empty");
+      const type = response.headers?.get?.("content-type") || fallbackType;
+      return { buf, type };
+    };
+
+    // 只把手机真的要用的字段送出去：账本里那些只在桌面有用、或者本来就该留在本机的
+    // （投喂、识图备注、离线告警、已读候选判定）不跟着整包出去。
+    // clientMessageId 必须带上：网络超时但它其实已经落库了的时候，手机要靠这张票
+    // 把自己那条「发送中/失败」的乐观消息认回来，不然就是两条一模一样的话。
+    const mobileRecalledText = (role, partnerName = "") => {
+      if (role === "user") return "你撤回了一条消息";
+      const name = String(partnerName ?? "").trim();
+      return name ? `${name}撤回了一条消息` : "对方撤回了一条消息";
+    };
+
+    // 投喂状态的对外投影：items 只留 emoji/数量/时间，账本里那份对象一概不带出去。
+    // 空的时候就回 null——手机按「有没有这一行」判断，不需要一个空壳占位。
+    const mobileFeedSnapshot = (value) => {
+      const items = normalizeFeed(value).items;
+      return items.length ? { items } : null;
+    };
+    // 回复挂在哪句上：只给字符串或 null。手机靠它把那句之后的投喂截止到
+    // 「真正回她的那一条」，后续别的 assistant（主动消息、别的回复）不参与。
+    const mobileRepliedTo = (value) => {
+      const id = typeof value === "string" ? value.trim() : "";
+      return id || null;
+    };
+    // 探测用：只比内容，不比对象引用。撤回的行在投影里本来就被清空了，这里也一律算空。
+    const mobileFeedDigest = (value, recalled) => {
+      if (recalled) return "";
+      const feed = mobileFeedSnapshot(value);
+      return feed ? feed.items.map((row) => `${row.emoji}:${row.count}:${row.at ?? ""}`).join("\u0001") : "";
+    };
+
+    /** 每个手机 op 的第一道门：伙伴 id 必须是这一种形状。 */
+    const mobilePartner = (payload) => {
+      const agentId = String(payload?.agentId ?? "").trim();
+      if (!isValidPartnerId(agentId)) throw new Error("伙伴不对");
+      return agentId;
+    };
+    /** 消息/收藏这类 id：只收字汇表里的那些字，不让奇怪的东西进 URL。 */
+    const mobileId = (payload, field, label) => {
+      const value = String(payload?.[field] ?? "").trim();
+      if (!/^[A-Za-z0-9_-]{1,120}$/.test(value)) throw new Error(`${label}不对`);
+      return value;
+    };
+    /** 待办的 key 是 `todo:<id>` 这种形状，比普通 id 多一个冒号。 */
+    const mobileTodoKey = (payload) => {
+      const key = String(payload?.key ?? "").trim();
+      if (!/^[A-Za-z0-9_:-]{1,120}$/.test(key)) throw new Error("待办编号不对");
+      return key;
+    };
+    /** 伙伴自己发的那条且没撤回：改稿/重生成/删除/投喂/收藏都只肯碰它。 */
+    const mobileAssistantTarget = (agentId, messageId) => {
+      const message = store.getThread(agentId).messages.find((row) => row.id === messageId);
+      if (!message || message.role !== "assistant" || message.recalled) throw new Error("只能用在伙伴还在的消息上");
+      return message;
+    };
+    // 还没走完认识流程的伙伴：手机只能看历史，不能替她开口/拇/重生成。
+    // 判定跟桌面那道门禁同一把尺（isSettled）；认识流程本身不在手机上做。
+    const mobileRequireSettled = (agentId) => {
+      if (isSettled(agentId)) return true;
+      throw new Error("请先在茶话会本体完成认识");
+    };
+    /** 回合里的气泡是 {text, gapMs}：手机只要这两样，别把整包对象搬过去。 */
+    const mobileTurnItems = (rows) => (Array.isArray(rows) ? rows : [])
+      .slice(0, 200)
+      .map((row) => ({
+        text: String(row?.text ?? "").slice(0, 4000),
+        gapMs: typeof row?.gapMs === "number" && Number.isFinite(row.gapMs) ? Math.max(0, Math.floor(row.gapMs)) : null,
+      }))
+      .filter((row) => row.text);
+    /** 改过稿的回复：旧 bubbles 已经不是屏上那句了，照当前这条重建。 */
+    const mobileItemsFromMessage = (message) => {
+      const bubbles = Array.isArray(message?.bubbles) ? message.bubbles.filter((row) => typeof row === "string") : [];
+      const pieces = bubbles.length ? bubbles : [typeof message?.text === "string" ? message.text : ""];
+      return pieces.map((text) => ({ text: String(text).slice(0, 4000), gapMs: null })).filter((row) => row.text);
+    };
+    /** 错误/路径不上手机：把可能的绝对路径换成省略号，只留能读的一小段。 */
+    const mobileSafeText = (value) => String(value ?? "")
+      // Windows 盘符路径：单反斜线、转义过的双反斜线、正斜线三种写法都算
+      .replace(/[A-Za-z]:(?:\\{1,2}|\/)[^\s"'<>|*?]+/gu, "…")
+      // UNC 共享路径 \\server\share\…
+      .replace(/\\\\[^\s"'<>|*?]+/gu, "…")
+      // POSIX 绝对路径：至少两段目录，别把 and/or、10/30 这种普通写法抹掉
+      .replace(/\/(?:[\w.-]+\/)+[\w.-]*/gu, "…")
+      .slice(0, 200);
+
+    const mobileMessage = (message) => {
+      const role = message?.role === "user" ? "user" : "assistant";
+      const base = {
+        id: String(message?.id ?? ""),
+        seq: Number(message?.seq ?? 0),
+        role,
+        at: message?.at ?? message?.createdAt ?? null,
+      };
+      // 撤回的行只留「撤回了」这件事：原文、语音转写、附件名、引用都不往外带。
+      // 桌面 GET /thread 只换了 text/bubbles，其余原字段还挂在账本那一行上，照抄就会漏。
+      // 软撤回也一并保守处理；桌面那边自己怎么显示不在这一层动。
+      if (message?.recalled) {
+        return {
+          ...base,
+          kind: "recalled",
+          recalled: true,
+          recallMode: message?.recallMode ?? null,
+          text: mobileRecalledText(role),
+          bubbles: null,
+          quote: null,
+          attachment: null,
+          voice: null,
+          // 撤回的消息上不该还挂着小东西：账本里可能还留着，投影一律清掉
+          feed: null,
+          partnerFeed: null,
+          repliedTo: null,
+          canRecall: false,
+        };
+      }
+      const attachment = message?.attachment?.id
+        ? {
+          id: String(message.attachment.id),
+          name: String(message.attachment.name ?? ""),
+          mimeType: String(message.attachment.mimeType ?? ""),
+          size: typeof message.attachment.size === "number" ? message.attachment.size : null,
+        }
+        : null;
+      const quote = message?.quote?.messageId
+        ? { messageId: String(message.quote.messageId), text: String(message.quote.text ?? "").slice(0, 4000) }
+        : null;
+      return {
+        ...base,
+        kind: message?.kind ?? null,
+        actionId: message?.actionId ?? null,
+        // 她发的那条自己的票：手机靠它去重（同一条重试不变成两条）
+        clientMessageId: typeof message?.clientMessageId === "string" ? message.clientMessageId : null,
+        bubbles: Array.isArray(message?.bubbles) ? message.bubbles : null,
+        text: typeof message?.text === "string" ? message.text : "",
+        quote,
+        attachment,
+        recalled: false,
+        recallMode: message?.recallMode ?? null,
+        readAt: message?.readAt ?? null,
+        // 她回的是哪一句（旧记录可能没这个字段，统一给 null）
+        repliedTo: mobileRepliedTo(message?.repliedTo),
+        // 能不能撤回：只对她自己发的那句、且本体那条门禁说了行才行
+        canRecall: role === "user" && message?.recall?.ok === true,
+        // 投喂只给「喂了什么、几次、什么时候」：桌面那条业务自己的结构留在本机
+        feed: mobileFeedSnapshot(message?.feed),
+        partnerFeed: mobileFeedSnapshot(message?.partnerFeed),
+        // 语音胶囊：只说“录好了没、多长、转写是什么”，音频本体走 /voice 那条路。
+        voice: message?.voice
+          ? {
+            status: message.voice.status ?? null,
+            durationMs: typeof message.voice.durationMs === "number" ? message.voice.durationMs : null,
+            text: typeof message.voice.text === "string" ? message.voice.text : "",
+            playedAt: message.voice.playedAt ?? null,
+          }
+          : null,
+      };
+    };
+
+    /**
+     * 探测用的快照：只算当前伙伴必要的那点东西。
+     *
+     * 改稿、撤回、语音从「在说」变「能听」、图片被删、设置换了，这些都不换消息 id，
+     * 所以不能只比末条 id。这里把「会影响手机那一屏」的字段收拢成一份 JSON，
+     * 交给 mobile-access 去哈希。
+     *
+     * 文字用「长度 + 滚哈希」而不是把全文搬过来：同一毫秒内连改两次时 updatedAt 会一样，
+     * 光靠时间戳不算数，得真看内容。40 条 × 每三秒一次，搬全文太傻，哈希就够。
+     */
+    const visibleTextDigest = (text) => {
+      const value = typeof text === "string" ? text : "";
+      let hash = 2166136261;
+      for (let index = 0; index < value.length; index += 1) {
+        hash ^= value.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+      return `${value.length}:${(hash >>> 0).toString(36)}`;
+    };
+
+    const mobileThreadFingerprint = (agentId) => {
+      let thread = null;
+      try {
+        thread = store.getThread(agentId);
+      } catch {
+        return null;
+      }
+      const messages = Array.isArray(thread?.messages) ? thread.messages : [];
+      const globalSettings = store.getGlobalSettings();
+      let partnerSettings = {};
+      try {
+        partnerSettings = store.getPartnerSettings(agentId) ?? {};
+      } catch { /* 读不到就当没改过 */ }
+      // 直接读那本书，不调 partnerSkinFor：那个会顺手写盘，探测不该每三秒去落一次。
+      let skinBook = null;
+      try {
+        skinBook = store.getPartnerSkinBook(agentId);
+      } catch { /* 没定过就按没定算 */ }
+      return {
+        thread: {
+          updatedAt: String(thread?.updatedAt ?? ""),
+          nextSeq: Number(thread?.nextSeq ?? 0),
+          total: messages.length,
+          readThroughId: thread?.readThroughId ?? null,
+          readThroughAt: thread?.readThroughAt ?? null,
+          hidden: store.isPartnerHidden(agentId),
+          tail: messages.slice(-40).map((message) => ({
+            id: String(message?.id ?? ""),
+            seq: Number(message?.seq ?? 0),
+            kind: message?.kind ?? null,
+            actionId: message?.actionId ?? null,
+            recalled: Boolean(message?.recalled),
+            recallMode: message?.recallMode ?? null,
+            at: String(message?.at ?? ""),
+            readAt: String(message?.readAt ?? ""),
+            // 回复挂在哪句上也要进指纹：手机靠它定投喂的截断点，换了就换一屏
+            repliedTo: mobileRepliedTo(message?.repliedTo) ?? "",
+            // 投喂/被投喂也要进指纹：喂一口不换消息 id，只变这两个字段
+            feed: mobileFeedDigest(message?.feed, message?.recalled),
+            partnerFeed: mobileFeedDigest(message?.partnerFeed, message?.recalled),
+            text: visibleTextDigest(message?.text),
+            bubbles: Array.isArray(message?.bubbles) ? message.bubbles.join("\u0001") : "",
+            quote: message?.quote?.messageId
+              ? `${String(message.quote.messageId)}:${visibleTextDigest(message.quote.text)}`
+              : "",
+            attachment: String(message?.attachment?.id ?? ""),
+            voice: message?.voice
+              ? [
+                message.voice.status ?? "",
+                message.voice.playedAt ?? "",
+                message.voice.durationMs ?? "",
+                visibleTextDigest(message.voice.text),
+              ].join("/")
+              : "",
+          })),
+        },
+        skin: {
+          meSkin: globalSettings.bubbleSkin ?? null,
+          showAvatars: Boolean(globalSettings.messageAvatars),
+          taSkin: skinBook ? `${skinBook.dayKey ?? ""}:${skinBook.skin ?? ""}` : null,
+          background: partnerSettings.background ?? null,
+          // 名字旁边那枚徽章也是一屏：她换了自定义、作息把 ta 带进睡眠、手机拿起放下，
+          // 手机都该知道。用确定的 rnd：只为了不让「忘了存手机状态」那种兜底每三秒重掷一次。
+          badge: mobileBadge(partnerBadgeFor(agentId, { thread, settings: partnerSettings, rnd: () => 0.5 }).badge),
+        },
+      };
+    };
+
+    // 同一张票（agentId + clientMessageId）的在途去重：只在真在途时存在，finally 就删。
+    const inflightTurns = new Map();
+
+    /** 真正发给 /turns 的那一步：只在途去重和 op 分发需要包它，业务一律照旧。 */
+    const mobileSendTurn = async (payload) => {
+      const agentId = String(payload?.agentId ?? "").trim();
+      if (!isValidPartnerId(agentId)) throw new Error("伙伴不对");
+      // 没认识完的伙伴不能替她开口：历史能看，开口得先在本体那页把流程走完
+      mobileRequireSettled(agentId);
+      const text = typeof payload?.text === "string" ? payload.text.trim() : "";
+      const stickerId = String(payload?.stickerId ?? "").trim();
+      const image = payload?.image && typeof payload.image === "object" ? payload.image : null;
+      // 一段话和一张图可以一起来；两样都没有就不算一条消息。
+      if (!text && !stickerId && !image) throw new Error("说点什么噻");
+      const clientMessageId = String(payload?.clientMessageId ?? "").trim();
+      // 引用和表情包是原业务：只要她把消息引上了，就照原样交给 /turns。
+      const rawQuote = payload?.quote && typeof payload.quote === "object" ? payload.quote : null;
+      const quote = rawQuote && String(rawQuote.text ?? "").trim()
+        ? { messageId: String(rawQuote.messageId ?? "").trim(), text: String(rawQuote.text).trim().slice(0, 4000) }
+        : null;
+      // 幂等 id 必须透传：手机那头重试就靠它去重，这里不能自己再生成一个。
+      // 图的大小/格式卡在 /turns 里的 saveAttachment（单张 10MiB、只收四种图），这里不另设一道。
+      const data = await viaRoutes("/turns", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          agentId,
+          watching: true,
+          ...(text ? { text } : {}),
+          ...(stickerId ? { stickerId } : {}),
+          ...(image ? { image } : {}),
+          ...(quote ? { quote } : {}),
+          ...(clientMessageId ? { clientMessageId } : {}),
+        }),
+      });
+      return {
+        messageId: data.messageId ?? null,
+        clientMessageId: clientMessageId || null,
+        duplicate: Boolean(data.duplicate),
+        turnId: data.turnId ?? null,
+        mode: data.mode ?? "live",
+        queued: Boolean(data.queued),
+        readAfterMs: typeof data.readAfterMs === "number" ? data.readAfterMs : null,
+        voiceRequested: Boolean(data.voiceRequested),
+        notice: data.notice ?? null,
+        recall: data.recall ?? null,
+      };
+    };
+
+    /**
+     * 名单里的最后一句。
+     *
+     * 两个容易泄的边：
+     *   1. 硬撤回的消息在桌面靠 GET /thread 换成占位，账本里那行 text 可能还是原话；
+     *      直接读 text 就会把收回的话又摆回列表上。
+     *   2. 她自己硬撤回的那条在桌面本来就不显示（见 /thread 的可见性过滤），
+     *      列表要退到上一条可见的，而不是把隐藏的原文拿来当预览。
+     */
+    // 徽章只给「她看得见的那几样」：id/type/title|label/description；内部时间戳之类不带。
+    const mobileBadge = (badge) => {
+      if (!badge) return null;
+      if (badge.type === "custom") {
+        const title = String(badge.title ?? "").slice(0, 40);
+        return title
+          ? { type: "custom", id: "custom", title, description: String(badge.description ?? "").slice(0, 120) }
+          : null;
+      }
+      return {
+        type: "common",
+        id: String(badge.id ?? ""),
+        label: String(badge.label ?? "").slice(0, 40),
+        description: String(badge.description ?? "").slice(0, 120),
+      };
+    };
+
+    const mobileLastLine = (agentId, partnerName, thread = null) => {
+      let view = thread;
+      if (!view) {
+        try {
+          view = store.getThread(agentId);
+        } catch {
+          return null;
+        }
+      }
+      const messages = Array.isArray(view?.messages) ? view.messages : [];
+      // 与 GET /thread 同一套可见口径
+      const visible = messages.filter((message) =>
+        !message?.recalled || message.recallMode !== "hard" || message.role === "assistant"
+      );
+      const message = visible[visible.length - 1];
+      if (!message) return null;
+      const role = message.role === "user" ? "user" : "assistant";
+      return {
+        id: String(message.id ?? ""),
+        role,
+        at: message.at ?? message.createdAt ?? null,
+        // 撤回过的只说撤回了：原文、语音转写、附件预览一概不带
+        preview: message.recalled ? mobileRecalledText(role, partnerName) : String(message.text ?? "").replace(/\s+/gu, " ").slice(0, 30),
+        kind: message.recalled ? "recalled" : message.kind ?? null,
+      };
+    };
+
+    const mobileHandler = async (op, payload) => {
+      if (op === "mobile.partners.list") {
+          const rows = await listAllPartners();
+          return rows.map((row) => {
+            const name = row.name ?? row.id;
+            // 一个线程只读一次：末行与徽章各用一半
+            let thread = null;
+            try {
+              thread = store.getThread(row.id);
+            } catch { /* 读不到就不给徽章 */ }
+            // 徽章与本体 /partners 同一份算法（device 与关系状态都不写）
+            const badge = thread ? partnerBadgeFor(row.id, { thread }).badge : null;
+            return {
+              id: row.id,
+              name,
+              hidden: store.isPartnerHidden(row.id),
+              // 还没认识完的伙伴：手机上只能看，不能开口（入口在本体那页）
+              needsOnboarding: !isSettled(row.id),
+              badge: mobileBadge(badge),
+              last: mobileLastLine(row.id, name, thread),
+            };
+          });
+        }
+        if (op === "mobile.page.index") {
+          return stampMobileHtml(fs.readFileSync(mobilePagePath, "utf8"));
+        }
+        if (op === "mobile.asset") {          const assetName = String(payload?.name ?? "");
+          if (!/^[a-zA-Z0-9._-]+$/.test(assetName)) throw new Error("资源名不对");
+          const bytes = fs.readFileSync(path.join(mobileAssetsDir, assetName));
+          return { base64: bytes.toString("base64"), type: assetMime(assetName) };
+        }
+        if (op === "mobile.thread.get") {
+          const agentId = String(payload?.agentId ?? "").trim();
+          if (!isValidPartnerId(agentId)) throw new Error("伙伴不对");
+          const limit = mobilePageLimit(payload?.limit);
+          const before = mobilePageBefore(payload?.before);
+          // 走桌上那条 /thread：硬撤回的占位、可见消息的过滤、seq 游标都在它手里，
+          // 手机不再算一遍，免得两边说的不一样。
+          const data = await viaRoutes(`/thread/${encodeURIComponent(agentId)}?limit=${limit}${before ? `&before=${before}` : ""}`);
+          const partnerSettings = store.getPartnerSettings(agentId);
+          const globalSettings = store.getGlobalSettings();
+          // 最新一轮伙伴回复看的是整本账，不是当前这页：翻页时手机不能拿页尾
+          // 那条当「最后一条」，否则改稿/删除会误判到老消息上。
+          const latestAssistant = store.getThread(agentId).messages.findLast((row) => row?.role === "assistant" && !row.recalled);
+          return {
+            agentId,
+            meSkin: globalSettings.bubbleSkin ?? null,
+            taSkin: data.partnerSkin ?? partnerSkinFor(agentId) ?? null,
+            // 头像开关跟桌面同一份设置：桌面关着，手机也不显示。
+            showAvatars: Boolean(globalSettings.messageAvatars),
+            background: partnerSettings.background ?? null,
+            // 亮在名字旁边的那枚徽章：与本体 /partners 同一份算法，形状已经挑过
+            badge: mobileBadge(partnerBadgeFor(agentId).badge),
+            // 修整入口的开关：关着时手机不显示改稿/重生成/删除
+            messageRefine: Boolean(globalSettings.messageRefine),
+            // 这位伙伴还没认识完：历史照给，写入口得回本体那页走完流程
+            needsOnboarding: !isSettled(agentId),
+            latestAssistantId: latestAssistant?.id ? String(latestAssistant.id) : null,
+            messages: (Array.isArray(data.messages) ? data.messages : []).map(mobileMessage),
+            // total/hasMore 是整本账的账：手机上要自己算还有没有更早的
+            total: Number(data.total ?? 0),
+            hasMore: Boolean(data.hasMore),
+          };
+        }
+        if (op === "mobile.background.bytes") {
+          const agentId = String(payload?.agentId ?? "").trim();
+          if (!isValidPartnerId(agentId)) throw new Error("伙伴不对");
+          const bg = store.getPartnerSettings(agentId).background;
+          if (!bg?.file) throw new Error("没背景");
+          const bytes = readBackgroundBytes(ctx.dataDir, bg.file);
+          if (!bytes) throw new Error("背景图不在了");
+          return {
+            base64: Buffer.from(bytes).toString("base64"),
+            type: bg.type || "image/png",
+            opacity: bg.opacity ?? 1,
+            tone: bg.tone ?? null,
+          };
+        }
+        if (op === "mobile.avatar") {
+          const who = String(payload?.agentId ?? "").trim();
+          const isUser = who === "__user";
+          if (!isUser && !isValidPartnerId(who)) throw new Error("伙伴不对");
+          const avatar = isUser ? await getAvatar("user", null, null) : await resolvePartnerAvatar(who);
+          if (!avatar?.bytes?.length) throw new Error("没有头像");
+          return { base64: Buffer.from(avatar.bytes).toString("base64"), type: avatar.contentType || "image/png" };
+        }
+        if (op === "mobile.sticker") {
+          const agentId = String(payload?.agentId ?? "").trim();
+          const stickerId = String(payload?.id ?? "").trim();
+          if (!isValidPartnerId(agentId) || !/^[A-Za-z0-9_-]{1,120}$/.test(stickerId)) throw new Error("表情包编号不合法");
+          // 图是二进制，不走 JSON 那条；聊天里尺寸不大，给缩略图就够了。
+          const path = payload?.thumb === false
+            ? `/sticker/${encodeURIComponent(agentId)}/${encodeURIComponent(stickerId)}`
+            : `/sticker-thumb/${encodeURIComponent(agentId)}/${encodeURIComponent(stickerId)}`;
+          const { buf, type } = await viaBinary(path, "image/png");
+          return { base64: buf.toString("base64"), type };
+        }
+        if (op === "mobile.stickers.list") {
+          const agentId = String(payload?.agentId ?? "").trim();
+          if (!isValidPartnerId(agentId)) throw new Error("伙伴不对");
+          const index = await readCatalog(ctx);
+          const catalog = index ? buildCatalog(index, agentId) : { stickers: [] };
+          // 茶话会自己的图库带她自己建的分组（手机上的分类就用这一套），
+          // 伙伴可用的来源图没分组，只能归到「全部」里。
+          const library = readStickerLibrary(ctx.dataDir);
+          const own = library.stickers.map((row) => ({
+            id: String(row.id),
+            groupIds: Array.isArray(row.groupIds) ? row.groupIds.map(String) : [],
+            emotion: (row.emotion || []).slice(0, 3),
+            description: String(row.description || "").slice(0, 60),
+            source: "own",
+          }));
+          const borrowed = catalog.stickers.map((row) => ({
+            id: String(row.id),
+            groupIds: [],
+            emotion: Array.isArray(row.emotion) ? row.emotion.slice(0, 3).map(String) : [],
+            description: typeof row.description === "string" ? row.description.slice(0, 60) : "",
+            source: "catalog",
+          }));
+          return {
+            groups: library.groups.map((group) => ({ id: String(group.id), name: String(group.name) })),
+            stickers: [...own, ...borrowed].slice(0, 600),
+          };
+        }
+        if (op === "mobile.voice") {
+          const agentId = String(payload?.agentId ?? "").trim();
+          const messageId = String(payload?.messageId ?? "").trim();
+          if (!isValidPartnerId(agentId) || !messageId) throw new Error("参数不对");
+          // 语音只认还挂在聊天记录里、没被撤回、真录好的那一条：
+          // 光看文件还在就发出去，等于把她撤回去的话又放一遍。
+          const message = store.getThread(agentId).messages.find((row) => row.id === messageId);
+          if (!message || message.recalled || message.voice?.status !== "ready") throw new Error("这条语音还没准备好");
+          const { buf, type } = await viaBinary(
+            `/voice/${encodeURIComponent(agentId)}/${encodeURIComponent(messageId)}`,
+            "audio/mpeg",
+          );
+          return { base64: buf.toString("base64"), type };
+        }
+        if (op === "mobile.voice.played") {
+          const agentId = String(payload?.agentId ?? "").trim();
+          const messageId = String(payload?.messageId ?? "").trim();
+          if (!isValidPartnerId(agentId) || !messageId) throw new Error("参数不对");
+          // 真的响过了才盖章；那条已经不在（或撤回、或语音还没就绪）就不补章。
+          const message = store.getThread(agentId).messages.find((row) => row.id === messageId);
+          if (!message || message.recalled || message.voice?.status !== "ready") throw new Error("这条语音听不了了");
+          const data = await viaRoutes(
+            `/voice/${encodeURIComponent(agentId)}/${encodeURIComponent(messageId)}/played`,
+            { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
+          );
+          return { playedAt: data.playedAt ?? null };
+        }
+        if (op === "mobile.attachment") {
+          const agentId = String(payload?.agentId ?? "").trim();
+          const attachmentId = String(payload?.attachmentId ?? payload?.id ?? "").trim();
+          if (!isValidPartnerId(agentId)) throw new Error("伙伴不对");
+          if (!/^[A-Za-z0-9_-]{1,120}$/.test(attachmentId)) throw new Error("图片编号不对");
+          // 附件的归属只看它现在挂在哪条消息上：消息被删、被硬撤回，图就不该还能从手机里取出来。
+          const message = store.getThread(agentId).messages.find((row) => String(row?.attachment?.id ?? "") === attachmentId);
+          if (!message || message.recalled) throw new Error("这张图不在了");
+          const { buf, type } = await viaBinary(
+            `/attachment/${encodeURIComponent(agentId)}/${encodeURIComponent(attachmentId)}`,
+            message.attachment?.mimeType || "application/octet-stream",
+          );
+          return { base64: buf.toString("base64"), type };
+        }
+        if (op === "mobile.turn.send") {
+          const agentId = String(payload?.agentId ?? "").trim();
+          if (!isValidPartnerId(agentId)) throw new Error("伙伴不对");
+          const clientMessageId = String(payload?.clientMessageId ?? "").trim();
+          if (!clientMessageId) return mobileSendTurn(payload);
+          // 同一张票在途：等它，不再开第二轮。
+          // 原 /turns 的幂等是「append 前查一次」，带图那条中间要 await 识图/落盘，
+          // 两个并发重试会双双越过那次检查，变成两条一模一样的话、两次识图钱。
+          // 这里只在手机适配层兜在途；跑完之后照旧交给原业务的幂等去接。
+          const ticket = `${agentId}\u0000${clientMessageId}`;
+          const running = inflightTurns.get(ticket);
+          if (running) return running;
+          const task = mobileSendTurn(payload);
+          inflightTurns.set(ticket, task);
+          try {
+            return await task;
+          } finally {
+            inflightTurns.delete(ticket);
+          }
+        }
+        if (op === "mobile.thread.read") {
+          const agentId = String(payload?.agentId ?? "").trim();
+          if (!isValidPartnerId(agentId)) throw new Error("伙伴不对");
+          const throughId = String(payload?.throughId ?? "").trim();
+          // 已读只看她真的看见的那一下：轮询 thread.get 不算，这条也不自动发。
+          const data = await viaRoutes(`/thread/${encodeURIComponent(agentId)}/read`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(throughId ? { throughId } : {}),
+          });
+          return {
+            changed: Boolean(data.changed),
+            readThroughId: data.readThroughId ?? null,
+            readThroughAt: data.readThroughAt ?? null,
+            unread: Number(data.unread ?? 0),
+          };
+        }
+        if (op === "mobile.message.feed") {
+          const agentId = String(payload?.agentId ?? "").trim();
+          const messageId = String(payload?.messageId ?? "").trim();
+          if (!isValidPartnerId(agentId) || !messageId) throw new Error("参数不对");
+          const emoji = String(payload?.emoji ?? "").trim();
+          if (!FEED_EMOJIS.includes(emoji)) throw new Error("这个投喂还不在小菜单里");
+          // 归属只看这位伙伴自己那本账：不在、不是她说的、或者已经撤回，一律不落盘
+          const message = store.getThread(agentId).messages.find((row) => row.id === messageId);
+          if (!message || message.role !== "assistant" || message.recalled) throw new Error("只能给伙伴还在的消息投喂");
+          // 业务一律交回桌面那条 POST（累加、盖章、诊断都在它手里），这里不重写一份
+          const data = await viaRoutes(
+            `/thread/${encodeURIComponent(agentId)}/feed/${encodeURIComponent(messageId)}`,
+            { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ emoji }) },
+          );
+          return { feed: mobileFeedSnapshot(data.feed) };
+        }
+        if (op === "mobile.message.favorite") {
+          const agentId = String(payload?.agentId ?? "").trim();
+          const messageId = String(payload?.messageId ?? "").trim();
+          if (!isValidPartnerId(agentId) || !messageId) throw new Error("参数不对");
+          const message = store.getThread(agentId).messages.find((row) => row.id === messageId);
+          if (!message || message.role !== "assistant" || message.recalled) throw new Error("只能收藏伙伴还在的消息");
+          // 开关也走桌面那条：收没收藏以它为准，手机不比一遍
+          const data = await viaRoutes(
+            `/thread/${encodeURIComponent(agentId)}/favorite/${encodeURIComponent(messageId)}`,
+            { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
+          );
+          // 只回一个开关：收藏夹里那份快照（含全文）不跟着出去
+          return { favorite: data.favorite === true };
+        }
+        // ── 回合状态：手机等回复时轮询这一条 ──
+        if (op === "mobile.turn.get") {
+          const agentId = mobilePartner(payload);
+          const turnId = mobileId(payload, "turnId", "回合编号");
+          const turn = turns.get(turnId);
+          // 回合只在宿主内存里：不是这位伙伴的、或者已经清掉的就当没有
+          if (!turn || turn.agentId !== agentId) throw new Error("这一轮已经结束了");
+          const thread = store.getThread(agentId);
+          // ready 的结果必须先确认那条回复还在本 thread 且没被撤回：
+          // 不然旧回合会把已经删掉/撤回的旧文案重新贴回手机屏幕。
+          const reply = turn.replyMessageId
+            ? thread.messages.find((row) => row.id === turn.replyMessageId && !row.recalled) ?? null
+            : null;
+          const ready = turn.status === "ready" && Boolean(reply);
+          // 改过稿的回复不能再拿发动那一刻的 bubbles：那已经不是屏上这句了
+          const edited = Boolean(reply && (reply.editedAt || reply.userRefined));
+          return {
+            turnId: String(turn.id),
+            status: String(turn.status ?? "pending"),
+            readAfterMs: typeof turn.readAfterMs === "number" ? turn.readAfterMs : null,
+            items: ready ? (edited ? mobileItemsFromMessage(reply) : mobileTurnItems(turn.bubbles)) : null,
+            replyMessageId: reply ? String(reply.id) : null,
+            message: reply ? mobileMessage(reply) : null,
+            // error 是个带 message 的对象：只把字拿出来，路径也得抹掉
+            error: turn.error ? mobileSafeText(turn.error.message ?? turn.error) : null,
+          };
+        }
+        // ── 消息上的那几个动作：门禁全在桌面那条，手机只负责身份与归属 ──
+        if (op === "mobile.message.retract") {
+          const agentId = mobilePartner(payload);
+          const messageId = mobileId(payload, "messageId", "消息编号");
+          const message = store.getThread(agentId).messages.find((row) => row.id === messageId);
+          // 撤回只针对她自己发的那条；时限/是否已在接话由桌面那条门禁说了算
+          if (!message || message.role !== "user" || message.recalled) throw new Error("这条消息不能撤回");
+          const data = await viaRoutes(`/thread/${encodeURIComponent(agentId)}/retract/${encodeURIComponent(messageId)}`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: "{}",
+          });
+          return { ok: true, messageId, mode: data.mode ?? null };
+        }
+        if (op === "mobile.message.edit") {
+          const agentId = mobilePartner(payload);
+          const messageId = mobileId(payload, "messageId", "消息编号");
+          const text = typeof payload?.text === "string" ? payload.text.trim() : "";
+          if (!text) throw new Error("回复不能改成空白");
+          if (text.length > 4000) throw new Error("一条最多 4000 字");
+          // 打开编辑时那句原文：只校类型就透传，真比对在本体那条路由里做（那里才和 patch 同一段）
+          const rawExpected = payload?.expectedText;
+          if (rawExpected !== undefined && rawExpected !== null && typeof rawExpected !== "string") {
+            throw new Error("打开编辑时的那句原文不对");
+          }
+          const expectedText = typeof rawExpected === "string" ? rawExpected : null;
+          mobileAssistantTarget(agentId, messageId);
+          const data = await viaRoutes(`/thread/${encodeURIComponent(agentId)}/refine/${encodeURIComponent(messageId)}/edit`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ text, ...(expectedText === null ? {} : { expectedText }) }),
+          });
+          return { ok: true, message: data.message ? mobileMessage(data.message) : null };
+        }
+        if (op === "mobile.message.regenerate") {
+          const agentId = mobilePartner(payload);
+          const messageId = mobileId(payload, "messageId", "消息编号");
+          mobileRequireSettled(agentId);
+          mobileAssistantTarget(agentId, messageId);
+          // 重生成本体要调一次模型（这就是它的业务）；手机这条路不额外加任何调用
+          const data = await viaRoutes(`/thread/${encodeURIComponent(agentId)}/refine/${encodeURIComponent(messageId)}/regenerate`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: "{}",
+          });
+          return { ok: true, messageId: data.messageId ?? messageId };
+        }
+        if (op === "mobile.message.delete") {
+          const agentId = mobilePartner(payload);
+          const messageId = mobileId(payload, "messageId", "消息编号");
+          const message = store.getThread(agentId).messages.find((row) => row.id === messageId);
+          if (!message) throw new Error("这条已经不在聊天记录里了");
+          if (message.recalled) throw new Error("这条已经撤回了");
+          // 戳一戳/动作只清聊天账；其余只肯删伙伴的回复（最后一条与在途判断在桌面那条里）
+          if (!["poke", "action"].includes(message.kind) && message.role !== "assistant") throw new Error("只能删伙伴的回复");
+          const data = await viaRoutes(`/thread/${encodeURIComponent(agentId)}/refine/${encodeURIComponent(messageId)}`, {
+            method: "DELETE",
+          });
+          return { ok: true, messageId, action: Boolean(data.action), restoredUnread: Boolean(data.restoredUnread) };
+        }
+        // ── 收藏：只读当前伙伴，正文用现在还活着的那条重算 ──
+        if (op === "mobile.favorites.list") {
+          const agentId = mobilePartner(payload);
+          const thread = store.getThread(agentId);
+          const items = [];
+          for (const favorite of store.listFavorites()) {
+            if (favorite?.agentId !== agentId) continue;
+            const message = thread.messages.find((row) => row.id === favorite.messageId && !row.recalled);
+            // 源消息删了/撤回了就不出现在列表里：不拿收藏快照把原话复活
+            if (!message) continue;
+            items.push({
+              id: String(favorite.id),
+              agentId,
+              messageId: String(favorite.messageId),
+              // 正文用现在这条：她改过稿就给改后的
+              text: String(message.text ?? "").slice(0, 4000),
+              at: message.at ?? favorite.at ?? null,
+              kind: message.voice ? "voice" : "text",
+              voice: message.voice
+                ? {
+                  status: message.voice.status ?? null,
+                  durationMs: typeof message.voice.durationMs === "number" ? message.voice.durationMs : null,
+                  text: typeof message.voice.text === "string" ? message.voice.text : "",
+                  playedAt: message.voice.playedAt ?? null,
+                }
+                : null,
+            });
+          }
+          return { items };
+        }
+        if (op === "mobile.favorite.remove") {
+          const agentId = mobilePartner(payload);
+          const id = mobileId(payload, "id", "收藏编号");
+          const favorite = store.getFavorite(id);
+          if (!favorite) throw new Error("这条收藏已经不在了");
+          if (favorite.agentId !== agentId) throw new Error("只能删自己的收藏");
+          await viaRoutes(`/favorites/${encodeURIComponent(id)}`, { method: "DELETE" });
+          return { ok: true };
+        }
+        // ── 掷一下（本体那条会落一条动作消息，不即时调模型） ──
+        if (op === "mobile.action.send") {
+          const agentId = mobilePartner(payload);
+          mobileRequireSettled(agentId);
+          const data = await viaRoutes(`/action/${encodeURIComponent(agentId)}`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: "{}",
+          });
+          return { ok: true, messageId: data.messageId ?? null, line: mobileSafeText(data.line) };
+        }
+        // ── 待办确认：按真实伙伴字段挑，跨伙伴的 key 不接 ──
+        if (op === "mobile.todos.list") {
+          const agentId = mobilePartner(payload);
+          const items = store.getTodoProposals()
+            .filter((row) => row?.agentId === agentId)
+            .map((row) => ({
+              key: String(row.key),
+              title: String(row.title ?? "").slice(0, 120),
+              at: row.at ?? null,
+              date: row.date ?? null,
+              said: String(row.said ?? "").slice(0, 120),
+            }));
+          return { items };
+        }
+        if (op === "mobile.todos.confirm" || op === "mobile.todos.dismiss") {
+          const agentId = mobilePartner(payload);
+          const key = mobileTodoKey(payload);
+          const found = store.getTodoProposals().find((row) => row.key === key);
+          if (!found || found.agentId !== agentId) throw new Error("这条确认不是这位伙伴的");
+          if (op === "mobile.todos.dismiss") {
+            await viaRoutes(`/todos/proposals/${encodeURIComponent(key)}/dismiss`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: "{}",
+            });
+            return { ok: true };
+          }
+          // 本体确认失败时回的是 200 + ok:false（窗留着让她再点）；这里照它抛出去，
+          // 不能把「没记上」当成成功报给手机。
+          const data = await viaRoutes(`/todos/proposals/${encodeURIComponent(key)}/confirm`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: "{}",
+          });
+          return {
+            ok: true,
+            alreadyDone: Boolean(data.alreadyDone),
+            todo: data.todo
+              ? {
+                title: String(data.todo.title ?? "").slice(0, 120),
+                date: data.todo.date ?? null,
+                at: data.todo.at ?? null,
+              }
+              : null,
+          };
+        }
+        // 图库在手机上只读：她在这儿只看分类、选图发图（发图走 turn.send 的 stickerId，
+        // 图本身走 /sticker 媒体口）。来源、分组增删改、导入、移除都是桌面那页的事，
+        // 手机一个写口都不留——要整理图库回茶话会本体。
+        // 管理面那三条（status/config/password）也不在这张名单里：它们只挂桌面本机路由，
+        // 手机这条路永远拿不到密码回显，也改不了开关。
+        throw new Error(`unknown op: ${op}`);
+    };
+
+    try {
+      mobileAccess = createMobileAccess({
+        dataDir: ctx.dataDir,
+        execPath: process.execPath,
+        handler: mobileHandler,
+        // 探测只扫当前伙伴；名单变长也要在下次刷新时跟上。
+        listPartnerIds: async () => (await listAllPartners()).map((row) => row.id),
+        threadSnapshot: (agentId) => mobileThreadFingerprint(agentId),
+        log: (line) => ctx.logger.info(`[${name}] ${line}`),
+        onDiagnostics: (event) => diagnostics(event),
+      });
+      const initial = mobileAccess.load();
+      // apply 是 async 的：真要起网关时会先 await 旧实例的 dispose（同 dataDir 重新 apply 的场景），
+      // 不能同步点火就不管，否则新进程会和旧进程抢同一个端口。
+      void Promise.resolve(mobileAccess.apply()).catch((error) => {
+        ctx.logger.error(`[${name}] 手机接入启动出错: ${error?.message || error}`);
+      });
+      ctx.logger.info(`[${name}] 手机接入：${initial.enabled ? `已启用，端口 ${initial.port}` : "关着"}`);
+      if (initial.configFile?.status === "corrupt") {
+        // 坏了只能报：不拿一份读不懂的配置去起进程，也不默默把它覆盖掉。
+        ctx.logger.warn(`[${name}] 手机接入配置读不出来，先禁用：${initial.configFile.error}`);
+      }
+    } catch (error) {
+      mobileAccess = null;
+      ctx.logger.error(`[${name}] 手机接入没起来: ${error?.message || error}`);
+    }
+  }
 }
 
 export default { name, version, apply };

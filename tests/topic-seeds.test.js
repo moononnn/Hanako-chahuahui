@@ -18,6 +18,7 @@ import {
   pickMotifForSeeds,
   pickSeed,
   readSeedBook,
+  seedHistoryFor,
   seedKindHint,
   seedSpec,
   usableSeeds,
@@ -163,8 +164,78 @@ test("每种位置都有开口说明，认不出的落回好奇", () => {
   assert.match(seedKindHint("exchange"), /换习惯/);
   assert.match(seedKindHint("self"), /别编现实里发生过的经历/);
   assert.match(seedKindHint("ask"), /征求意见/);
-  assert.match(seedKindHint("乱写的"), /还没想明白/);
-  assert.match(seedKindHint("curio"), /别写成结论/, "好奇类不许写成想通了");
+  // 2026-10-30 放松：好奇不再要求装「我还没想明白」，说好奇、新发现、偏好都成立
+  assert.match(seedKindHint("乱写的"), /说好奇、说新发现/);
+  assert.match(seedKindHint("curio"), /不必非带问句/);
+  assert.doesNotMatch(seedKindHint("curio"), /还没想明白的事/);
+  // 求解只在真拿不准时用；已经聊出偏好就接着那个说，不重问一遍
+  assert.match(seedKindHint("ask"), /不重新问她一遍/);
+});
+
+const sentRow = (seedId, text, at, extra = {}) => ({
+  role: "assistant", proactive: true, seedId, text, at: at.toISOString(), ...extra,
+});
+
+test("同方向以前真说过的正文能捞回来：只认同一个母题、只认发出去的", () => {
+  const book = grown([
+    { kind: "stand", hook: "清油和牛油差在哪", angle: "我认死牛油" },
+    { kind: "exchange", hook: "蘸料台先舀什么", angle: "我永远是蒜泥打底" },
+  ]);
+  const mixed = addSeeds(book, [{ kind: "curio", hook: "老小区要不要装个猫眼", angle: "" }], {
+    motif: { id: "h_laoxiaoqu", name: "老小区" },
+    now: NOW,
+  }).book;
+  assert.deepEqual(seedHistoryFor(mixed, { motifId: MOTIF.id }, { now: NOW, messages: [] }), [], "没发过的库存不算经历");
+
+  const used = markSeedUsed(mixed, book.seeds[0].id, "我先说：牛油清油我都吃，但牛油更香", NOW);
+  const messages = [
+    { role: "user", text: "牛油清油你都吃？", at: NOW.toISOString() },
+    sentRow(book.seeds[0].id, "我先说：牛油清油我都吃，但牛油更香", NOW),
+  ];
+  assert.deepEqual(seedHistoryFor(used, { motifId: MOTIF.id }, { now: NOW, messages }), [
+    { at: NOW.toISOString(), text: "我先说：牛油清油我都吃，但牛油更香" },
+  ]);
+  assert.deepEqual(seedHistoryFor(used, { motifId: "h_laoxiaoqu" }, { now: NOW, messages }), [], "别的方向的话不能串过来");
+  assert.deepEqual(seedHistoryFor(used, {}, { now: NOW, messages }), [], "种子没母题就不猜");
+  assert.deepEqual(seedHistoryFor(used, null, { now: NOW, messages }), []);
+  assert.deepEqual(seedHistoryFor(used, { motifId: MOTIF.id }, { now: NOW }), [], "没给线程就宁可空着");
+});
+
+test("历史只认线程里真在的那一行：撤回、Ctrl+Z、换个人说的都不算", () => {
+  const book = grown([{ kind: "stand", hook: "清油和牛油差在哪", angle: "我认死牛油" }]);
+  const seedId = book.seeds[0].id;
+  const used = markSeedUsed(book, seedId, "旧影子：只认牛油", NOW);
+  const motif = { motifId: MOTIF.id };
+
+  // 撤回：账上 usedText 还在，但线程里那行已标 recalled
+  const recalled = [sentRow(seedId, "旧影子：只认牛油", NOW, { recalled: true })];
+  assert.deepEqual(seedHistoryFor(used, motif, { now: NOW, messages: recalled }), [], "删掉的话不能借账本复活");
+
+  // 按范围删掉：线程里根本没有这行
+  assert.deepEqual(seedHistoryFor(used, motif, { now: NOW, messages: [{ role: "user", text: "嗯", at: NOW.toISOString() }] }), [], "没出处就不算历史");
+
+  // 消息还在，但 seedId 不是这颗种子（别的来源、别家的账）
+  const otherSeed = [sentRow("seed_另一个", "旧影子：只认牛油", NOW)];
+  assert.deepEqual(seedHistoryFor(used, motif, { now: NOW, messages: otherSeed }), []);
+
+  // 不是话的行、不是她说的行、空正文都不算
+  for (const row of [
+    sentRow(seedId, "旧影子：只认牛油", NOW, { kind: "action" }),
+    { role: "user", seedId, text: "旧影子：只认牛油", at: NOW.toISOString() },
+    sentRow(seedId, "   ", NOW),
+  ]) {
+    assert.deepEqual(seedHistoryFor(used, motif, { now: NOW, messages: [row] }), []);
+  }
+});
+
+test("她后来改过那句话：历史用线程里的新正文，不拿旧 usedText 顶上", () => {
+  const book = grown([{ kind: "stand", hook: "清油和牛油差在哪", angle: "我认死牛油" }]);
+  const seedId = book.seeds[0].id;
+  const used = markSeedUsed(book, seedId, "旧影子：只认牛油", NOW);
+  const messages = [sentRow(seedId, "改过之后：清油也行，图个不腻", NOW)];
+  const history = seedHistoryFor(used, { motifId: MOTIF.id }, { now: NOW, messages });
+  assert.deepEqual(history, [{ at: NOW.toISOString(), text: "改过之后：清油也行，图个不腻" }]);
+  assert.doesNotMatch(history[0].text, /旧影子/, "编辑后的旧 usedText 不得泄漏");
 });
 
 test("母题用掉的种子攒到上限就算聊透，不再挑去发", () => {
@@ -177,6 +248,52 @@ test("母题用掉的种子攒到上限就算聊透，不再挑去发", () => {
   assert.equal(usableSeeds(book, { now: NOW }).length, 1, "还剩一条没用，但母题已经聊透");
   const later = new Date(NOW.getTime() + SEED_MOTIF_COOLDOWN_MS + 60 * 1000);
   assert.equal(pickSeed(book, { now: later }), null, "聊透的母题过了冷却也不再挑");
+});
+
+test("历史只看过去：未来时间不算，过期的不算，六条为限且按时间正序", () => {
+  const future = {
+    id: "s_future", motifId: MOTIF.id, motifName: MOTIF.name, kind: "curio",
+    hook: "未来的面", angle: "", createdAt: NOW.toISOString(),
+    expiresAt: new Date(NOW.getTime() + 24 * 3600 * 1000).toISOString(),
+    usedAt: new Date(NOW.getTime() + 3600 * 1000).toISOString(), usedText: "明天才会说的话",
+  };
+  assert.deepEqual(seedHistoryFor({ seeds: [future] }, { motifId: MOTIF.id }, { now: NOW, messages: [sentRow(future.id, "明天才会说的话", new Date(NOW.getTime() + 3600 * 1000))] }), [], "时间在未来的那行不算历史");
+
+  // 二十五小时前说过的那条：已经出了母题冷却窗，但还在种子的三十天保质期里、线程里也还在，照样回读
+  const oldBook = addSeeds(emptySeedBook(), [{ kind: "stand", hook: "蘸料台先舀什么", angle: "蒜泥打底" }], {
+    motif: MOTIF, now: new Date(NOW.getTime() - 26 * 3600 * 1000),
+  }).book;
+  const longAgo = new Date(NOW.getTime() - 25 * 3600 * 1000);
+  const usedOld = markSeedUsed(oldBook, oldBook.seeds[0].id, "昨天那句：只认蒜泥打底", longAgo);
+  const oldMessages = [sentRow(oldBook.seeds[0].id, "昨天那句：只认蒜泥打底", longAgo)];
+  assert.deepEqual(seedHistoryFor(usedOld, { motifId: MOTIF.id }, { now: NOW, messages: oldMessages }), [
+    { at: longAgo.toISOString(), text: "昨天那句：只认蒜泥打底" },
+  ]);
+  const expired = new Date(NOW.getTime() + 31 * 24 * 3600 * 1000);
+  assert.deepEqual(seedHistoryFor(usedOld, { motifId: MOTIF.id }, { now: expired, messages: oldMessages }), [], "过期的种子读回来就清了");
+
+  const many = addSeeds(emptySeedBook(), Array.from({ length: 8 }, (_, i) => ({ kind: "curio", hook: `第${i}个面`, angle: "" })), { motif: MOTIF, now: NOW }).book;
+  let book = many;
+  const manyMessages = [];
+  for (let i = 0; i < 8; i += 1) {
+    const at = new Date(NOW.getTime() - (8 - i) * 3600 * 1000);
+    book = markSeedUsed(book, many.seeds[i].id, `第${i}条说过的`, at);
+    manyMessages.push(sentRow(many.seeds[i].id, `第${i}条说过的`, at));
+  }
+  assert.deepEqual(
+    seedHistoryFor(book, { motifId: MOTIF.id }, { now: NOW, messages: manyMessages }).map((row) => row.text),
+    Array.from({ length: 6 }, (_, i) => `第${i + 2}条说过的`),
+    "只取最近六条，早的让位，顺序按时间正着排",
+  );
+  // 线程里已经自然裁掉的那几条（例如更早的旧消息）不回读
+  const trimmed = manyMessages.slice(-3);
+  assert.deepEqual(
+    seedHistoryFor(book, { motifId: MOTIF.id }, { now: NOW, messages: trimmed }).map((row) => row.text),
+    ["第5条说过的", "第6条说过的", "第7条说过的"],
+    "线程里不在了就不冒充说过",
+  );
+  assert.equal(seedHistoryFor(book, { motifId: MOTIF.id }, { now: NOW, messages: manyMessages, limit: 0 }).length, 0);
+  assert.equal(seedHistoryFor(book, { motifId: MOTIF.id }, { now: NOW, messages: manyMessages, limit: 2 }).length, 2);
 });
 
 test("聊透的母题不再被挑去长新种子", () => {

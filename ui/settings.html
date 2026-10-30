@@ -49,6 +49,14 @@
     .usage-line b { color: var(--ink); font-variant-numeric: tabular-nums; }
     .usage-line small { color: #8d8578; font-variant-numeric: tabular-nums; }
     .usage-empty { margin: 0; color: var(--ink-soft); font-size: 12.5px; }
+    /* 手机接入：地址一行一个，密码等宽好念 */
+    .mobile-address-list { display: grid; gap: 8px; margin-top: 12px; }
+    .mobile-address { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid var(--line-soft); border-radius: var(--r-md); background: var(--paper); }
+    .mobile-address code { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; color: var(--ink); font-size: 12.5px; }
+    .mobile-address-net { flex: none; color: #8d8578; font-size: 11.5px; }
+    .mobile-address .soft-button { flex: none; }
+    .mobile-address-empty { margin: 0; color: var(--ink-soft); font-size: 12.5px; }
+    .mobile-password { display: inline-block; margin-top: 10px; padding: 8px 12px; border-radius: var(--r-md); background: var(--paper-deep); color: var(--ink); font-size: 14px; letter-spacing: .04em; overflow-wrap: anywhere; }
   </style>
 </head>
 <body>
@@ -82,6 +90,7 @@
       <button class="tab" id="tab-search" data-tab="search" role="tab" aria-selected="false" aria-controls="panel-search">搜索</button>
       <button class="tab" id="tab-proactive" data-tab="proactive" role="tab" aria-selected="false" aria-controls="panel-proactive">主动联系</button>
       <button class="tab" id="tab-partners" data-tab="partners" role="tab" aria-selected="false" aria-controls="panel-partners">伙伴</button>
+      <button class="tab" id="tab-mobile" data-tab="mobile" role="tab" aria-selected="false" aria-controls="panel-mobile">手机</button>
     </nav>
 
     <section id="panel-chat" role="tabpanel" aria-labelledby="tab-chat" tabindex="0">
@@ -480,6 +489,46 @@
       <div class="partner-grid" id="partner-list"></div>
       <div id="partner-body"></div>
     </section>
+
+    <section id="panel-mobile" role="tabpanel" aria-labelledby="tab-mobile" tabindex="0" hidden>
+      <div class="section-head">
+        <div><h2>手机接入</h2><p>同一个 Wi-Fi 下，用手机浏览器打开下面那个地址，就能接着聊。电脑和 Hana 得开着。</p></div>
+      </div>
+      <article class="setting-card compact">
+        <div class="setting-copy">
+          <h3>允许手机连进来</h3>
+          <p>默认关着。开了之后，这台电脑会在局域网里等手机连进来；密码就是这扇门的钥匙。</p>
+          <p class="setting-hint" id="mobile-warn">只在自己信得过的局域网里开：地址一旦被弄到公网上去，谁拿到地址和密码都能进来。</p>
+        </div>
+        <button class="switch" id="mobile-switch" type="button" role="switch" aria-checked="false">
+          <span class="track"><span></span></span><span class="switch-label" id="mobile-switch-label">关闭</span>
+        </button>
+      </article>
+      <article class="setting-card">
+        <div class="card-title"><div><h3>端口与地址</h3><p>端口改完要点保存；被别的程序占着就会起不来。地址是这台电脑在局域网里的门牌号。</p></div></div>
+        <div class="inline-field">
+          <span class="key-head"><span>端口</span></span>
+          <input id="mobile-port" type="text" inputmode="numeric" autocomplete="off" placeholder="18090">
+        </div>
+        <div class="detail-actions">
+          <button class="soft-button" id="mobile-save" type="button">保存</button>
+          <button class="soft-button" id="mobile-refresh" type="button">刷新状态</button>
+        </div>
+        <small class="detail-field-note" id="mobile-status" aria-live="polite"></small>
+        <small class="detail-field-note" id="mobile-notice" aria-live="polite" hidden></small>
+        <div class="mobile-address-list" id="mobile-addresses"></div>
+      </article>
+      <article class="setting-card">
+        <div class="card-title"><div><h3>密码</h3><p>密码只在这台电脑的设置页里显示，手机那头看不到它。密码换了，所有手机都得重新解锁。</p></div></div>
+        <div class="detail-actions">
+          <button class="soft-button" id="mobile-password-show" type="button">查看密码</button>
+          <button class="soft-button" id="mobile-password-copy" type="button">复制密码</button>
+          <button class="soft-button" id="mobile-password-reset" type="button">重置密码</button>
+        </div>
+        <small class="detail-field-note" id="mobile-password-note" aria-live="polite"></small>
+        <code class="mobile-password" id="mobile-password" hidden></code>
+      </article>
+    </section>
   </main>
 
   <div class="toast" id="status" role="status" aria-live="polite"></div>
@@ -571,6 +620,7 @@
   <script type="module">
     import { hana as localHana } from "./assets/sdk.js";
     import { PROFILES, DEFAULT_PROFILE_ID, ensureAudio, normalizeSettings, play as playMessageSound } from "./assets/message-sound.js";
+    import { mountMobileSettings } from "./assets/mobile-settings.js";
 
     // 嵌在聊天卡里时复用外层宿主桥；单独打开时仍保留原来的 SDK 兜底。
     const hana = window.parent !== window && window.parent.__chahuahuiHana ? window.parent.__chahuahuiHana : localHana;
@@ -588,7 +638,7 @@
 
     // 这一页自己的版本号：后端读同一个文件里的这一行，两边对不上就说明她眼前是旧的。
     // （以前用文件哈希当戳，但那个值是后端给的，页面旧了它照样显示新值，等于没测。）
-    const UI_BUILD = "20261027.2";
+    const UI_BUILD = "20261030.1";
 
     const el = {
       status: document.getElementById("status"),
@@ -684,6 +734,11 @@
       void hana.cards.open("panel").catch((error) => say(`聊天页没打开：${error.message}`, "err"));
     });
 
+    // 手机接入这一栏：装配在 assets/mobile-settings.js 里，这里只把 api / 剪贴板 / 提示递进去。
+    // 放在这里而不是更上面，是因为这一页里有一段「只跑 api 那几行」的用例切片，
+    // 切片里不该出现依赖整页装配的东西。
+    const mobilePanel = mountMobileSettings({ root: el.panels.mobile, api, hana, say });
+
     function say(text, kind = "") {
       el.status.textContent = text || "";
       el.status.className = `toast ${kind}${text ? " show" : ""}`;
@@ -701,6 +756,7 @@
       search: "伙伴自己上网找东西时走哪条路。什么都不填，就是原来的默认搜索。",
       proactive: "管大家什么时候来、别一次挤上来。",
       partners: "先选伙伴，再看 ta 自己的设置和记忆。",
+      mobile: "在同一个 Wi-Fi 下用手机接着聊。默认关着，密码只在这台电脑上看得到。",
     };
 
     function setTab(name) {
@@ -715,6 +771,7 @@
       el.sub.textContent = TAB_SUBTITLES[name] ?? "把聊天过成舒服的样子。常改的排在前头，伙伴自己的事单独收好。";
       if (name === "partners" && !currentId && partners.length) void openPartner(partners[0].id);
       if (name === "usage") void loadUsage();
+      if (name === "mobile") void mobilePanel?.refresh();
     }
 
     // ── 用量那一页 ──

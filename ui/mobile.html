@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f7f4ec">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>茶话会</title>
+<link rel="stylesheet" href="/assets/panel.css">
+<link rel="stylesheet" href="/assets/bubble-skins.css">
+<link rel="stylesheet" href="/assets/mobile-tools.css">
+<style>
+  /* 手机壳：只负责铺满屏幕和排布，聊天区里的每一块（行、气泡、戳一戳、头像）
+     都直接沿用桌面的 class，皮肤那套 CSS 变量原样继承下来。 */
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+  /* 底色、正文色、字体栈一律继承 panel.css：这一页不另立一套字体（也就不会多下一份字体）。 */
+  body { -webkit-tap-highlight-color: transparent; }
+  [hidden] { display: none !important; }
+
+  /* 解锁 */
+  .ch-gate { position: fixed; inset: 0; background: var(--bg, #f7f4ec); display: grid; place-items: center; padding: 24px; z-index: 60; }
+  .ch-gate .box { width: 100%; max-width: 360px; }
+  .ch-gate h2 { font-size: 18px; margin: 0 0 6px; }
+  .ch-gate p { color: var(--ink-soft, #767066); font-size: 13px; margin: 0 0 18px; line-height: 1.6; }
+  .ch-gate input {
+    width: 100%; padding: 14px 16px; font-size: 17px; letter-spacing: 4px; text-align: center;
+    border-radius: var(--r-md, 12px); border: 1px solid var(--line, #e7dfd0);
+    background: var(--paper, #fffdf9); color: var(--ink, #43403a);
+  }
+  .ch-gate button {
+    margin-top: 12px; width: 100%; padding: 14px; font-size: 16px; border: none;
+    border-radius: var(--r-md, 12px); background: var(--primary, #5dae8e); color: #fff; font-weight: 600;
+  }
+  .ch-gate .err { color: #c2593f; font-size: 13px; margin-top: 10px; min-height: 18px; text-align: center; }
+
+  /* 名单 */
+  #home { height: 100%; display: flex; flex-direction: column; }
+  .ch-head { padding: calc(16px + env(safe-area-inset-top)) 20px 10px; display: flex; align-items: baseline; gap: 10px; }
+  .ch-head h1 { font-size: 19px; margin: 0; letter-spacing: .5px; }
+  .ch-head .hint { font-size: 12px; color: var(--ink-soft, #767066); }
+  .ch-list { flex: 1 1 auto; overflow-y: auto; padding: 4px 12px 24px; display: grid; gap: 8px; align-content: start; }
+  .ch-friend {
+    background: var(--paper, #fffdf9); border: 1px solid var(--line, #e7dfd0);
+    border-radius: var(--r-lg, 16px); padding: 12px 14px;
+    display: flex; align-items: center; gap: 12px; font-size: 15px;
+  }
+  .ch-friend, .ch-friend * { cursor: pointer; }
+  .ch-friend:active { background: var(--accent-soft, #eef7f2); }
+  .ch-av {
+    width: 40px; height: 40px; border-radius: var(--r-sm, 9px); flex: 0 0 auto;
+    background: #cfe8dc; color: var(--primary-ink, #2f6b52); overflow: hidden;
+    display: grid; place-items: center; font-size: 16px; font-weight: 700;
+  }
+  .ch-av img, .msg-av img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .ch-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+  .ch-meta small { color: var(--ink-soft, #767066); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ch-dot {
+    flex: 0 0 auto; min-width: 8px; height: 8px; border-radius: 999px;
+    background: #e2725f; box-shadow: 0 0 0 2px rgba(226, 114, 95, .16);
+  }
+  .ch-empty, .ch-loading { padding: 32px 20px; color: var(--ink-soft, #767066); font-size: 14px; text-align: center; }
+
+  /* 聊天窗：皮肤（底色、边线、圆角、阴影、磨砂）全用本体 .chat 那一套，
+     手机只要求它铺满整屏——所以这里只把圆角/边框/阴影压掉，不重画任何一块。 */
+  #chat { position: fixed; inset: 0; z-index: 50; border: 0; border-radius: 0; box-shadow: none; }
+  /* 头：.chat-head 自带磨砂和朝下化开的那层雾，这里只补安全区与手机上的间距 */
+  .ch-bar { flex: 0 0 auto; padding: calc(10px + env(safe-area-inset-top)) 12px 10px; }
+  .ch-ident { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1 1 auto; }
+  .ch-who {
+    flex: 0 1 auto; min-width: 0; font-size: 15px; font-weight: 600; color: var(--primary-ink, #2f6b52);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* 徽章：形状/色/字号全用本体 .chat-state-badge 与 .state-badge--<tone>，
+     手机只给一个上限，窄屏时先缩它、再截名字。 */
+  #chat .chat-state-badge { flex: 0 1 auto; min-width: 0; max-width: 40%; }
+  /* 有背景时跟头尾两条玻璃用同一套主题色；没背景就保留各状态自己的语义色 */
+  #chat.has-bg .chat-state-badge {
+    --badge-bg: var(--status-bg, #eef7f2);
+    --badge-ink: var(--status-fg, var(--primary-ink, #2f6b52));
+    --badge-line: var(--status-border, var(--line, #e7dfd0));
+  }
+  /* 返回：紧凑的 32px 圆角键，保留背景取色与焦点态 */
+  .ch-back {
+    flex: 0 0 auto; display: grid; place-items: center;
+    width: 32px; height: 32px; margin: -1px 0 -1px -2px; padding: 0;
+    border: 1px solid var(--jump-border, transparent); border-radius: var(--r-sm, 9px);
+    background: var(--jump-bg, transparent); color: var(--jump-fg, var(--primary-deep, #3f8f6c));
+    font: inherit; cursor: pointer;
+  }
+  .ch-back svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .ch-back:hover { background: var(--jump-hover-bg, var(--accent-soft, #eef7f2)); }
+  .ch-back:active { transform: scale(.94); }
+  .ch-back:focus-visible { outline: 2px solid var(--primary, #5dae8e); outline-offset: 2px; }
+  .ch-who { margin-right: 0; }
+  .ch-state {
+    flex: 0 1 auto; min-width: 0; max-width: 34%; font-size: 12px; color: var(--ink-soft, #767066);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ch-stream {
+    flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch;
+    padding: 14px 12px 10px; display: flex; flex-direction: column; gap: 8px;
+  }
+  .ch-stream .bubble { font-size: 15px; line-height: 1.55; }
+  /* 同一条消息里的多个气泡、引用块、图、表情、语音：每条之间 8px。
+     本体 .msg-col 没 gap，多截的气泡会粘成一团；只在本页收，不动本体 CSS。 */
+  #chat .msg-col { gap: 8px; }
+  /* .msg-line 在本体里是横排（给引用块/气泡并排用的），手机屏窄，改成竖排：
+     引用块自己占一行，不跟正文抢横向空间；正文/图/语音上下排，间距由 gap 兜。 */
+  #chat .msg-line { flex-direction: column; align-items: flex-start; gap: 6px; }
+  #chat .row.me .msg-line { align-items: flex-end; }
+  /* 投喂挂件：跟气泡同一侧，不拉满一列 */
+  #chat .message-feed { align-self: flex-start; }
+  #chat .message-feed.from-partner { align-self: flex-end; margin-left: 0; }
+
+  /* 消息菜单：形状/颜色/阴影全用本体的 .message-feed-menu，手机只把按钮放大到
+     42px，并把 8 个投喂排成 4×2 两行，免得挤成一串溢出屏。 */
+  .message-feed-menu { max-width: calc(100vw - 16px); }
+  .message-feed-menu button { width: 42px; height: 42px; font-size: 21px; }
+  .message-feed-menu .message-feed-emojis {
+    display: grid; grid-template-columns: repeat(4, 42px); gap: 2px;
+  }
+  .message-feed-menu .message-feed-actions { gap: 4px; }
+  .message-feed-menu .message-menu-action {
+    flex: 1 1 auto; min-width: 0; height: 42px; padding: 0 6px; font-size: 13px;
+  }
+
+  /* 剪贴板真的写不进去时：把正文放成一个可选中、可长按复制的只读框。
+     不谎报“复制好了”，也不把正文丢掉。 */
+  .ch-copy-box {
+    position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom));
+    z-index: 85; display: flex; flex-direction: column; gap: 8px; padding: 12px;
+    background: var(--paper, #fffdf9); border: 1px solid var(--line, #e7dfd0);
+    border-radius: var(--r-md, 12px); box-shadow: var(--sh-2, 0 8px 24px rgba(74, 70, 64, .1));
+  }
+  .ch-copy-box textarea {
+    width: 100%; min-height: 72px; resize: none; font-size: 16px; line-height: 1.5;
+    border: 1px solid var(--line, #e7dfd0); border-radius: var(--r-sm, 9px);
+    background: var(--sunken, #f1ece1); color: var(--ink, #43403a); font-family: inherit;
+  }
+  .ch-copy-box button {
+    align-self: flex-end; height: 42px; min-width: 72px; padding: 0 14px; font-size: 14px;
+    border: 0; border-radius: var(--r-sm, 9px); background: var(--accent-soft, #eef7f2);
+    color: var(--primary-ink, #2f6b52); font-family: inherit;
+  }
+  /* 语音胶囊：桌面那套样式偏宽，手机上收一点 */
+  .ch-stream .voice-bubble { min-width: 172px; max-width: min(260px, 70vw); padding: 7px 10px; }
+  .ch-stream .voice-wave { min-width: 44px; }
+  /* 语音控制仍像本体横排：伙伴按钮在右，自己按钮在左；转写另起一行。
+     不继承普通多气泡的竖排/8px列间距，使用本体转写行的6px间隔与字号。 */
+  #chat .voice-row { max-width: 100%; }
+  #chat .msg-col.voice-col { gap: 0; }
+  #chat .row .msg-line.voice-controls-line { flex-direction: row; align-items: center; gap: 8px; }
+  #chat .row.me .msg-line.voice-controls-line { flex-direction: row-reverse; }
+  #chat .voice-transcript { font-size: 13px; line-height: 1.6; }
+  /* 输入区：.composer 出边线/磨砂/z-index，.composer-row 排成一行，两个图标键和发送键
+     都用本体的 .emoji-btn / button.send（图也是本体那张 SVG）。手机只补三件事：
+     安全区、16px 字号（小一号 iOS 会把整页放大）、42px 触控。 */
+  .ch-composer { flex: 0 0 auto; padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
+  .ch-composer .composer-row { gap: 8px; }
+  .ch-composer textarea {
+    flex: 1 1 auto; min-width: 0; resize: none; max-height: 120px;
+    font-size: 16px; line-height: 1.4;
+  }
+  .ch-composer .emoji-btn,
+  .ch-composer button.send { flex: 0 0 auto; width: 42px; height: 42px; }
+  .ch-pending { opacity: .5; }
+
+  /* 表情包抽屉 */
+  .ch-tray {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 55;
+    background: var(--paper, #fffdf9); border-top: 1px solid var(--line, #e7dfd0);
+    border-radius: var(--r-xl, 20px) var(--r-xl, 20px) 0 0;
+    box-shadow: 0 -8px 24px rgba(70, 90, 80, .12);
+    max-height: 58vh; display: flex; flex-direction: column;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .ch-tray-head {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
+    padding: 12px 16px 8px; font-size: 14px; color: var(--ink-soft, #767066);
+  }
+  .ch-tray-head b { color: var(--ink, #43403a); font-size: 15px; }
+  .ch-tray-close { margin-left: auto; border: none; background: none; font-size: 20px; color: var(--ink-soft, #767066); }
+  .ch-tray-grid {
+    flex: 1 1 auto; overflow-y: auto; padding: 4px 12px 14px;
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; align-content: start;
+  }
+  /* 格子高度写死，图用背景铺（contain）：不裁不拉，也不会被别处的 img 规则干扰。 */
+  .ch-tray-cell {
+    height: 84px; min-height: 84px; border-radius: var(--r-md, 12px);
+    background-color: var(--sunken, #f1ece1); border: none; padding: 0;
+    background-size: contain; background-position: center; background-repeat: no-repeat;
+  }
+  .ch-tray-cell:active { background-color: var(--accent-soft, #eef7f2); }
+  .ch-emoji-cell { font-size: 28px; line-height: 1; background-color: transparent; }
+  .ch-tray-empty { grid-column: 1 / -1; padding: 28px 10px; text-align: center; color: var(--ink-soft, #767066); font-size: 14px; }
+
+  /* 分类标签：横向可滚，不换行 */
+  .ch-tray-tabs {
+    flex: 0 0 auto; display: flex; gap: 6px; overflow-x: auto;
+    padding: 0 12px 8px; scrollbar-width: none;
+  }
+  .ch-tray-tabs::-webkit-scrollbar { display: none; }
+  .ch-tray-tab {
+    flex: 0 0 auto; border: 1px solid var(--line, #e7dfd0); background: var(--paper, #fffdf9);
+    color: var(--ink-soft, #767066); font-size: 13px; padding: 5px 11px; border-radius: 999px;
+  }
+  .ch-tray-tab.on {
+    background: var(--primary, #5dae8e); border-color: var(--primary, #5dae8e); color: #fff;
+  }
+
+  /* 2026-10-30 新增：连接状态、引用、图片、失败重试、大图预览 */
+  .ch-link { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 999px; background: #c9c2b4; }
+  .ch-link.on { background: var(--primary, #5dae8e); }
+  .ch-link.off { background: #e2725f; }
+  .ch-quote {
+    margin: 0 0 7px; padding: 7px 10px; display: flex; align-items: flex-start; gap: 8px;
+    border-left: 3px solid var(--primary, #5dae8e); background: var(--accent-soft, #eef7f2);
+    border-radius: 8px; font-size: 12px; color: var(--ink-soft, #767066); line-height: 1.45;
+  }
+  .ch-quote span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ch-drop { flex: 0 0 auto; border: none; background: none; color: var(--ink-soft, #767066); font-size: 16px; padding: 0 2px; }
+  .ch-draft { margin: 0 0 8px; padding: 0; display: flex; gap: 10px; align-items: center; }
+  .ch-draft img { width: 64px; height: 64px; object-fit: cover; border-radius: 10px; background: var(--sunken, #f1ece1); }
+  .ch-draft span { flex: 1 1 auto; min-width: 0; font-size: 12px; color: var(--ink-soft, #767066); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ch-img { max-width: min(240px, 62vw); max-height: 320px; border-radius: 12px; display: block; background: var(--sunken, #f1ece1); }
+  .ch-quote-strip {
+    margin: 0 0 4px; padding: 4px 8px; border-left: 2px solid var(--primary, #5dae8e);
+    background: var(--accent-soft, #eef7f2); border-radius: 6px;
+    font-size: 12px; color: var(--ink-soft, #767066); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .ch-actions { display: flex; gap: 6px; padding-top: 2px; opacity: .75; }
+  .ch-act {
+    border: none; background: var(--sunken, #f1ece1); color: var(--ink-soft, #767066);
+    border-radius: 999px; font-size: 12px; padding: 4px 10px;
+  }
+  .ch-fail { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #c2593f; }
+  .ch-overlay {
+    position: fixed; inset: 0; z-index: 70; background: rgba(20, 24, 22, .9);
+    display: flex; align-items: center; justify-content: center; padding: 12px;
+  }
+  .ch-overlay img { max-width: 100%; max-height: 100%; border-radius: 10px; }
+  .ch-overlay button {
+    position: absolute; top: calc(10px + env(safe-area-inset-top)); right: 12px;
+    width: 38px; height: 38px; border: none; border-radius: 999px;
+    background: rgba(255, 255, 255, .18); color: #fff; font-size: 20px;
+  }
+
+  /* 2026-10-31：时间刻度/每条时间/已读小字/未听圆点/图文同泡/回到底部/顶栏工具入口 */
+  .ch-top-btn {
+    flex: 0 0 auto; width: 42px; height: 42px; margin: -6px 0; border: 0; border-radius: var(--r-sm, 9px);
+    background: transparent; color: var(--primary-ink, #2f6b52); font-size: 17px; line-height: 1;
+  }
+  .ch-top-btn:active { background: var(--accent-soft, #eef7f2); }
+  /* 回到底部：形状/色/阴影用本体 .jump-bottom，位置相对输入区（不写死屏高，
+     多行输入/图片/引用草稿把输入区撑高时它也跟着抬高，不会被盖住） */
+  #chat .jump-bottom {
+    right: 12px; bottom: calc(100% + 10px);
+    width: 42px; height: 42px; padding: 9px;
+  }
+  .ch-tray-tools { flex: 0 0 auto; padding: 0 12px 8px; }
+  .ch-tray-tools input {
+    width: 100%; height: 38px; padding: 0 12px; font-size: 15px; font-family: inherit;
+    border: 1px solid var(--line, #e7dfd0); border-radius: var(--r-sm, 9px);
+    background: var(--sunken, #f1ece1); color: var(--ink, #43403a);
+  }
+  /* 时间刻度：和本体一样细细一条，不抢气泡 */
+  #chat .time-divider {
+    display: flex; align-items: center; justify-content: center;
+    margin: 6px 0 2px; color: var(--ink-faint, #9a938a); font-size: 11px; line-height: 1.4;
+  }
+  #chat .time-divider::before, #chat .time-divider::after {
+    content: ""; flex: 1 1 auto; height: 1px; margin: 0 10px; background: var(--line-soft, #efe9dc);
+  }
+  /* 每条自己的时间：贴在自己那一行里，绝对定位到气泡（语音控件）外侧，不占一行。
+     这样未读小字才是气泡列下面一个正常流节点，不会排在“时间下面”。 */
+  #chat .msg-line { position: relative; }
+  #chat .ch-msg-time {
+    position: absolute; bottom: 0; margin: 0 0 2px;
+    color: var(--ink-faint, #9a938a); font-size: 11px; line-height: 1.4; white-space: nowrap;
+  }
+  #chat .row.me .ch-msg-time { right: calc(100% + 8px); }
+  #chat .row.ta .ch-msg-time { left: calc(100% + 8px); }
+  /* 窄屏给气泡外侧的时间留出位置：长气泡不许把时间挤出屏（本体 78% 宽屏上限不变） */
+  @media (max-width: 600px) {
+    #chat .row.me, #chat .row.ta { max-width: calc(100% - 52px); }
+  }
+  /* 「未读」小字：外形/颜色/小圆点全用 panel.css 的 .tick（本体同款），
+     这里只抵掉 msg-col 的 8px 列间距，留本体那 3px 的间隔。不另写颜色/字号。 */
+  #chat .ch-read-state { margin-top: -5px; }
+  /* 语音列 gap 是 0：未读小字要自己补回本体那 3px，别贴到气泡上 */
+  #chat .msg-col.voice-col > .ch-read-state { margin-top: 3px; }
+  /* 伙伴发来还没听过的那条语音：名字前一个小点 */
+  #chat .voice-unplayed-dot {
+    flex: 0 0 auto; width: 7px; height: 7px; margin-left: 4px; border-radius: 999px;
+    background: var(--primary, #5dae8e);
+  }
+  #chat .voice-unplayed-dot[hidden] { display: none; }
+  /* 图文同泡：图在上、字在下，共用一个气泡 */
+  #chat .bubble.ch-media { padding: 6px; max-width: min(78vw, 300px); }
+  #chat .bubble.ch-media .ch-img { max-width: 100%; margin: 0; }
+  #chat .bubble.ch-media .ch-media-text { margin-top: 6px; padding: 0 4px 2px; line-height: 1.55; overflow-wrap: anywhere; }
+  #chat .bubble.ch-media .ch-media-text:first-child { margin-top: 0; }
+  /* 引用块：最多三行，点开看全文（不在字符串里硬截 80） */
+  #chat .ch-quote-strip { max-height: 4.6em; overflow: hidden; white-space: normal; }
+  #chat .ch-quote-strip span { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  /* 正文里的链接：可点，但一眼看得出是个链接 */
+  #chat .ch-text-link { color: var(--primary-deep, #3f8f6c); text-decoration: underline; overflow-wrap: anywhere; }
+  /* 撤回的行 */
+  #chat .bubble.is-recalled { color: var(--ink-faint, #9a938a); background: var(--sunken, #f1ece1); border-color: transparent; font-style: italic; }
+  /* 正在写：与本体同一个三点动效，只是背景跟着气泡主题走 */
+  #chat .typing.ch-typing {
+    display: inline-flex; align-items: center; gap: 4px; align-self: flex-start;
+    margin: 0 0 6px; padding: 9px 12px; border-radius: var(--r-md, 12px);
+    background: var(--bubble-ta-bg, #fff); border: 1px solid var(--bubble-ta-border, var(--line, #e7dfd0));
+  }
+  /* turn.get 的 items 只当节奏，不当正文：没有单独的预览 DOM */
+  /* 还没认识：发送/选图/表情三个键置灰，状态行常驻提示 */
+  #chat .composer .emoji-btn:disabled, #chat .composer button.send:disabled { opacity: .4; }
+</style>
+</head>
+<body>
+  <div class="ch-gate" id="gate">
+    <div class="box">
+      <h2>茶话会 · 手机</h2>
+      <p>输一下电脑那边给的密码。</p>
+      <input id="pw" inputmode="text" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="密码">
+      <button id="go">进去</button>
+      <div class="err" id="err"></div>
+    </div>
+  </div>
+
+  <div id="home" hidden>
+    <div class="ch-head">
+      <h1>茶话会</h1>
+      <span class="hint" id="hint"></span>
+    </div>
+    <div class="ch-list" id="list"><div class="ch-loading">正在翻账本…</div></div>
+  </div>
+
+  <div id="chat" class="chat" hidden>
+    <div class="chat-head ch-bar">
+      <button class="ch-back" id="back" type="button" aria-label="返回伙伴列表" title="返回伙伴列表">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12.5 4.5-5.5 5.5 5.5 5.5"></path></svg>
+      </button>
+      <span class="ch-ident">
+        <span class="ch-who" id="who" title="双击戳一下"></span>
+        <span class="chat-state-badge" id="partnerBadge" hidden></span>
+      </span>
+      <span class="ch-state" id="state"></span>
+      <button class="ch-top-btn" id="toolFavorites" type="button" aria-label="收藏" title="收藏">★</button>
+      <span class="ch-link" id="link" title="未连接"></span>
+    </div>
+    <div class="ch-stream" id="msgs"></div>
+    <div class="composer ch-composer">
+      <button class="jump-bottom" id="jumpBottom" type="button" aria-label="回到底部" title="回到底部" hidden>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"></path></svg>
+      </button>
+      <div class="ch-quote" id="quoteBar" hidden>
+        <span id="quoteText"></span>
+        <button class="ch-drop" id="quoteDrop" type="button" aria-label="取消引用">×</button>
+      </div>
+      <div class="ch-draft" id="draft" hidden>
+        <img id="draftImg" alt="待发送的图片">
+        <span id="draftName"></span>
+        <button class="ch-drop" id="draftDrop" type="button" aria-label="移除这张图">×</button>
+      </div>
+      <div class="ch-draft" id="stickerDraft" hidden>
+        <img id="stickerDraftImg" alt="待发送的表情">
+        <span id="stickerDraftName"></span>
+        <button class="ch-drop" id="stickerDraftDrop" type="button" aria-label="移除这个表情">×</button>
+      </div>
+      <div class="composer-row">
+        <button class="emoji-btn" id="imgBtn" type="button" title="添加图片" aria-label="发图片">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.2" y="3.5" width="13.6" height="13" rx="2"></rect><circle cx="7.2" cy="7.5" r="1.2"></circle><path d="m4.8 14.2 3.4-3.4 2.4 2.2 1.8-1.7 2.8 2.9"></path></svg>
+        </button>
+        <button class="emoji-btn" id="stickerBtn" type="button" title="表情和表情包" aria-label="表情包">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.2"></circle><path d="M6.8 11.8c.9 1.1 1.9 1.6 3.2 1.6s2.3-.5 3.2-1.6M7.2 8h.1M12.7 8h.1"></path></svg>
+        </button>
+        <textarea id="input" rows="1" placeholder="说点什么…" aria-label="输入消息"></textarea>
+        <button class="send" id="send" type="button" title="发送" aria-label="发送" disabled>
+          <svg class="send-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="m3.2 9.1 13.5-5.4-3.4 13.1-3.1-5.1-7-2.6Z"></path><path d="m10.2 11.7 6.5-8"></path></svg>
+        </button>
+      </div>
+    </div>
+    <input id="pickImage" type="file" accept="image/*" hidden>
+  </div>
+
+  <div class="ch-tray" id="tray" hidden>
+    <div class="ch-tray-head">
+      <b>表情包</b>
+      <span id="trayCount"></span>
+      <button class="ch-tray-close" id="trayClose" aria-label="关上">×</button>
+    </div>
+    <div class="ch-tray-tools">
+      <input id="traySearch" type="search" placeholder="搜情绪、描述…" aria-label="搜索表情">
+    </div>
+    <div class="ch-tray-tabs" id="trayTabs" hidden></div>
+    <div class="ch-tray-grid" id="trayGrid"><div class="ch-tray-empty">正在翻图库…</div></div>
+  </div>
+
+  <div class="ch-overlay" id="overlay" hidden>
+    <button id="overlayClose" type="button" aria-label="关上">×</button>
+    <img id="overlayImg" alt="图片">
+  </div>
+
+<script type="module">
+  // 逻辑与装配都在 mobile-client.js：上半部是纯逻辑（测试直接 import），
+  // 下半部 startMobileClient 才碰 DOM / fetch / EventSource。
+  import { startMobileClient } from "/assets/mobile-client.js";
+  startMobileClient(document);
+</script>
+</body>
+</html>

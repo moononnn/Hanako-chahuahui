@@ -1,9 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import vm from "node:vm";
 
 import { bootChahuahui } from "./helpers/app-harness.js";
-import { proactiveSpec } from "../lib/compose.js";
+import { proactiveSpec, hasOpenHook } from "../lib/compose.js";
+import { askBudgetSpent, isRepeatedPhrasing } from "../lib/proactive.js";
+import { isSpeechMessage } from "../lib/turn-window.js";
 import { enrichReasonContext } from "../lib/proactive-reasons.js";
 import { reasonWeights } from "../lib/proactive-reasons.js";
 import { makeVideoCandidate, addVideoCandidate } from "../lib/video-sharing.js";
@@ -278,6 +281,131 @@ test("已读未回只给读过多久的轻重姿态，不再拿上一条原文�
   assert.match(spec.userText, /\[戳\]/, "戳一下还在");
   assert.match(spec.userText, /\[表情:/, "甩图还在");
   assert.match(spec.userText, /安静/, "安静收场还在");
+});
+
+// ── 防重清单认不认普通回复（2026-10-30）───────────────────────
+//
+// 这组用例不自己再写一遍 filter：直接从 index.js 源码里抠出那三条选择语句，
+// 放进 vm 里跑。选择逻辑全仓只有一份，测试跟着源码走，源码改了回去就红。
+// 不走真 apply：当前工作区带着手机网关，apply 会拉起一个独立 Node 进程守端口，
+// 而测试收尾并不会关掉它。
+
+const INDEX_SOURCE = fs.readFileSync(new URL("../index.js", import.meta.url), "utf8");
+
+/** 按锚点抠一条 `const … = …;` 语句原文（这几条里的箭头函数不带分号，第一个分号就是句尾）。 */
+function grabStatement(anchor) {
+  const start = INDEX_SOURCE.indexOf(anchor);
+  assert.notEqual(start, -1, `index.js 里找不到「${anchor}」`);
+  const end = INDEX_SOURCE.indexOf(";", start);
+  assert.ok(end > start, `「${anchor}」这条语句没找到句尾`);
+  return INDEX_SOURCE.slice(start, end + 1);
+}
+
+/** 把源码语句包成一个普通函数：形参由调用方给，判定函数按源码里用的那个名字交进去。 */
+function compileStatement(statement, varName, params) {
+  return vm.runInNewContext(
+    `(function (${params.join(", ")}) {\n${statement}\nreturn ${varName};\n})`,
+    { isSpeechMessage },
+  );
+}
+
+/** 每次调用都从源码重抠一遍：源码里删了这条就当场红，不会拖到导入阶段。 */
+function selectorFor(anchor, varName, params) {
+  return (...args) => compileStatement(grabStatement(anchor), varName, params)(...args);
+}
+
+const selectRecentAsks = selectorFor("const recentAsks = threadRows", "recentAsks", ["threadRows"]);
+const selectRecentSentTexts = selectorFor("const recentSentTexts = threadRows", "recentSentTexts", ["threadRows"]);
+const selectSaidRecently = selectorFor("const saidRecently = store.getThread(agentId).messages", "saidRecently", ["store", "agentId"]);
+
+const minutesAgo = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
+const speech = (text, minutes, extra = {}) => ({ role: "assistant", text, at: minutesAgo(minutes), ...extra });
+const threadOf = (rows) => ({ getThread: () => ({ messages: rows }) });
+
+/** 七条真话夹在一堆杂音里：她的话、撤回、动作、戳、酒馆开场、空白。 */
+function noisyThread() {
+  return [
+    speech("甲：窗台那盆挪到阳台了", 70),
+    speech("丙：我下午把旧台灯修好了", 45),
+    speech("丁：明早记得带伞", 35),
+    speech("戊：米粉店老板换人了", 30),
+    speech("己：阳台那盆抽了新芽", 25),
+    speech("庚：楼下那家面馆开门了", 20),
+    speech("辛：我把旧相片按年份排了一遍", 15),
+    // 杂音放在末尾，确保仅靠 slice 截断无法假装通过过滤测试。
+    { role: "user", text: "她说的那句不算", at: minutesAgo(14) },
+    speech("乙：撤回掉的那句", 13, { recalled: true }),
+    speech("动作不该算话", 12, { kind: "action" }),
+    speech("戳一下不该算话", 11, { kind: "poke" }),
+    speech("酒馆开场不该算话", 10, { kind: "tavern-opening" }),
+    { role: "assistant", text: "   ", at: minutesAgo(9) },
+  ];
+}
+
+const NOISE = ["她说的那句不算", "乙：撤回掉的那句", "动作不该算话", "戳一下不该算话", "酒馆开场不该算话", "   "];
+
+test("出站防重认普通回复：四十分钟前刚说过的话，主动消息别再念一遍", () => {
+  const rows = [
+    { role: "user", text: "窗台那盆你到底挪哪儿了", at: minutesAgo(50) },
+    speech("挪到阳台了，那儿晒得着", 42),
+  ];
+  const said = selectSaidRecently(threadOf(rows), AGENT);
+  assert.deepEqual(said.map((row) => row.text), ["挪到阳台了，那儿晒得着"], "普通回复进了防重清单");
+
+  assert.equal(isRepeatedPhrasing(said, "挪到阳台了，那儿晒得着。", { now: Date.now() }).repeated, true, "同一句话照样拦");
+  assert.equal(isRepeatedPhrasing(said, "我刚翻到一张旧照片，边角都卷了", { now: Date.now() }).repeated, false, "新话仍然能发出去");
+});
+
+test("出站防重：撤回的不算、动作/戳/酒馆开场不算，最多取六条", () => {
+  const said = selectSaidRecently(threadOf(noisyThread()), AGENT);
+  const texts = said.map((row) => String(row.text));
+  assert.deepEqual(texts, ["丙：我下午把旧台灯修好了", "丁：明早记得带伞", "戊：米粉店老板换人了", "己：阳台那盆抽了新芽", "庚：楼下那家面馆开门了", "辛：我把旧相片按年份排了一遍"], "最近六条真话，按原顺序");
+  for (const noise of NOISE) assert.ok(!texts.includes(noise), `${noise} 不该进防重清单`);
+});
+
+test("防重窗口还是六小时：更早说过的话不再挡", () => {
+  const said = selectSaidRecently(threadOf([speech("挪到阳台了，那儿晒得着", 7 * 60)]), AGENT);
+  assert.equal(said.length, 1, "七小时前那条照样被选进来");
+  assert.equal(isRepeatedPhrasing(said, "挪到阳台了，那儿晒得着", { now: Date.now() }).repeated, false, "六小时以外不算重念");
+});
+
+test("提示词里的防重清单带上普通回复，撤回和杂音不混进来，最多三条", () => {
+  const sent = selectRecentSentTexts(noisyThread());
+  assert.deepEqual(sent, ["己：阳台那盆抽了新芽", "庚：楼下那家面馆开门了", "辛：我把旧相片按年份排了一遍"], "最近三条真话");
+
+  const { reason } = enrichReasonContext({ kind: "contact" }, { sentTexts: sent });
+  assert.ok(reason, "搭话这类由头不要凭据，不会被冲掉");
+  assert.match(reason.contextText, /你已经实际说过的话/);
+  for (const line of sent) assert.ok(reason.contextText.includes(line), "普通回复也进了提示词防重段");
+  for (const noise of NOISE) assert.ok(!reason.contextText.includes(noise), `${noise} 不该进提示词`);
+  assert.doesNotMatch(reason.contextText, /甲：窗台那盆挪到阳台了/, "只取最近三条，更早的让位");
+});
+
+test("普通回复里的问句不占主动问句额度：recentAsks 仍只挑主动消息", () => {
+  const rows = [
+    { role: "assistant", text: "你那边现在是不是也降温了", at: minutesAgo(42) },
+    { role: "assistant", text: "我把窗台那盆挪到阳台了", at: minutesAgo(200), proactive: true },
+  ];
+  const asks = selectRecentAsks(rows);
+  assert.deepEqual(asks, ["我把窗台那盆挪到阳台了"], "普通回复不进问句额度");
+  assert.equal(askBudgetSpent(asks, { isAsk: hasOpenHook }), false, "一条主动不算用尽");
+
+  const twoAsks = selectRecentAsks([
+    { role: "assistant", text: "你那边降温了要不要加件衣服", at: minutesAgo(300), proactive: true },
+    { role: "assistant", text: "阳台那盆是不是该换个大点的盆了", at: minutesAgo(200), proactive: true },
+  ]);
+  assert.equal(askBudgetSpent(twoAsks, { isAsk: hasOpenHook }), true, "连着两条主动问句才算用尽");
+});
+
+test("防重挡在合成语音和落消息之前：拦下的那条既不进账也不发声", () => {
+  const start = INDEX_SOURCE.indexOf("async function deliverProactive(");
+  const end = INDEX_SOURCE.indexOf("async function deliverStirred(");
+  assert.ok(start > 0 && end > start, "能找到 deliverProactive 这一段");
+  const body = INDEX_SOURCE.slice(start, end);
+  const guard = body.indexOf('reason: "repeat-phrasing"');
+  assert.ok(guard > 0, "repeat 这一关还在");
+  assert.ok(body.indexOf("prepareVoice(agentId, text") > guard, "防重先于语音合成");
+  assert.ok(body.indexOf("appendPartnerMessage(agentId, {") > guard, "防重先于落消息");
 });
 
 // ── 走真路由，把模型请求抓下来看 ────────────────────────────────

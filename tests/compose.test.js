@@ -743,3 +743,44 @@ test("公共事件占住这一轮时，兴趣素材和种子都让位", () => {
   assert.match(spec.userText, /明天上午降水概率 70%/);
   assert.doesNotMatch(spec.userText, /这次你自己惦记着的那一面/);
 });
+
+test("同一个兴趣方向以前说过的正文会递给成文：带日期，只在种子内容那一轮", () => {
+  const seed = { id: "s1", motifId: "h1", motifName: "火锅流派", kind: "curio", hook: "清油锅和牛油锅到底差在哪", angle: "我认死牛油" };
+  const history = [{ at: "2026-10-28T12:00:00.000Z", text: "上次我说蘸料只认蒜泥打底" }];
+  const spec = proactiveSpec({ partnerName: "小花", userName: "阿舟", seed, interestHistory: history });
+  assert.match(spec.userText, /这个方向上你以前真说出口过的/);
+  assert.match(spec.userText, /【10月28日】上次我说蘸料只认蒜泥打底/, "带日期，才不会被当成刚才说的");
+  assert.match(spec.userText, /同一个意思换几个字重说一遍就算了/);
+  assert.match(spec.userText, /只想得出旧话就只输出\[不回\]/, "空转可以不说话");
+  assert.match(spec.userText, /也别再装头一回拿不准/);
+
+  const plain = proactiveSpec({ partnerName: "小花", userName: "阿舟", seed });
+  assert.doesNotMatch(plain.userText, /以前真说出口过的/, "没有历史就不占位");
+
+  for (const extra of [
+    { todoNudge: "【你现在来找 ta 的原因】\n16:00 给薄荷浇水。" },
+    { followup: { count: 1, read: true, readAgeMs: 2 * 3600 * 1000 } },
+    { reason: { kind: "weather", contextText: "明天上午降水概率 70%" } },
+  ]) {
+    const other = proactiveSpec({ partnerName: "小花", userName: "阿舟", seed, interestHistory: history, ...extra });
+    assert.doesNotMatch(other.userText, /以前真说出口过的/, "这一轮不靠兴趣开口时，旧话不许混进来");
+  }
+});
+
+test("好奇种子不再要求装没想明白，也没有强制悬念或问句", () => {
+  const curio = proactiveSpec({
+    partnerName: "小花", userName: "阿舟",
+    seed: { motifId: "h1", motifName: "旧物修补", kind: "curio", hook: "那盏旧台灯的线头" },
+  });
+  assert.match(curio.userText, /说好奇、说新发现、说你的偏好/);
+  assert.doesNotMatch(curio.userText, /还没想明白的事|别写成结论/);
+  assert.match(curio.userText, /不必非带问句/);
+
+  const ask = proactiveSpec({
+    partnerName: "小花", userName: "阿舟",
+    seed: { motifId: "h1", motifName: "旧物修补", kind: "ask", hook: "这根线接不接", angle: "不知道要不要换整根" },
+  });
+  assert.match(ask.userText, /确实想听她的主意/);
+  assert.match(ask.userText, /不重新问她一遍/);
+  assert.match(ask.userText, /不必硬挂问句/);
+});

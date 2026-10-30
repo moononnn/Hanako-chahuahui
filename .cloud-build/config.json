@@ -4,7 +4,7 @@
     "id": "chahuahui",
     "name": "茶话会",
     "kind": "app",
-    "version": "0.13.0",
+    "version": "0.14.0",
     "repoUrl": "moononnn/Hanako-chahuahui"
   },
   "publisher": "moononnn & 小花",
@@ -61,6 +61,8 @@
     "excludeGlobs": [
       "DESIGN-*.md",
       "PLAN-*.md",
+      "EXPERIMENT-*.md",
+      "TEST-REFACTOR-PLAN.md",
       "*.log",
       "*.tmp",
       "analysis-*.json",
@@ -100,11 +102,6 @@
         "file": "manifest.json",
         "from": "    \"app/resources.write\",",
         "to": ""
-      },
-      {
-        "file": "CHANGELOG.md",
-        "from": "DEV_TOOLS",
-        "to": "内测开关"
       }
     ]
   },
@@ -152,14 +149,16 @@
     "pin": {
       "channel": "beta",
       "channelManifest": "https://dl.openhanako.com/channels/beta.json",
-      "version": "1.3.6-beta",
+      "version": "1.5.7-beta",
       "platform": "win32-x64",
-      "file": "server-1.3.6-beta-win32-x64.tar.gz",
-      "sha256": "274c3deb9723ac345d7756c366914466da406bde8ea44f09258fcc85ed82a3b6",
-      "size": 264266684,
+      "file": "server-1.5.7-beta-win32-x64.tar.gz",
+      "sha256": "2a42dde5da98320078005636ebe7184c7ea3f4898038df6557bd024f0bce5a94",
+      "size": 276816238,
       "mirrors": [
+        "https://github.com/liliMozi/openhanako/releases/download/train-beta-43",
         "https://dl.openhanako.com",
-        "https://github.com/liliMozi/openhanako/releases/download/train-beta-42"
+        "https://github.com/liliMozi/openhanako/releases/download/train-beta-40",
+        "https://github.com/liliMozi/openhanako/releases/download/train-beta-37"
       ]
     }
   }

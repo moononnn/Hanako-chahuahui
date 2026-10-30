@@ -146,6 +146,61 @@ test('MiniMax式思考占满正文：沿同一utility路径保留预算并有限
   assert.equal(requests[0].systemPrompt, requests[1].systemPrompt);
 });
 
+test('同一个方向以前真说过的正文单独列为 interestHistory，不混进素材也不多加一次调用', async () => {
+  const history = [{ at: '2026-10-28T12:00:00.000Z', text: '上次我说蘸料只认蒜泥打底' }];
+  const calls = [];
+  const result = await reviewProactiveClarity({
+    text: '我还是觉得蘸料只认蒜泥打底',
+    seed: { kind: 'stand', hook: '蘸料台先舀什么', angle: '蒜泥打底' },
+    interestHistory: history,
+    ask: async (system, user) => {
+      calls.push({ system, user });
+      return '{"decision":"skip","scope":"message","reason":"跟以前说过的同一个意思"}';
+    },
+  });
+  assert.equal(calls.length, 1, '只问一次');
+  const payload = JSON.parse(calls[0].user);
+  assert.deepEqual(payload.interestHistory, history, '历史单列，不塞进 sourceSeed');
+  assert.equal(payload.sourceSeed.hook, '蘸料台先舀什么');
+  assert.match(calls[0].system, /interestHistory/);
+  assert.match(calls[0].system, /同一个意思/);
+  assert.match(calls[0].system, /重新装成第一次拿不准/);
+  assert.equal(result.ok, false);
+  assert.equal(result.rejectSeed, false, '正文只是复述旧话：不判种子、不删账');
+  assert.equal(result.rejectDiscovery, false);
+});
+
+test('有了历史也照旧分得开：原题面重叠判种子，真新东西放行', async () => {
+  const history = [{ at: '2026-10-28T12:00:00.000Z', text: '上次我说蘸料只认蒜泥打底' }];
+  const seed = { kind: 'exchange', hook: '蘸料台先舀什么', angle: '蒜泥打底' };
+
+  const seedReject = await reviewProactiveClarity({ text: BAD, seed, interestHistory: history,
+    ask: async () => '{"decision":"skip","scope":"seed","reason":"题面跟已聊过的面重叠"}' });
+  assert.equal(seedReject.ok, false);
+  assert.equal(seedReject.rejectSeed, true, '原题面重叠才动种子');
+
+  const fresh = await reviewProactiveClarity({ text: '今天换了个牌子的蒜，舂出来反而更辣', seed, interestHistory: history,
+    ask: async () => '{"decision":"send"}' });
+  assert.equal(fresh.ok, true, '有新信息就放行');
+});
+
+test('没给历史时不凭空添字段；乱回包、网络失败照样不发且不归罪种子', async () => {
+  const payloads = [];
+  await reviewProactiveClarity({ text: '窗台那盏灯修好了', seed,
+    ask: async (system, user) => { payloads.push(JSON.parse(user)); return '{"decision":"send"}'; } });
+  assert.deepEqual(payloads[0].interestHistory, [], '没给就是空数组，不把 undefined 当历史');
+
+  for (const reply of ['', 'send', '{"decision":"skip"}']) {
+    const result = await reviewProactiveClarity({ text: BAD, seed, interestHistory: [{ at: '', text: '以前说过的那句' }], ask: async () => reply });
+    assert.equal(result.ok, false);
+    assert.equal(result.rejectSeed, false);
+  }
+  const thrown = await reviewProactiveClarity({ text: BAD, seed, interestHistory: [{ at: '', text: '以前说过的那句' }],
+    ask: async () => { throw Error('timeout'); } });
+  assert.equal(thrown.ok, false);
+  assert.equal(thrown.reason, 'review-failed');
+});
+
 test('真实发送路线在分气泡和朗读之前核查，失败立即停止', () => {
   const src = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8');
   const start = src.indexOf('async function deliverProactive(');

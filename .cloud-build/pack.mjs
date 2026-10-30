@@ -13,12 +13,13 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from './lib/config.mjs';
 import { selectFiles } from './lib/select.mjs';
 import { stripDevOnly } from './lib/strip.mjs';
+import { getStagePolicy, applyStagePolicy } from './lib/stage.mjs';
 import { checkResources } from './lib/resources.mjs';
 import { scanTree, checkPublisher, findMachinePaths } from './lib/privacy.mjs';
 import { resolveToolchain, packWithOfficial } from './lib/toolchain.mjs';
@@ -133,7 +134,9 @@ function runTestGates(cfg, checkout) {
 }
 
 function copyStage(checkout, stageDir, files) {
-  rmSync(stageDir, { recursive: true, force: true });
+  // workflow 的 out 可位于 checkout 内；绝不据此删除已经存在的源码/历史副本。
+  if (existsSync(stageDir)) throw new Error('暂存目录已存在，请使用新的 --out 尝试目录；不自动删除旧内容');
+  mkdirSync(stageDir, { recursive: true });
   for (const rel of files) {
     const dest = join(stageDir, rel);
     mkdirSync(dirname(dest), { recursive: true });
@@ -203,6 +206,8 @@ export async function main(argv = process.argv.slice(2)) {
 
   // ── 4. 哨兵剥离 ─────────────────────────────────────────────
   const stripped = stripDevOnly(stageDir, cfg.devOnly);
+  const normalized = applyStagePolicy(stageDir, getStagePolicy(checkoutReal, files));
+  steps.push({ step: 'canonicalStage', result: 'pass', changed: normalized });
   steps.push({ step: 'devOnlyStripped', result: 'pass', count: stripped.length });
   say(`哨兵剥离 ${stripped.length} 处`);
 

@@ -274,7 +274,7 @@ export function fakeWavBase64() {
  * 起一个真装载的茶话会：走真的 apply(ctx)，路由是真的，数据目录是临时的。
  * 只有宿主接口是假的（模型、伙伴列表、网络）。
  */
-export async function bootChahuahui({ seed, entryUrl = new URL("../../index.js", import.meta.url) } = {}) {
+export async function bootChahuahui({ seed, entryUrl = new URL("../../index.js", import.meta.url), resources = null } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "chahuahui-routes-"));
   const store = createStore(dataDir);
   const models = createModelStub();
@@ -314,7 +314,7 @@ export async function bootChahuahui({ seed, entryUrl = new URL("../../index.js",
     },
     models,
     network: { fetch: net.fetch },
-    resources: { read: async () => null, list: async () => [] },
+    resources: resources ?? { read: async () => null, list: async () => [] },
     tools: { call: async () => null },
     appEvents: {
       async emit(type, payload) {

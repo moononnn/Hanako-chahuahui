@@ -985,7 +985,7 @@ test("起跑线：自动量那边的痕迹，也能自己定从哪儿算，只�
   assert.doesNotMatch(app, /session:list/, "量会话那条路 v2 应用走不通，别写");
   assert.match(app, /note: relationshipNote\(effectiveRelationship\(knowing\), knowing\.relationSeed\)/, "回复那一句也要带上起跑线");
   // 2026-10-20：主动拼装多带了一路新闻素材（news），意图不变：只带当前消息类型真正用得上的那一份。
-  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, video: shareableVideo, news: shareableNews, videoLoginNotice, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, morningFirst: morningFirstScene, askBudgetSpent: askSpent, reason: sendReason, introducedText, moodText: moodLineFor\(agentId\) \}\)/, "主动消息只带与当前消息类型相符的兴趣发现，同时带上本人人格、电脑那边的近况、「纯招呼」标志、晨间首次这层、关系式由头、已经介绍过什么和当日心情");
+  assert.match(app, /proactiveSpec\(\{ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, interestHistory, video: shareableVideo, news: shareableNews, videoLoginNotice, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, morningFirst: morningFirstScene, askBudgetSpent: askSpent, reason: sendReason, introducedText, moodText: moodLineFor\(agentId\) \}\)/, "主动消息只带与当前消息类型相符的兴趣发现，同时带上本人人格、电脑那边的近况、「纯招呼」标志、晨间首次这层、关系式由头、已经介绍过什么和当日心情");
   assert.match(app, /const morningFirstScene = morningFirst && isFirstProactiveOfLifeDay\(store\.getProactiveState\(agentId\)\.lastSentAt, now\)/, "晨间首次在出站按当前已发送时刻复核一次");
   assert.match(app, /const historyWindow = splitForContext\(conversationMessages\(threadRows\)\)\.recent/, "主动开口复用同一份上下文预算");
   assert.match(app, /isFirstProactiveOfLifeDay\(state\.lastSentAt, now\)/, "首条联系按四点生活日计算");
@@ -1005,7 +1005,11 @@ test("起跑线：自动量那边的痕迹，也能自己定从哪儿算，只�
   assert.match(app, /const introducedText = introducedTextFrom\(threadRows\)/, "已经介绍过什么只认实际送出的正文");
   // 公共事件（2026-10-24）：节日与天气那两种由头不走 enrichReasonContext，
   // 它手上的事实是拾光记摊的事件，让凭据重拼一遍会把事实换掉。
-  assert.match(app, /const reasonResolved = publicEvent\s+\? \{ reason: publicEvent\.reason, dropped: false \}\s+: enrichReasonContext\(reasonAllowed \? reason : null, \{ sceneEcho, workfeedText, sentTexts: recentAsks \}\)/, "由头凭据在出站那一步才拼全，且只在真正用得上的那一轮拼；公共事件不经重拼");
+  assert.match(app, /const reasonResolved = publicEvent\s+\? \{ reason: publicEvent\.reason, dropped: false \}\s+: enrichReasonContext\(reasonAllowed \? reason : null, \{ sceneEcho, workfeedText, sentTexts: recentSentTexts \}\)/, "由头凭据在出站那一步才拼全，且只在真正用得上的那一轮拼；公共事件不经重拼");
+  // 防重清单（2026-10-30）：她说过的话不止主动消息，普通回复也算；撤回的不算、动作/戳/酒馆开场不算。
+  assert.match(app, /const recentSentTexts = threadRows\s+\.filter\(\(row\) => row\.role === "assistant" && !row\.recalled && isSpeechMessage\(row\) && String\(row\.text \?\? ""\)\.trim\(\)\)\s+\.slice\(-3\)/, "提示词里的防重清单取最近三条实际正文，含普通回复");
+  assert.match(app, /const recentAsks = threadRows\s+\.filter\(\(row\) => row\.proactive && row\.text\)\s+\.slice\(-3\)/, "问句额度仍只数主动消息，不被普通回复里的问句占掉");
+  assert.match(app, /const saidRecently = store\.getThread\(agentId\)\.messages\s+\.filter\(\(row\) => row\.role === "assistant" && !row\.recalled && isSpeechMessage\(row\) && String\(row\.text \?\? ""\)\.trim\(\)\)\s+\.slice\(-6\)/, "出口防重同样认普通回复，取最近六条");
   assert.match(app, /isLowSignalProactive\(text, \{ reason: sendReason \}\)/, "低信号那一关由 compose 按由头种类放行");
   assert.match(app, /const proactiveContext = followupContext/u, "由头种类记在已有的 proactiveContext 里，不另立 schema");
   assert.match(app, /reason: "reason-context-empty", preserveIntent: true/, "由头缺凭据不算时机不合适，暂存意图得留着");
@@ -1040,6 +1044,17 @@ test("起跑线：自动量那边的痕迹，也能自己定从哪儿算，只�
   assert.match(app, /nightSpec\(\{[\s\S]{0,120}?personaText/, "半夜那条也是 ta 本人在说，得带人格");
   assert.match(app, /nudgeSpec\(\{[\s\S]{0,120}?personaText/, "等回音催问也得带人格，不能只给处境");
   assert.match(app, /const persona = await getPersona\(agentId\)[\s\S]{0,200}?nameFallback: true/, "主动开口前先取本人人格，没写过人设的只锤名字");
+});
+
+test("同一个兴趣方向的历史只在真有种子那一轮算一次，同一份同时交给成文与核查", () => {
+  // 2026-10-30：母题歇一天就又能轮到，成文那一步以前看不到这个方向以前说过什么，
+  // 于是同一个意思换配料重说；这里只把历史接成一条现成的活，不另发请求。
+  assert.match(app, /seedHistoryFor,/u, "从 topic-seeds 取现成的选择函数，不在 index 里重写一遍筛选");
+  assert.match(app, /const interestHistory = shareableSeed\s+\? seedHistoryFor\(store\.getProactiveState\(agentId\)\.topicSeeds, shareableSeed, \{ now, messages: threadRows \}\)\s+: \[\];/u, "没有种子就是空数组；有种子时拿同一个伙伴的线程去对出处");
+  assert.match(app, /proactiveSpec\(\{[^)]*interestHistory,/u, "成文拿到它");
+  assert.match(app, /news: shareableNews, interestHistory,/u, "核查拿的是同一份");
+  assert.equal((app.match(/await reviewProactiveClarity\(/gu) ?? []).length, 1, "核查仍然只有一处调用：不因为多了历史而多发一轮");
+  assert.equal((app.match(/seedHistoryFor\(/gu) ?? []).length, 1, "全局只算一次，不另外重算一遍");
 });
 
 test("分享版地基：用户的名字从这台机器的配置读，不写死", () => {

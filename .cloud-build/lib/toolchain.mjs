@@ -79,7 +79,7 @@ export function packWithOfficial({ toolchain, kind, stageDir, publisher, outDir,
   const res = spawnSync(process.execPath, args, {
     cwd: cwd ?? process.cwd(),
     encoding: 'utf8',
-    env: { ...process.env, HANA_APP_TOOLS_ROOT: toolchain.root },
+    env: { ...process.env, HANA_APP_TOOLS_ROOT: toolchain.root, TZ: 'UTC' },
     maxBuffer: 64 * 1024 * 1024,
   });
   const stdout = res.stdout ?? '';
