@@ -274,6 +274,34 @@ test("天气：放弃的那件事以后不再被挑起来", () => {
   assert.equal(weatherEventReported(claimed.state, "2026-10-24#rise"), true);
 });
 
+test("天气：换一件事时上一件的「已说过」不能带过来", () => {
+  // 回归用例（v0.15.0 审包挖出）：claimWeatherOwner 曾经把旧账整本带过来，
+  // 上一件事的 sentAt 会让新事件被判成「已经说过」而静默丢掉；旧数据里残留的
+  // sentAt 也会让升级当天的第一件事直接不提醒。
+  const claimed = claimWeatherOwner({
+    day: DAY, eventKey: "2026-10-24#rise", partners: PARTNERS, state: null, now: NOW, rnd: () => 0,
+  });
+  const owner = claimed.ownerId;
+  const said = noteWeatherAttempt(claimed.state, { day: DAY, eventKey: "2026-10-24#rise", agentId: owner, mentioned: true, at: NOW });
+  assert.ok(said.publicEvents.weather.sentAt, "提到过就该记下说完");
+
+  // 同一天的第二件事：不能因为上一件说过就被丢掉。
+  const second = claimWeatherOwner({
+    day: DAY, eventKey: "2026-10-24#rain", partners: PARTNERS, state: said, now: NOW, rnd: () => 0,
+  });
+  assert.equal(weatherPendingFor({ day: DAY, eventKey: "2026-10-24#rain", agentId: second.ownerId, state: second.state }), true);
+
+  // 旧版本留下的账（别的 key + sentAt 在）：升级后当天第一件事仍要能提醒。
+  const legacy = {
+    publicEvents: {
+      weather: { day: "2026-10-23", eventKey: "2026-10-23#rain", ownerId: owner, sentAt: "2026-10-23T08:00:00.000Z", reported: ["2026-10-23#rain"] },
+    },
+  };
+  const fresh = claimWeatherOwner({ day: DAY, eventKey: "2026-10-24#rise", partners: PARTNERS, state: legacy, now: NOW, rnd: () => 0 });
+  assert.equal(weatherPendingFor({ day: DAY, eventKey: "2026-10-24#rise", agentId: fresh.ownerId, state: fresh.state }), true);
+  assert.equal(weatherEventReported(fresh.state, "2026-10-23#rain"), true, "已放弃的那几件还是要留着");
+});
+
 // ── 时间小工具 ──
 
 test("时间键：本地日历日与小时键", () => {
