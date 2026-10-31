@@ -20,6 +20,7 @@ import {
   ownWeather,
   ownWeatherEvents,
   ownWeatherReady,
+  probeOwnWeather,
   takeFestivalHint,
   weatherSettings,
   weatherStoreAdapter,
@@ -167,6 +168,37 @@ test("设置口径：默认开着、间隔三小时；地点只认她自己填�
   assert.equal(settings.weatherIntervalHours, 3);
   assert.equal(settings.weatherForecastIntervalHours, 1);
   assert.equal(settings.weatherLocation, "");
+});
+
+test("试一下天气：认得的区县按中心点查，通就报结果", async () => {
+  const seen = [];
+  const result = await probeOwnWeather({
+    area: { code: "510107" },
+    fetcher: fakeFetcher(seen),
+    now: new Date(2026, 9, 31, 8, 0, 0),
+  });
+  assert.equal(result.ok, true);
+  assert.match(result.place, /武侯区/);
+  assert.ok(result.line);
+  assert.equal(seen.length, 1, "认得区县就不用再查地名");
+});
+
+test("试一下天气：没选地方、没网络、查不到，都要说清楚而不是装作没事", async () => {
+  const none = await probeOwnWeather({ fetcher: fakeFetcher() });
+  assert.equal(none.ok, false);
+  assert.match(none.error, /还没选地方/);
+
+  const noNet = await probeOwnWeather({ area: { code: "510107" }, fetcher: null });
+  assert.equal(noNet.ok, false);
+  assert.match(noNet.error, /网络能力/);
+
+  const broken = await probeOwnWeather({
+    area: { code: "510107" },
+    fetcher: async () => { throw new Error("断网"); },
+    now: new Date(2026, 9, 31, 8, 0, 0),
+  });
+  assert.equal(broken.ok, false);
+  assert.ok(broken.error);
 });
 
 test("一天那一摊：天气查不到也照样把节日给出去", async () => {

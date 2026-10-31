@@ -60,4 +60,13 @@ test("index 接了这条路由，且认得的代码由后端改写成表里的�
   assert.ok(source.includes('app.get("/settings/weather-regions"'), "应该有地区下拉这条路由");
   assert.ok(source.includes("getAdministrativeRegion(code)"), "选中的代码应由后端去表里认，不信页面临时编的");
   assert.ok(source.includes("formatAdministrativeRegion(region)"), "地名以表里的为准");
+  assert.ok(source.includes('app.post("/settings/weather-test"'), "应该有一条试连通性的路由");
+});
+
+test("设置页回填时区县要留着：代码得一路传到区县那层", () => {
+  const html = fs.readFileSync(new URL("../ui/settings.html", import.meta.url), "utf8");
+  // 以前就是这一层漏传：城市那层没把代码交给区县层，保存后区县自己空了。
+  assert.ok(/fillWeatherCities\(province, city, code\)/.test(html), "省级那层要把区县代码传下去");
+  assert.ok(/fillWeatherDistricts\(province, city, code\)/.test(html), "城市层也要把代码传到区县层");
+  assert.ok(html.includes('id="own-weather-test"'), "该有个试连通性的按钮");
 });

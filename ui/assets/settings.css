@@ -569,6 +569,8 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 .weather-region-cell .dd { min-width: 0; width: 100%; }
 .weather-region-actions { grid-column: 1 / -1; display: flex; gap: 8px; margin-top: 2px; }
 .weather-region-field > .detail-field-note { grid-column: 1 / -1; }
+.weather-region-status.ok { color: var(--mint-deep); }
+.weather-region-status.err { color: var(--blush, #c9737a); }
 @media (max-width: 560px) {
   .weather-region-field { grid-template-columns: 1fr; }
 }

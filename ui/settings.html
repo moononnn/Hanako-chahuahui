@@ -325,9 +325,11 @@
           </label>
           <div class="detail-actions weather-region-actions">
             <button class="soft-button" id="own-weather-save" type="button">保存地点</button>
+            <button class="soft-button" id="own-weather-test" type="button">测试一下</button>
             <button class="soft-button" id="own-weather-clear" type="button">清除</button>
           </div>
           <small class="detail-field-note" id="own-weather-note">按区县中心点查，精度到区域附近，不代表具体门牌。Open-Meteo 免费查询，只用来查天气，不会发到别处。</small>
+          <small class="detail-field-note weather-region-status" id="own-weather-status" role="status" aria-live="polite"></small>
         </div>
       </article>
       <article class="setting-card compact">
@@ -663,7 +665,7 @@
 
     // 这一页自己的版本号：后端读同一个文件里的这一行，两边对不上就说明她眼前是旧的。
     // （以前用文件哈希当戳，但那个值是后端给的，页面旧了它照样显示新值，等于没测。）
-    const UI_BUILD = "20261031.2";
+    const UI_BUILD = "20261031.3";
 
     const el = {
       status: document.getElementById("status"),
@@ -2684,10 +2686,10 @@
         weatherRegionCache.provinces = await loadWeatherRegionItems();
       }
       fillSelect(provinceSel, "选择省份", weatherRegionCache.provinces, province);
-      await fillWeatherCities(province, city);
+      await fillWeatherCities(province, city, code);
     }
 
-    async function fillWeatherCities(province = "", city = "") {
+    async function fillWeatherCities(province = "", city = "", code = "") {
       const { city: citySel, district: districtSel } = weatherSelects();
       if (!province) {
         fillSelect(citySel, "先选省份", [], "");
@@ -2698,7 +2700,7 @@
         weatherRegionCache.cities.set(province, await loadWeatherRegionItems({ province }));
       }
       fillSelect(citySel, "选择城市", weatherRegionCache.cities.get(province), city);
-      await fillWeatherDistricts(province, city);
+      await fillWeatherDistricts(province, city, code);
     }
 
     async function fillWeatherDistricts(province = "", city = "", code = "") {
@@ -2752,6 +2754,46 @@
     document.getElementById("own-weather-clear").addEventListener("click", async () => {
       const ok = await saveGlobal({ weatherArea: null, weatherLocation: "" }, "已清除天气地点，不再查天气");
       if (ok) paintGlobal();
+    });
+    // 试一下：不写缓存、不改设置，只把当前选的地方真去查一次，看这条路通不通。
+    document.getElementById("own-weather-test").addEventListener("click", async () => {
+      const { province, city, district } = weatherSelects();
+      const pickedProvince = String(province.value || "").trim();
+      const pickedCity = String(city.value || "").trim();
+      const pickedCode = String(district.value || "").trim();
+      const status = document.getElementById("own-weather-status");
+      const button = document.getElementById("own-weather-test");
+      if (!pickedProvince) {
+        if (status) {
+          status.className = "detail-field-note weather-region-status err";
+          status.textContent = "还没选地方，先选省份和城市。";
+        }
+        return;
+      }
+      button.disabled = true;
+      if (status) {
+        status.className = "detail-field-note weather-region-status";
+        status.textContent = "正在问天气接口…";
+      }
+      try {
+        const payload = pickedCode
+          ? { weatherArea: { code: pickedCode } }
+          : { weatherArea: null, weatherLocation: [pickedProvince, pickedCity].filter(Boolean).join(" ") };
+        const data = await api("POST", "settings/weather-test", payload);
+        if (status) {
+          status.className = `detail-field-note weather-region-status ${data?.ok ? "ok" : "err"}`;
+          status.textContent = data?.ok
+            ? `查得到：${data.place} · ${data.line}`
+            : `查不到：${data?.error || "不知道哪儿断了"}`;
+        }
+      } catch (error) {
+        if (status) {
+          status.className = "detail-field-note weather-region-status err";
+          status.textContent = `查不到：${error?.message || error}`;
+        }
+      } finally {
+        button.disabled = false;
+      }
     });
     document.getElementById("workfeed-switch").addEventListener("click", async () => {
       const next = globalSettings.workfeedEnabled === false;

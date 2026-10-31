@@ -39,6 +39,7 @@ import {
   ownFestivalHasHint,
   ownFestivalOf,
   ownWeatherEvents,
+  probeOwnWeather,
   takeFestivalHint,
 } from "./lib/day-context.js";
 // 地区下拉：省 / 市 / 区县三层，页面按层来取。
@@ -9052,6 +9053,22 @@ export function apply(ctx) {
           return c.json({ ok: true, level: level.level, items: level.items });
         } catch (error) {
           diagnostics({ event: "settings.weather-regions.failed", error: describeError(error) });
+          return c.json({ ok: false, error: describeError(error) }, 500);
+        }
+      });
+
+      // 试一下天气通不通：拿当前选的地方真查一次，不写缓存、不改设置。
+      app.post("/settings/weather-test", async (c) => {
+        try {
+          const body = await c.req.json().catch(() => ({}));
+          const area = body?.weatherArea && typeof body.weatherArea === "object" ? body.weatherArea : null;
+          const location = String(body?.weatherLocation ?? "").trim();
+          const fetcher = typeof ctx.network?.fetch === "function" ? ctx.network.fetch.bind(ctx.network) : null;
+          const result = await probeOwnWeather({ area, location, fetcher });
+          diagnostics({ event: "settings.weather-test", ok: result.ok, place: result.place ?? null });
+          return c.json(result, result.ok ? 200 : 400);
+        } catch (error) {
+          diagnostics({ event: "settings.weather-test.failed", error: describeError(error) });
           return c.json({ ok: false, error: describeError(error) }, 500);
         }
       });
