@@ -155,9 +155,9 @@ test("今天这一段：只摊事实，不写规矩", () => {
 
   assert.equal(buildOwnDayText({}), "");
   assert.equal(buildOwnFestivalResponseText({ festival: "" }), "");
-  const festival = buildOwnFestivalResponseText({ festival: "重阳节", userName: "玥儿" });
+  const festival = buildOwnFestivalResponseText({ festival: "重阳节", userName: "她" });
   assert.match(festival, /【节日回应】今天是重阳节。/);
-  assert.match(festival, /玥儿/);
+  assert.match(festival, /给她送过这个节日的祝福/);
 });
 
 test("节日意象抽过就不重复抽", () => {
@@ -274,7 +274,7 @@ test("天气冷却：冷却期内那一句「窗外」不往提示词里摆", as
   const store = fakeStore({ weatherEnabled: true, weatherLocation: "四川 成都 武侯区" });
   // 选重阳节那天：节日那行还得留着，被冷却掉的只有窗外那一句。
   const now = new Date(2026, 9, 18, 8, 0, 0);
-  const first = await buildOwnDayContext({ store, fetcher: fakeFetcher(), now, userName: "玥儿" });
+  const first = await buildOwnDayContext({ store, fetcher: fakeFetcher(), now, userName: "她" });
   assert.match(first.dayText, /窗外：/);
   assert.equal(first.weatherMention.should, true);
 
@@ -282,7 +282,7 @@ test("天气冷却：冷却期内那一句「窗外」不往提示词里摆", as
     store,
     fetcher: fakeFetcher(),
     now,
-    userName: "玥儿",
+    userName: "她",
     lastWeatherState: { weatherLastMentionAt: now.getTime(), weatherLastFactKey: first.weatherMention.factKey },
   });
   assert.equal(second.weatherMention.should, false);
@@ -297,7 +297,7 @@ test("一天那一摊：天气查不到也照样把节日给出去", async () =>
     store,
     fetcher: async () => { throw new Error("断网"); },
     now: new Date(2026, 9, 18, 9, 0, 0),
-    userName: "玥儿",
+    userName: "她",
   });
   assert.equal(context.festival, "重阳节");
   assert.match(context.dayText, /重阳节/);
