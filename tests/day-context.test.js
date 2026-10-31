@@ -98,8 +98,9 @@ test("节日表是茶话会自己的：重阳节认得出来，普通日子不�
   const chongyang = new Date(2026, 9, 18, 9, 0, 0);
   assert.equal(ownFestivalOf(chongyang), "重阳节");
   assert.ok(ownFestivals(chongyang).some((row) => row.name === "重阳节"));
-  // 十月三十一日没有表里的节日：就该是空串，不拿别的日子充数。
-  const plain = new Date(2026, 9, 31, 9, 0, 0);
+  // 十月二十日空着：没有表里的节日，就该是空串，不拿别的日子充数。
+  // （原来拿十月三十一日当普通日子，如今那天是万圣节，换成十月二十日。）
+  const plain = new Date(2026, 9, 20, 9, 0, 0);
   assert.equal(ownFestivalOf(plain), "");
   assert.equal(ownFestivalHasHint("重阳节"), true);
   assert.equal(ownFestivalHasHint("寒露"), false);
@@ -166,6 +167,24 @@ test("节日意象抽过就不重复抽", () => {
   const second = takeFestivalHint(store, "重阳节");
   assert.ok(first && second);
   assert.notEqual(first, second);
+});
+
+test("万圣节也有自己的意象池：认得出来，也说得出话", () => {
+  const halloween = new Date(2026, 9, 31, 12, 0, 0);
+  assert.equal(ownFestivalOf(halloween), "万圣节");
+  assert.equal(ownFestivalHasHint("万圣节"), true);
+  assert.deepEqual(
+    ownFestivals(halloween).map((row) => row.name),
+    ["万圣节"],
+    "同一天不重复报",
+  );
+
+  const store = fakeStore();
+  const first = takeFestivalHint(store, "万圣节");
+  const second = takeFestivalHint(store, "万圣节");
+  assert.ok(first && first.length > 10);
+  assert.ok(second && second.length > 10);
+  assert.notEqual(first, second, "同一个节日不连着说同一句");
 });
 
 test("天气缓存挂在茶话会自己的账本上，不写拾光记那份", () => {

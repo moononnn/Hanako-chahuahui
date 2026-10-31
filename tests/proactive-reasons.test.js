@@ -328,6 +328,17 @@ function seedWorld(store, now = new Date()) {
 const seed = (store) => seedWorld(store);
 
 /**
+ * 公共事件（节日、天气）本来就抢在关系式由头前面开口，跟下面这几条要验的东西无关。
+ * 节日按真实日历命中（10-31 万圣节、中秋之类），一到那天 rndForKind 算出的落点
+ * 就会被打成 festival，用例跟着红；所以这几条装载前就把总闸关上，只验关系式那一路。
+ * 必须在 seed 里写：应用开机时把设置读进内存，开机后再用另一个 store 改盘不会同步过去。
+ */
+const seedQuietPublicEvents = (store) => {
+  seedWorld(store);
+  store.setGlobalSettings({ publicEventsEnabled: false });
+};
+
+/**
  * 主动开口走后台 utility 通道。把这一路换成可控正文。
  * 语义核查那一次固定回 send：那是拿模型桩顶替的判定，只保证这条消息能发出去，
  * 不证明它真的清楚——真判语义是另一回事。
@@ -380,7 +391,7 @@ function diskState(app) {
 }
 
 test("行为：拿关系式由头开口时，不注入兴趣素材也不消耗种子", { skip: SKIP_DEV }, async (t) => {
-  const app = await bootChahuahui({ seed });
+  const app = await bootChahuahui({ seed: seedQuietPublicEvents });
   cleanupOn(t, app);
   const store = app.store;
   store.appendMessage(AGENT, { role: "user", text: "你那个台灯还亮着吗", readAt: clockAt(0), at: clockAt(-0.4 * HOUR) });
@@ -422,7 +433,7 @@ test("行为：上一条还没被接住时，关系式由头不绕过去", { ski
 });
 
 test("行为：老路没坏——抽到兴趣那一条时照旧注入并消耗种子", { skip: SKIP_DEV }, async (t) => {
-  const app = await bootChahuahui({ seed });
+  const app = await bootChahuahui({ seed: seedQuietPublicEvents });
   cleanupOn(t, app);
   const store = app.store;
   store.appendMessage(AGENT, { role: "user", text: "你那个台灯还亮着吗", readAt: clockAt(0), at: clockAt(-0.4 * HOUR) });
@@ -439,7 +450,7 @@ test("行为：老路没坏——抽到兴趣那一条时照旧注入并消耗�
 });
 
 test("行为：有真凭据的共同经历能发出去，凭据直接进到生成里", { skip: SKIP_DEV }, async (t) => {
-  const app = await bootChahuahui({ seed });
+  const app = await bootChahuahui({ seed: seedQuietPublicEvents });
   cleanupOn(t, app);
   const store = app.store;
   store.appendMessage(AGENT, { role: "user", text: "你那个台灯还亮着吗", readAt: clockAt(0), at: clockAt(-0.4 * HOUR) });

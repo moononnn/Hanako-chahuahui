@@ -504,10 +504,11 @@ test("行为：视频分享那一路（generateReply 流式）也带着同一段
   assert.doesNotMatch(joined, /她上一轮说的话：/, "不再靠摘两行塞进提示词冒充历史");
 });
 
-/** 造一个「今天早上八点半、这位伙伴手上有一条种子」的世界。 */
+/** 造一个「某个早上八点半、这位伙伴手上有一条种子」的世界。 */
 function bootMorningWorld(t, { lastSentOffsetMs }) {
-  const morning = new Date();
-  morning.setHours(8, 30, 0, 0);
+  // 日期钉在既没节日也没节气的日子：注入层碰到节日会改用节日意象，
+  // 这两条用例断的是种子素材在不在，不能跟着真实「今天」漂。
+  const morning = new Date(2026, 2, 4, 8, 30, 0, 0);
   const app = bootChahuahui({
     seed: (store) => {
       seedWorld(store, { base: morning });

@@ -98,6 +98,7 @@ test("节日：认拾光记那份节日名单，个人纪念日不升格", () =>
   assert.equal(festivalOf(SNAPSHOT), "中秋节");
   assert.equal(festivalOf({ today: { festivals: ["在一起第 500 天"] } }), "");
   assert.equal(festivalOf({ today: { festivals: ["寒食节"] } }), "", "没有专属引导的节日不算");
+  assert.equal(festivalOf({ today: { festivals: ["万圣节"] } }), "万圣节", "万圣节算；茶话会自己的表也认得它");
   assert.equal(festivalOf(null), "");
 });
 
