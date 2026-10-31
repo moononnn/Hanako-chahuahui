@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "chahuahui",
   "name": "茶话会",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "entry": "index.js",
   "description": "像聊天软件一样和 Hana 里的伙伴唠嗑，ta 也会根据自己的兴趣爱好主动找你聊天搭话。搭配「表情包」可以互相斗图，搭配「拾光记」不仅可以感知天气、提醒待办，还能在使用「专注」功能时，陪你沉浸式专注。ta 现在还会自己去刷 B 站，碰上感兴趣的视频就分享给你。同一个局域网里，手机浏览器也能接着聊。",
   "icon": "assets/icon.png",
