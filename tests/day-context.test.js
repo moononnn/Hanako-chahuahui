@@ -14,6 +14,7 @@ import {
   buildOwnDayText,
   buildOwnFestivalResponseText,
   buildOwnDayContext,
+  decideWeatherMention,
   ownFestivalHasHint,
   ownFestivalOf,
   ownFestivals,
@@ -22,8 +23,10 @@ import {
   ownWeatherReady,
   probeOwnWeather,
   takeFestivalHint,
+  weatherFactKey,
   weatherSettings,
   weatherStoreAdapter,
+  WEATHER_MENTION_COOLDOWN_MS,
 } from "../lib/day-context.js";
 import { createWeatherFetcher } from "../lib/weather.js";
 
@@ -225,6 +228,67 @@ test("试一下天气：没选地方、没网络、查不到，都要说清楚�
   });
   assert.equal(broken.ok, false);
   assert.ok(broken.error);
+});
+
+test("天气冷却：同一片天三小时内不重复摆，事实变了可以立刻重说", () => {
+  const weather = { place: "四川省 成都市 武侯区", line: "小雨，淅淅沥沥，18°C", temp: 18, code: 61, isDay: true };
+  const at = new Date(2026, 9, 31, 8, 0, 0);
+  const first = decideWeatherMention({ weather, lastState: null, now: at });
+  assert.equal(first.should, true);
+  assert.equal(first.reason, "first-time");
+
+  // 同一个事实，冷却期内不再摆。
+  const cooling = decideWeatherMention({
+    weather,
+    lastState: { weatherLastMentionAt: at.getTime(), weatherLastFactKey: first.factKey },
+    now: new Date(at.getTime() + 60 * 60 * 1000),
+  });
+  assert.equal(cooling.should, false);
+  assert.equal(cooling.reason, "cooling");
+
+  // 冷却过了，同一片天可以再说一次。
+  const later = decideWeatherMention({
+    weather,
+    lastState: { weatherLastMentionAt: at.getTime(), weatherLastFactKey: first.factKey },
+    now: new Date(at.getTime() + WEATHER_MENTION_COOLDOWN_MS + 1000),
+  });
+  assert.equal(later.should, true);
+
+  // 事实变了（下雨了），立刻可以重说。
+  const changed = decideWeatherMention({
+    weather: { ...weather, line: "大雨，哗啦哗啦的，16°C", code: 65 },
+    lastState: { weatherLastMentionAt: at.getTime(), weatherLastFactKey: first.factKey },
+    now: new Date(at.getTime() + 60 * 1000),
+  });
+  assert.equal(changed.should, true);
+  assert.equal(changed.reason, "fact-changed");
+
+  // 时段修饰词不算新天气：同一片天不该因为“下午时分”就再报一遍。
+  assert.equal(
+    weatherFactKey({ ...weather, line: "小雨，淅淅沥沥，18°C，下午时分" }),
+    weatherFactKey(weather),
+  );
+});
+
+test("天气冷却：冷却期内那一句「窗外」不往提示词里摆", async () => {
+  const store = fakeStore({ weatherEnabled: true, weatherLocation: "四川 成都 武侯区" });
+  // 选重阳节那天：节日那行还得留着，被冷却掉的只有窗外那一句。
+  const now = new Date(2026, 9, 18, 8, 0, 0);
+  const first = await buildOwnDayContext({ store, fetcher: fakeFetcher(), now, userName: "玥儿" });
+  assert.match(first.dayText, /窗外：/);
+  assert.equal(first.weatherMention.should, true);
+
+  const second = await buildOwnDayContext({
+    store,
+    fetcher: fakeFetcher(),
+    now,
+    userName: "玥儿",
+    lastWeatherState: { weatherLastMentionAt: now.getTime(), weatherLastFactKey: first.weatherMention.factKey },
+  });
+  assert.equal(second.weatherMention.should, false);
+  assert.doesNotMatch(second.dayText, /窗外：/);
+  assert.match(second.dayText, /【今天】/);
+  assert.match(second.dayText, /重阳节/);
 });
 
 test("一天那一摊：天气查不到也照样把节日给出去", async () => {

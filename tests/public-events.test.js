@@ -12,12 +12,17 @@ import {
   festivalOf,
   hourKeyOf,
   intimacyWeight,
+  markWeatherReported,
   noteFestivalSent,
+  noteWeatherAttempt,
   noteWeatherSent,
   pickWeatherEvent,
   readPublicAlerts,
   shouldSendFestival,
+  weatherEventReported,
   weatherPendingFor,
+  weatherRetryExhausted,
+  MAX_WEATHER_PENDING_RETRY,
 } from "../lib/public-events.js";
 
 const NOW = new Date(2026, 9, 24, 7, 20); // 2026-10-24 07:20 本地
@@ -233,6 +238,40 @@ test("天气：别人替我记账记不上，负责人不会被顶掉", () => {
   const attempted = noteWeatherSent(claimed.state, { day: DAY, eventKey: "2026-10-24#rise", agentId: other, at: NOW });
   assert.equal(attempted.publicEvents.weather.sentAt, undefined);
   assert.equal(attempted.publicEvents.weather.ownerId, claimed.ownerId);
+});
+
+test("天气：伙伴没提到这件事就补报一次，提到了才算说完", () => {
+  const claimed = claimWeatherOwner({
+    day: DAY, eventKey: "2026-10-24#rise", partners: PARTNERS, state: null, now: NOW, rnd: () => 0,
+  });
+  const owner = claimed.ownerId;
+  // 第一次提了，但伙伴绕开了这个由头：这件事还得留在名单里。
+  const missed = noteWeatherAttempt(claimed.state, { day: DAY, eventKey: "2026-10-24#rise", agentId: owner, mentioned: false, at: NOW });
+  assert.equal(missed.publicEvents.weather.sentAt, undefined, "没提到就不算说完");
+  assert.equal(missed.publicEvents.weather.pending.count, 1);
+  assert.equal(weatherPendingFor({ day: DAY, eventKey: "2026-10-24#rise", agentId: owner, state: missed }), true);
+  assert.equal(weatherRetryExhausted(missed, "2026-10-24#rise"), false);
+
+  // 第二次还是没提到：补报次数用完，接下来该放弃。
+  const missed2 = noteWeatherAttempt(missed, { day: DAY, eventKey: "2026-10-24#rise", agentId: owner, mentioned: false, at: NOW });
+  assert.equal(missed2.publicEvents.weather.pending.count, MAX_WEATHER_PENDING_RETRY);
+  assert.equal(weatherRetryExhausted(missed2, "2026-10-24#rise"), true);
+
+  // 说到了：这下才算说完，owner 当天不再提。
+  const said = noteWeatherAttempt(missed2, { day: DAY, eventKey: "2026-10-24#rise", agentId: owner, mentioned: true, at: NOW });
+  assert.ok(said.publicEvents.weather.sentAt);
+  assert.equal(said.publicEvents.weather.pending, null);
+  assert.equal(weatherPendingFor({ day: DAY, eventKey: "2026-10-24#rise", agentId: owner, state: said }), false);
+});
+
+test("天气：放弃的那件事以后不再被挑起来", () => {
+  const marked = markWeatherReported(null, { eventKey: "2026-10-24#rise", at: NOW });
+  assert.equal(weatherEventReported(marked, "2026-10-24#rise"), true);
+  const event = pickWeatherEvent(ALERTS, NOW, { isReported: (key) => weatherEventReported(marked, key) });
+  assert.notEqual(event?.key, "2026-10-24#rise", "已放弃的那件不该再被挑中");
+  // 换一件事时，已放弃的那几件不能被抹掉。
+  const claimed = claimWeatherOwner({ day: DAY, eventKey: "2026-10-25#rain", partners: PARTNERS, state: marked, now: NOW, rnd: () => 0 });
+  assert.equal(weatherEventReported(claimed.state, "2026-10-24#rise"), true);
 });
 
 // ── 时间小工具 ──

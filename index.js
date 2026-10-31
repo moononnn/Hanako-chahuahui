@@ -45,6 +45,8 @@ import {
 // 天气模块要的是「返回 JSON 的 fetcher」，宿主给的 fetch 回的是 Response。
 // 少套这一层，天气就永远读不出 current —— 表现就是「查不到」。
 import { createWeatherFetcher } from "./lib/weather.js";
+// 伙伴到底提没提这件事：宽松匹配，宁可当成提过，也不要重复扰民。
+import { didMentionWeatherEvent } from "./lib/weather-alert.js";
 // 地区下拉：省 / 市 / 区县三层，页面按层来取。
 import { regionOptions } from "./lib/weather-regions.js";
 import { formatAdministrativeRegion, getAdministrativeRegion } from "./lib/administrative-divisions.js";
@@ -418,12 +420,15 @@ import {
   dayOf as publicEventDayOf,
   festivalOf,
   intimacyWeight,
+  markWeatherReported,
   noteFestivalSent,
-  noteWeatherSent,
+  noteWeatherAttempt,
   pickWeatherEvent,
   readPublicAlerts,
   shouldSendFestival,
+  weatherEventReported,
   weatherPendingFor,
+  weatherRetryExhausted,
 } from "./lib/public-events.js";
 import {
   correctionsFor,
@@ -3983,10 +3988,15 @@ export function apply(ctx) {
           fetcher: weatherJsonFetcher(),
           now,
         });
-        let event = pickWeatherEvent({ reason: "ok", events: ownEvents }, now);
-        if (!event) {
-          const alerts = await readPublicAlerts(ctx);
-          event = pickWeatherEvent(alerts, now);
+        const alerts = ownEvents.length ? null : await readPublicAlerts(ctx);
+        const source = ownEvents.length ? { reason: "ok", events: ownEvents } : alerts;
+        const isReported = (key) => weatherEventReported(store.getGlobalRuntime(), key);
+        let event = pickWeatherEvent(source, now, { isReported });
+        // 这件事已经提过两次都没接住：记成提过了，不再追着念。
+        if (event && weatherRetryExhausted(store.getGlobalRuntime(), event.key)) {
+          store.setGlobalRuntime(markWeatherReported(store.getGlobalRuntime(), { eventKey: event.key, at: now }));
+          diagnostics({ event: "public-event.weather.give-up", agentId, key: event.key });
+          event = pickWeatherEvent(source, now, { isReported });
         }
         if (!event) return null;
         const weights = {};
@@ -4593,9 +4603,13 @@ export function apply(ctx) {
             festival: publicEvent.festival, day: publicEvent.day, agentId, at: sentAt,
           }));
         } else if (publicEvent?.kind === "weather") {
-          store.setGlobalRuntime(noteWeatherSent(store.getGlobalRuntime(), {
-            day: publicEvent.day, eventKey: publicEvent.event.key, agentId, at: sentAt,
+          // 说到点子上（提到了雨、伞、降温这些词）才算这件事说完；没提到就记一次待补报，最多两次。
+          const sentText = visibleTextOf(delivered.bubbles ?? []);
+          const mentioned = didMentionWeatherEvent(sentText, publicEvent.event);
+          store.setGlobalRuntime(noteWeatherAttempt(store.getGlobalRuntime(), {
+            day: publicEvent.day, eventKey: publicEvent.event.key, agentId, mentioned, at: sentAt,
           }));
+          diagnostics({ event: "public-event.weather.attempt", agentId, key: publicEvent.event.key, mentioned });
         }
         return { ...delivered, sentAt, carriedTodo };
       }));
@@ -5812,11 +5826,23 @@ export function apply(ctx) {
         fetcher: weatherJsonFetcher(),
         now: new Date(),
         userName: USER_NAME,
+        // 同一片天冷却期内不重复摆：上一次是什么时候提的，ta 自己那份账里。
+        lastWeatherState: {
+          weatherLastMentionAt: store.getProactiveState(agentId).weatherLastMentionAt,
+          weatherLastFactKey: store.getProactiveState(agentId).weatherLastFactKey,
+        },
       });
       ownDayText = own.dayText || "";
       ownFestivalText = own.festivalText || "";
       ownFestival = own.festival || "";
       ownWeather = own.weather || null;
+      // 这次天气露面了就记账：同一片天三小时内不再重复摆，事实变了可以立刻重说。
+      if (own.weatherMention?.should && own.weatherMention.factKey) {
+        store.setProactiveState(agentId, {
+          weatherLastMentionAt: Date.now(),
+          weatherLastFactKey: own.weatherMention.factKey,
+        });
+      }
     } catch (error) {
       diagnostics?.({ event: "own.day-context.failed", agentId, error: describeError(error) });
     }
