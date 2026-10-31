@@ -261,17 +261,6 @@
         </article>
         <article class="setting-card compact">
           <div class="setting-copy">
-            <h3>茶话会自己的天气</h3>
-            <p id="own-weather-copy">填上你所在的地方，伙伴就知道窗外什么样；空着就不查。跟拾光记各算各的。</p>
-          </div>
-          <div class="detail-field">
-            <input type="text" id="own-weather-location" maxlength="60" placeholder="例如：四川 成都 武侯区" aria-label="天气地点">
-            <button class="soft-button" id="own-weather-save" type="button">保存地点</button>
-            <small class="detail-field-note" id="own-weather-note">只用来查天气（Open-Meteo 免费接口），不会发到别处。</small>
-          </div>
-        </article>
-        <article class="setting-card compact">
-          <div class="setting-copy">
             <h3>节日祝福</h3>
             <p id="festival-copy">节日那天，伙伴会主动来说一句。</p>
           </div>
@@ -316,6 +305,31 @@
           </button>
         </article>
       </div>
+      <article class="setting-card weather-region-card">
+        <div class="setting-copy">
+          <h3>茶话会自己的天气</h3>
+          <p id="own-weather-copy">选一下你所在的地方，伙伴就知道窗外什么样；不选就不查。跟拾光记各算各的。</p>
+        </div>
+        <div class="detail-field weather-region-field">
+          <label class="weather-region-cell">
+            <span class="weather-region-label">省份</span>
+            <select id="weather-province" aria-label="省份"></select>
+          </label>
+          <label class="weather-region-cell">
+            <span class="weather-region-label">城市</span>
+            <select id="weather-city" aria-label="城市"></select>
+          </label>
+          <label class="weather-region-cell">
+            <span class="weather-region-label">区县</span>
+            <select id="weather-district" aria-label="区县"></select>
+          </label>
+          <div class="detail-actions weather-region-actions">
+            <button class="soft-button" id="own-weather-save" type="button">保存地点</button>
+            <button class="soft-button" id="own-weather-clear" type="button">清除</button>
+          </div>
+          <small class="detail-field-note" id="own-weather-note">按区县中心点查，精度到区域附近，不代表具体门牌。Open-Meteo 免费查询，只用来查天气，不会发到别处。</small>
+        </div>
+      </article>
       <article class="setting-card compact">
         <div class="setting-copy">
           <h3>已收集的生活记录</h3>
@@ -649,7 +663,7 @@
 
     // 这一页自己的版本号：后端读同一个文件里的这一行，两边对不上就说明她眼前是旧的。
     // （以前用文件哈希当戳，但那个值是后端给的，页面旧了它照样显示新值，等于没测。）
-    const UI_BUILD = "20261031.1";
+    const UI_BUILD = "20261031.2";
 
     const el = {
       status: document.getElementById("status"),
@@ -1243,14 +1257,11 @@
         document.getElementById(copyId).textContent = ready
           ? hintOn
           : (switchId === "weather-alert-switch"
-            ? "需要先填上你所在的地方，伙伴才知道天要变了。"
+            ? "需要先选一下你所在的地方，伙伴才知道天要变了。"
             : "需要先装上「拾光记」应用，这一项才有得开。");
       }
-      // 自己的天气：地点那一栏跟着设置回填。
-      const ownWeatherInput = document.getElementById("own-weather-location");
-      if (ownWeatherInput && document.activeElement !== ownWeatherInput) {
-        ownWeatherInput.value = String(globalSettings.weatherLocation || "");
-      }
+      // 自己的天气：三个下拉跟着设置回填。
+      void paintWeatherRegion();
       const workfeedSwitch = document.getElementById("workfeed-switch");
       const workfeedOn = globalSettings.workfeedEnabled !== false;
       workfeedSwitch.classList.toggle("on", workfeedOn);
@@ -2615,17 +2626,131 @@
     ]) {
       document.getElementById(switchId).addEventListener("click", async () => {
         if (needsLocation && !String(globalSettings.weatherLocation || "").trim()) {
-          return say("先填上你所在的地方，伙伴才知道天要变了", "err");
+          return say("先选一下你所在的地方，伙伴才知道天要变了", "err");
         }
         const next = globalSettings[field] === false;
         if (await saveGlobal({ [field]: next }, next ? onSay : offSay)) paintGlobal();
       });
     }
-    // 自己填的天气地点：填了就生效，伙伴下一轮就知道窗外什么样。
+    // ── 地区下拉（省 → 市 → 区县）──────────────────────────────
+    // 按层取选项：先要省，选了才给城市，再选才给区县。取过的层留在本地，不重复问后端。
+    const weatherRegionCache = { provinces: null, cities: new Map(), districts: new Map() };
+
+    function weatherSelects() {
+      return {
+        province: document.getElementById("weather-province"),
+        city: document.getElementById("weather-city"),
+        district: document.getElementById("weather-district"),
+      };
+    }
+
+    /** 换掉一个下拉的选项，并把当前选中写回去；原生 select 是隐藏的，外壳得跟着重画。 */
+    function fillSelect(sel, placeholder, items, selected) {
+      if (!sel) return;
+      const options = Array.isArray(items) ? items : [];
+      sel.innerHTML = "";
+      const first = document.createElement("option");
+      first.value = "";
+      first.textContent = placeholder;
+      sel.appendChild(first);
+      let picked = "";
+      for (const item of options) {
+        const value = typeof item === "string" ? item : String(item?.code ?? "");
+        const label = typeof item === "string" ? item : String(item?.name ?? "");
+        if (!value) continue;
+        const opt = document.createElement("option");
+        opt.value = value;
+        opt.textContent = label;
+        sel.appendChild(opt);
+        if (value === selected) picked = value;
+      }
+      sel.value = picked;
+      sel.parentNode?._ddRefresh?.();
+    }
+
+    async function loadWeatherRegionItems(params = {}) {
+      const query = new URLSearchParams();
+      for (const [key, value] of Object.entries(params)) {
+        if (value) query.set(key, value);
+      }
+      const suffix = query.toString() ? `?${query.toString()}` : "";
+      const data = await api("GET", `settings/weather-regions${suffix}`);
+      return Array.isArray(data?.items) ? data.items : [];
+    }
+
+    async function fillWeatherProvinces(province = "", city = "", code = "") {
+      const { province: provinceSel } = weatherSelects();
+      if (!weatherRegionCache.provinces) {
+        weatherRegionCache.provinces = await loadWeatherRegionItems();
+      }
+      fillSelect(provinceSel, "选择省份", weatherRegionCache.provinces, province);
+      await fillWeatherCities(province, city);
+    }
+
+    async function fillWeatherCities(province = "", city = "") {
+      const { city: citySel, district: districtSel } = weatherSelects();
+      if (!province) {
+        fillSelect(citySel, "先选省份", [], "");
+        fillSelect(districtSel, "先选城市", [], "");
+        return;
+      }
+      if (!weatherRegionCache.cities.has(province)) {
+        weatherRegionCache.cities.set(province, await loadWeatherRegionItems({ province }));
+      }
+      fillSelect(citySel, "选择城市", weatherRegionCache.cities.get(province), city);
+      await fillWeatherDistricts(province, city);
+    }
+
+    async function fillWeatherDistricts(province = "", city = "", code = "") {
+      const { district: districtSel } = weatherSelects();
+      if (!province || !city) {
+        fillSelect(districtSel, "先选城市", [], "");
+        return;
+      }
+      const key = `${province}|${city}`;
+      if (!weatherRegionCache.districts.has(key)) {
+        weatherRegionCache.districts.set(key, await loadWeatherRegionItems({ province, city }));
+      }
+      fillSelect(districtSel, "选择区县", weatherRegionCache.districts.get(key), code);
+    }
+
+    /** 把已存的地区回填到三个下拉上。 */
+    async function paintWeatherRegion() {
+      const area = globalSettings.weatherArea && typeof globalSettings.weatherArea === "object"
+        ? globalSettings.weatherArea
+        : null;
+      const province = String(area?.province || "").trim();
+      const city = String(area?.city || "").trim();
+      const code = String(area?.code || "").trim();
+      try {
+        await fillWeatherProvinces(province, city, code);
+      } catch (error) {
+        say(`地区列表没读出来：${error?.message || error}`, "err");
+      }
+    }
+
+    document.getElementById("weather-province").addEventListener("change", async (event) => {
+      await fillWeatherCities(String(event.target.value || "").trim(), "");
+    });
+    document.getElementById("weather-city").addEventListener("change", async (event) => {
+      const province = String(weatherSelects().province.value || "").trim();
+      await fillWeatherDistricts(province, String(event.target.value || "").trim(), "");
+    });
+    // 选到区县就按区县中心点查；只到城市就按城市查（行政代码留空）。
     document.getElementById("own-weather-save").addEventListener("click", async () => {
-      const input = document.getElementById("own-weather-location");
-      const location = String(input?.value ?? "").trim().replace(/\s+/g, " ").slice(0, 60);
-      const ok = await saveGlobal({ weatherLocation: location }, location ? `天气地点记下了：${location}` : "已清空天气地点，不再查天气");
+      const { province, city, district } = weatherSelects();
+      const pickedProvince = String(province.value || "").trim();
+      const pickedCity = String(city.value || "").trim();
+      const pickedCode = String(district.value || "").trim();
+      if (!pickedProvince) return say("先选一下省份", "err");
+      const patch = pickedCode
+        ? { weatherArea: { code: pickedCode } }
+        : { weatherArea: null, weatherLocation: [pickedProvince, pickedCity].filter(Boolean).join(" ") };
+      const ok = await saveGlobal(patch, pickedCode ? "天气地点记下了" : "天气地点记下了（按城市查）");
+      if (ok) paintGlobal();
+    });
+    document.getElementById("own-weather-clear").addEventListener("click", async () => {
+      const ok = await saveGlobal({ weatherArea: null, weatherLocation: "" }, "已清除天气地点，不再查天气");
       if (ok) paintGlobal();
     });
     document.getElementById("workfeed-switch").addEventListener("click", async () => {
@@ -4842,6 +4967,8 @@
     async function boot() {
       try {
         hana.ready?.({ ok: true });
+        // 地区三个下拉也套手帐风的外壳（原生 select 只留值和事件）。
+        dressSelects(document);
         await reloadSettings();
         void refreshVideoStatus();
         await loadMessageSound();

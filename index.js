@@ -41,6 +41,9 @@ import {
   ownWeatherEvents,
   takeFestivalHint,
 } from "./lib/day-context.js";
+// 地区下拉：省 / 市 / 区县三层，页面按层来取。
+import { regionOptions } from "./lib/weather-regions.js";
+import { formatAdministrativeRegion, getAdministrativeRegion } from "./lib/administrative-divisions.js";
 import { dueTodosFromSnapshot, nudgeKey, nudgeSeen, pickTodoNudger, todoNudgeText } from "./lib/todo-nudge.js";
 import { hasProposal, confirmProposal, makeProposal, proposalAskText, proposeFromMessage } from "./lib/todo-propose.js";
 import { isMorningPart, spokenClock, timeBlock, zonedTimestamp } from "./lib/clock.js";
@@ -1168,16 +1171,22 @@ export function apply(ctx) {
     if (Object.prototype.hasOwnProperty.call(patch, "weatherArea")) {
       const area = patch.weatherArea;
       const code = area && typeof area === "object" ? String(area.code ?? "").trim().slice(0, 12) : "";
-      if (!code) {
-        patch.weatherArea = null;
-      } else {
-        const latitude = Number(area.latitude);
-        const longitude = Number(area.longitude);
+      const region = code ? getAdministrativeRegion(code) : null;
+      if (region) {
+        // 认得这个代码：地名、经纬度都以表里的为准，不收页面临时编的。
         patch.weatherArea = {
-          code,
-          ...(Number.isFinite(latitude) ? { latitude } : {}),
-          ...(Number.isFinite(longitude) ? { longitude } : {}),
+          code: region.code,
+          province: region.province,
+          city: region.city,
+          district: region.district,
+          latitude: region.latitude,
+          longitude: region.longitude,
         };
+        patch.weatherLocation = formatAdministrativeRegion(region);
+      } else {
+        patch.weatherArea = null;
+        // 没选区县时允许只留城市名（走城市级查询）；什么都没选才清空。
+        if (!String(patch.weatherLocation ?? "").trim()) patch.weatherLocation = "";
       }
     }
     for (const key of ["weatherIntervalHours", "weatherForecastIntervalHours"]) {
@@ -9030,6 +9039,19 @@ export function apply(ctx) {
             styles: ACTION_STYLES.map((s) => ({ id: s.id, label: s.label, verb: s.verb, emoji: s.emoji })),
           });
         } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 500);
+        }
+      });
+
+      // 地区下拉：按层给选项（省 → 市 → 区县），不把整张行政区分表推给页面。
+      app.get("/settings/weather-regions", (c) => {
+        try {
+          const province = String(c.req.query("province") ?? "").trim();
+          const city = String(c.req.query("city") ?? "").trim();
+          const level = regionOptions({ province, city });
+          return c.json({ ok: true, level: level.level, items: level.items });
+        } catch (error) {
+          diagnostics({ event: "settings.weather-regions.failed", error: describeError(error) });
           return c.json({ ok: false, error: describeError(error) }, 500);
         }
       });

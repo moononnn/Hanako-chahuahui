@@ -559,3 +559,16 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 /* 伙伴那侧不归这里管：一句说明摆在选择器下面，不占卡片也不伪装成开关 */
 .skin-partner-note { margin: 12px 0 0; font-size: 12px; color: var(--ink-faint); line-height: 1.6; }
 
+
+/* 地区下拉（省 / 市 / 区县）：三个一排，窄屏自己叠起来。
+   下拉本身走 beautify-select 的手帐风外壳，这里只管版式。 */
+.weather-region-card { display: block; }
+.weather-region-field { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 12px; align-items: end; margin-top: 12px; }
+.weather-region-cell { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.weather-region-label { color: var(--ink-soft); font-size: 12px; }
+.weather-region-cell .dd { min-width: 0; width: 100%; }
+.weather-region-actions { grid-column: 1 / -1; display: flex; gap: 8px; margin-top: 2px; }
+.weather-region-field > .detail-field-note { grid-column: 1 / -1; }
+@media (max-width: 560px) {
+  .weather-region-field { grid-template-columns: 1fr; }
+}
