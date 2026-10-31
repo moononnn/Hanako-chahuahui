@@ -42,6 +42,9 @@ import {
   probeOwnWeather,
   takeFestivalHint,
 } from "./lib/day-context.js";
+// 天气模块要的是「返回 JSON 的 fetcher」，宿主给的 fetch 回的是 Response。
+// 少套这一层，天气就永远读不出 current —— 表现就是「查不到」。
+import { createWeatherFetcher } from "./lib/weather.js";
 // 地区下拉：省 / 市 / 区县三层，页面按层来取。
 import { regionOptions } from "./lib/weather-regions.js";
 import { formatAdministrativeRegion, getAdministrativeRegion } from "./lib/administrative-divisions.js";
@@ -1097,6 +1100,11 @@ export function apply(ctx) {
   /** 拾光记当前共享快照是否可读；旧文件存在不代表 App 活跃或已获读取授权。 */
   async function shiguangjiInstalled() {
     return daybookAvailable(ctx);
+  }
+
+  /** 天气用的 JSON fetcher。宿主网络能力还没就位时给 null（那边会安静跳过）。 */
+  function weatherJsonFetcher() {
+    return createWeatherFetcher(ctx.network);
   }
 
   // 鉴权/额度类的失败：得记成状态，熔断才上得了膛（不然后面每轮都白等一次超时）。
@@ -3972,7 +3980,7 @@ export function apply(ctx) {
         // 茶话会自己的天气先算一遍；自己这边没有，再问拾光记（那边有预报，算得更细）。
         const ownEvents = await ownWeatherEvents({
           store,
-          fetcher: typeof ctx.network?.fetch === "function" ? ctx.network.fetch.bind(ctx.network) : null,
+          fetcher: weatherJsonFetcher(),
           now,
         });
         let event = pickWeatherEvent({ reason: "ok", events: ownEvents }, now);
@@ -5801,7 +5809,7 @@ export function apply(ctx) {
     try {
       const own = await buildOwnDayContext({
         store,
-        fetcher: typeof ctx.network?.fetch === "function" ? ctx.network.fetch.bind(ctx.network) : null,
+        fetcher: weatherJsonFetcher(),
         now: new Date(),
         userName: USER_NAME,
       });
@@ -9063,10 +9071,13 @@ export function apply(ctx) {
           const body = await c.req.json().catch(() => ({}));
           const area = body?.weatherArea && typeof body.weatherArea === "object" ? body.weatherArea : null;
           const location = String(body?.weatherLocation ?? "").trim();
-          const fetcher = typeof ctx.network?.fetch === "function" ? ctx.network.fetch.bind(ctx.network) : null;
+          const fetcher = weatherJsonFetcher();
           const result = await probeOwnWeather({ area, location, fetcher });
-          diagnostics({ event: "settings.weather-test", ok: result.ok, place: result.place ?? null });
-          return c.json(result, result.ok ? 200 : 400);
+          diagnostics({ event: "settings.weather-test", ok: result.ok, place: result.place ?? null, reason: result.error ?? null });
+          // 失败也把原因带回去：错误按 { message } 走，页面才显示得出「哪儿断了」。
+          return result.ok
+            ? c.json(result)
+            : c.json({ ok: false, error: { message: result.error || "查不到" } }, 400);
         } catch (error) {
           diagnostics({ event: "settings.weather-test.failed", error: describeError(error) });
           return c.json({ ok: false, error: describeError(error) }, 500);

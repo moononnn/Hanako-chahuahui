@@ -665,7 +665,7 @@
 
     // 这一页自己的版本号：后端读同一个文件里的这一行，两边对不上就说明她眼前是旧的。
     // （以前用文件哈希当戳，但那个值是后端给的，页面旧了它照样显示新值，等于没测。）
-    const UI_BUILD = "20261031.3";
+    const UI_BUILD = "20261031.4";
 
     const el = {
       status: document.getElementById("status"),
@@ -2784,7 +2784,7 @@
           status.className = `detail-field-note weather-region-status ${data?.ok ? "ok" : "err"}`;
           status.textContent = data?.ok
             ? `查得到：${data.place} · ${data.line}`
-            : `查不到：${data?.error || "不知道哪儿断了"}`;
+            : `查不到：${data?.error?.message || data?.error || "不知道哪儿断了"}`;
         }
       } catch (error) {
         if (status) {

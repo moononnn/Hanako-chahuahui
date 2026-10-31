@@ -25,6 +25,7 @@ import {
   weatherSettings,
   weatherStoreAdapter,
 } from "../lib/day-context.js";
+import { createWeatherFetcher } from "../lib/weather.js";
 
 /** 一个够用的假 store：设置 + 全局运行态。 */
 function fakeStore(settings = {}, runtime = {}) {
@@ -75,6 +76,18 @@ function fakeFetcher(seen = []) {
     seen.push(url);
     if (String(url).includes("forecast_days=2")) return FORECAST_JSON;
     return CURRENT_JSON;
+  };
+}
+
+/** 宿主给的是 Response（带 .json()），天气模块要的是直接给 JSON 的 fetcher。 */
+function fakeHostNetwork(payload = CURRENT_JSON) {
+  return {
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => payload,
+      text: async () => JSON.stringify(payload),
+    }),
   };
 }
 
@@ -181,6 +194,19 @@ test("试一下天气：认得的区县按中心点查，通就报结果", async
   assert.match(result.place, /武侯区/);
   assert.ok(result.line);
   assert.equal(seen.length, 1, "认得区县就不用再查地名");
+});
+
+test("试一下天气：宿主那种 Response 得先过一道 createWeatherFetcher", async () => {
+  // 直接把宿主 fetch 丢给天气模块，就永远读不出 current（表现是“查不到”）。
+  const jsonFetcher = createWeatherFetcher(fakeHostNetwork());
+  const result = await probeOwnWeather({
+    area: { code: "510107" },
+    fetcher: jsonFetcher,
+    now: new Date(2026, 9, 31, 8, 0, 0),
+  });
+  assert.equal(result.ok, true);
+  assert.ok(result.line);
+  assert.match(result.place, /武侯区/);
 });
 
 test("试一下天气：没选地方、没网络、查不到，都要说清楚而不是装作没事", async () => {

@@ -61,6 +61,12 @@ test("index 接了这条路由，且认得的代码由后端改写成表里的�
   assert.ok(source.includes("getAdministrativeRegion(code)"), "选中的代码应由后端去表里认，不信页面临时编的");
   assert.ok(source.includes("formatAdministrativeRegion(region)"), "地名以表里的为准");
   assert.ok(source.includes('app.post("/settings/weather-test"'), "应该有一条试连通性的路由");
+  assert.ok(source.includes("createWeatherFetcher(ctx.network)"), "天气用的 fetcher 得先过 createWeatherFetcher，宿主给的是 Response");
+  assert.ok(
+    !/ownWeatherEvents\(\{[\s\S]{0,120}ctx\.network\?\.fetch/.test(source)
+      && !/buildOwnDayContext\(\{[\s\S]{0,120}ctx\.network\?\.fetch/.test(source),
+    "别再把宿主的原始 fetch 直接丢给天气模块",
+  );
 });
 
 test("设置页回填时区县要留着：代码得一路传到区县那层", () => {
