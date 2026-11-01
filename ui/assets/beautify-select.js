@@ -33,6 +33,7 @@
     trigger.type = "button";
     trigger.className = "dd-trigger";
     trigger.innerHTML = '<span class="dd-label"></span>' +
+      '<span class="dd-group-tag" hidden></span>' +
       '<svg class="dd-caret" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M3.25 5.25 7 9l3.75-3.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     wrap.appendChild(trigger);
 
@@ -42,29 +43,58 @@
 
     var lifted = null;
 
-    function currentLabel() {
+    // 选中的那条：连同它属于哪个 optgroup 一起（分组用来标模型商）。
+    function selectedEntry() {
       var i = sel.selectedIndex;
-      if (i >= 0 && sel.options[i]) return sel.options[i].textContent;
-      return "";
+      if (i < 0) return null;
+      var opt = sel.options[i];
+      if (!opt) return null;
+      var parent = opt.parentNode;
+      var group = parent && parent.tagName === "OPTGROUP" ? parent : null;
+      return { option: opt, group: group };
     }
 
     // 只刷新触发栏文字（选中变化后立即调用，避免关闭面板后显示旧值）
     function updateLabel() {
-      var label = currentLabel();
+      var entry = selectedEntry();
+      var label = entry ? entry.option.textContent : "";
       var labelEl = trigger.querySelector(".dd-label");
       if (labelEl) labelEl.textContent = label;
-      trigger.title = label;
+      // 分组下拉里光看模型名挑不出是哪家：把组名（模型商）挂在触发栏右边。
+      var tagEl = trigger.querySelector(".dd-group-tag");
+      if (tagEl) {
+        var groupLabel = entry && entry.group ? (entry.group.label || "") : "";
+        tagEl.textContent = groupLabel;
+        if (groupLabel) tagEl.removeAttribute("hidden");
+        else tagEl.setAttribute("hidden", "");
+      }
+      trigger.title = entry && entry.group
+        ? label + "（" + (entry.group.label || "") + "）"
+        : label;
+    }
+
+    function optionHtml(o, index) {
+      var on = index === sel.selectedIndex;
+      return '<div class="dd-opt' + (on ? " on" : "") + '" data-i="' + index + '">' +
+        '<span class="dd-check">✓</span>' +
+        '<span class="dd-opt-text">' + escapeText(o.textContent) + "</span></div>";
     }
 
     function renderPanel() {
       updateLabel();
       var html = "";
-      for (var i = 0; i < sel.options.length; i++) {
-        var o = sel.options[i];
-        var on = i === sel.selectedIndex;
-        html += '<div class="dd-opt' + (on ? " on" : "") + '" data-i="' + i + '">' +
-          '<span class="dd-check">✓</span>' +
-          '<span class="dd-opt-text">' + escapeText(o.textContent) + "</span></div>";
+      // sel.options 是扁平的（optgroup 里的也算），这里的 index 和选项序号一一对应。
+      var index = 0;
+      for (var c = 0; c < sel.children.length; c++) {
+        var node = sel.children[c];
+        if (node.tagName === "OPTGROUP") {
+          html += '<div class="dd-group-title" role="presentation">' + escapeText(node.label || "") + "</div>";
+          for (var j = 0; j < node.children.length; j++) {
+            html += optionHtml(node.children[j], index++);
+          }
+        } else if (node.tagName === "OPTION") {
+          html += optionHtml(node, index++);
+        }
       }
       panel.innerHTML = html;
       var cur = panel.querySelector(".dd-opt.on");

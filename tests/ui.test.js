@@ -186,7 +186,7 @@ test("聊天流打开到底部、上翻后可一键回到底部", () => {
   assert.match(panel, /autoScrollAllowed = stickToBottom/, "用户上翻时不被新消息拽回去");
   assert.match(panel, /async function stickerBubble\([\s\S]*?img\.classList\.remove\("loading"\);\s*\/\/ 表情包是异步插入的：[\s\S]*?scrollDown\(\);/, "异步表情包加载后仍会补到底部定位");
   assert.match(panelCss, /\.jump-bottom \{[\s\S]*?position: absolute;[\s\S]*?border-radius: 50%;/, "按钮是聊天区里的轻量悬浮圆按钮");
-  assert.match(panel, /<div class="composer-row">[\s\S]*?<button class="jump-bottom" id="jump-bottom"[\s\S]*?<\/button>[\s\S]*?<button class="emoji-btn image-btn"/, "回到底部按钮要锚定输入行，随输入框增高一起上移");
+  assert.match(panel, /<div class="composer-row"[^>]*>[\s\S]*?<button class="jump-bottom" id="jump-bottom"[\s\S]*?<\/button>[\s\S]*?<button class="emoji-btn image-btn"/, "回到底部按钮要锚定输入行，随输入框增高一起上移");
   assert.match(panelCss, /\.composer-row \{[^}]*position: relative;/s, "输入行提供回到底部按钮的定位基准");
   assert.match(panelCss, /\.jump-bottom \{[\s\S]*?bottom: calc\(100% \+ 24px\);/, "回到底部按钮悬浮在输入行上方，不再固定在聊天区底部");
 });
@@ -439,7 +439,8 @@ test("设置接口只接受用户设置字段", () => {
 test("输入提示：浮在输入框上方并自动收起，颜色跟背景适配但和发送按钮错开", () => {
   assert.match(panel, /<div class="status-line" id="status" role="status" aria-live="polite"><\/div>/);
   assert.match(panel, /<div class="pending-quote" id="pending-quote" hidden>/);
-  assert.match(panel, /<div class="composer-row">/);
+  // 2026-11-01：这一行多了 id，长文换排要按整行宽度量（composer-row 是量宽度的锚点）。
+  assert.match(panel, /<div class="composer-row" id="composer-row">/);
   assert.match(panel, /function setStatus\(text\) \{[\s\S]*?setTimeout\(\(\) => \{[\s\S]*?3200/);
   assert.match(panelCss, /\.status-line \{[\s\S]*?position: absolute;[\s\S]*?left: 50%;[\s\S]*?bottom: calc\(100% - 2px\);[\s\S]*?transform: translateX\(-50%\);/);
   assert.doesNotMatch(panelCss, /\.status-line::after/, "提示就是干净的气泡，不画弹出尖角");
@@ -936,6 +937,19 @@ test("设置页：整个页面的选项都不许把页面抽回最上面（2026-
   const dd = fs.readFileSync(new URL("../ui/assets/beautify-select.js", import.meta.url), "utf8");
   assert.match(dd, /typeof window\.holdViewport === "function"\) window\.holdViewport\(\);/, "下拉收起也要按住视口");
   assert.match(dd, /typeof window\.holdViewport === "function"/, "页面没挂守卫时不能报错");
+});
+
+test("模型下拉：按厂商分组，还得标出同一家下的不同通道", () => {
+  // 2026-10-31：同一个模型名可能挂在好几家名下，光看模型名挑不出是哪家，
+  // 选下去才发现走错了通道。分法抄知意：组标题是厂商名，同一家多条通道再标通道名。
+  assert.match(app, /modelGroups: groupModelsByProvider\(models\)/, "后端要把模型按厂商分组发下来");
+  assert.match(app, /visionModelGroups: groupModelsByProvider\(visionModels\)/, "识图模型也按厂商分组");
+  assert.match(settings, /modelGroups = data\.modelGroups \?\? \[\]/, "设置页要用后端分好的组");
+  assert.match(settings, /groupEl\.label = group\.label/, "厂商名进 optgroup，自定义下拉会渲染成分组标题");
+  assert.match(settings, /const channel = showChannel \? \(item\.providerChannel \|\| ""\) : "";/, "只有同一家有多条通道时才标通道名");
+  const dd = fs.readFileSync(new URL("../ui/assets/beautify-select.js", import.meta.url), "utf8");
+  assert.match(dd, /dd-group-title/, "自定义下拉要认 optgroup，画出分组标题");
+  assert.match(dd, /tagEl\.textContent = groupLabel/, "触发栏上要标出选中项属于哪一家");
 });
 
 test("设置页：保存后重开同一页不许把页面抽回最上面（2026-10-08）", () => {

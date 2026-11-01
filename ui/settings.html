@@ -665,7 +665,7 @@
 
     // 这一页自己的版本号：后端读同一个文件里的这一行，两边对不上就说明她眼前是旧的。
     // （以前用文件哈希当戳，但那个值是后端给的，页面旧了它照样显示新值，等于没测。）
-    const UI_BUILD = "20261031.4";
+    const UI_BUILD = "20261031.5";
 
     const el = {
       status: document.getElementById("status"),
@@ -700,6 +700,9 @@
     let bubbleSkinGroups = [];
     let modelCatalog = [];
     let visionModelCatalog = [];
+    // 模型按厂商分好组的那份（服务端算）：同一个模型名可能挂在好几家名下。
+    let modelGroups = [];
+    let visionModelGroups = [];
     /** 图片存储的账：张数、占用、几张过了她定的期。GET settings 带回来。 */
     let imageStorage = null;
     let voiceChoices = [];
@@ -1345,6 +1348,30 @@
       return hit ? { provider: hit.provider, model: hit.model } : null;
     }
 
+    /**
+     * 把模型目录按厂商塞进下拉。厂商名进 <optgroup>，自定义下拉会把它渲染成分组标题。
+     * 分组是服务端算好的（lib/model.js 的 groupModelsByProvider），页面只管画。
+     */
+    function appendModelGroups(sel, groups) {
+      for (const group of groups) {
+        const groupEl = document.createElement("optgroup");
+        groupEl.label = group.label;
+        for (const item of group.items) {
+          const opt = document.createElement("option");
+          opt.value = item.key;
+          opt.textContent = modelOptionText(item, group.showChannel);
+          groupEl.appendChild(opt);
+        }
+        sel.appendChild(groupEl);
+      }
+    }
+
+    function modelOptionText(item, showChannel) {
+      const base = `${item.name || item.model}${item.isCurrent ? "（当前）" : ""}`;
+      const channel = showChannel ? (item.providerChannel || "") : "";
+      return channel ? `${base} · ${channel}` : base;
+    }
+
     /** 造一个模型下拉。调用方负责插进文档，插完再 dressSelects。 */
     function buildModelSelect(currentKey) {
       const sel = document.createElement("select");
@@ -1352,12 +1379,7 @@
       follow.value = "follow";
       follow.textContent = FOLLOW_LABEL;
       sel.appendChild(follow);
-      for (const item of modelCatalog) {
-        const opt = document.createElement("option");
-        opt.value = item.key;
-        opt.textContent = `${item.name || item.model}${item.isCurrent ? "（当前）" : ""}`;
-        sel.appendChild(opt);
-      }
+      appendModelGroups(sel, modelGroups);
       sel.value = modelCatalog.some((item) => item.key === currentKey) ? currentKey : "follow";
       return sel;
     }
@@ -1637,12 +1659,7 @@
       none.value = "none";
       none.textContent = "暂不配置";
       sel.appendChild(none);
-      for (const item of visionModelCatalog) {
-        const opt = document.createElement("option");
-        opt.value = item.key;
-        opt.textContent = `${item.name || item.model}${item.isCurrent ? "（当前）" : ""}`;
-        sel.appendChild(opt);
-      }
+      appendModelGroups(sel, visionModelGroups);
       // 已经配了一个目录没标成能识图的模型时，得让它在下拉里露头并保持选中。
       // 否则框上写着「暂不配置」，实际发图还在用它，两边对不上；她改别的项时更容易以为这里本来就空着。
       const known = visionModelCatalog.some((item) => item.key === currentKey);
@@ -4976,6 +4993,8 @@
         bubbleSkinGroups = data.bubbleSkinGroups ?? [];
         modelCatalog = data.models ?? [];
         visionModelCatalog = data.visionModels ?? [];
+        modelGroups = data.modelGroups ?? [];
+        visionModelGroups = data.visionModelGroups ?? [];
         imageStorage = data.imageStorage ?? null;
         voiceChoices = data.voiceChoices ?? [];
         voiceGroups = data.voiceGroups ?? [];

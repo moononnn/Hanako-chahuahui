@@ -8,10 +8,12 @@ import {
   classifyModelFailure,
   generateReply,
   normalizeToolCallId,
+  groupModelsByProvider,
   withModelDeadline,
   parseNdjson,
   pickFromCatalog,
   normalizeModelRef,
+  utilitySafeMessages,
   chatModelOptions,
   isChatModel,
   resolveModelChoice,
@@ -56,6 +58,63 @@ test("utility：180/400/500 小预算保留思考余量，仍使用原宿主通�
     assert.equal("model" in ctx.requests[0], false);
     assert.equal("thinking" in ctx.requests[0], false, "utility 不接受的参数不能乱塞");
   }
+});
+
+test("utility：带历史的调用里 assistant 正文只交纯字符串（Codex 只认 output_text）", async () => {
+  // 茶话会的历史长这样：user 是字符串，assistant 是 [{type:"text"}]。
+  // 2026-11-01 实机：数组形态被宿主翻成 input_text，Codex 直接 400，带历史那几路整天哑掉。
+  const history = [
+    { role: "assistant", content: [{ type: "text", text: "今天外头风大。" }] },
+    { role: "user", content: "我回来了" },
+    { role: "assistant", content: [{ type: "text", text: "回来啦。" }, { type: "toolCall", id: "call_1" }] },
+    { role: "toolResult", content: [{ type: "text", text: "工具结果" }] },
+  ];
+  const safe = utilitySafeMessages([...history, { role: "user", content: "在干嘛" }]);
+  assert.deepEqual(safe.map((row) => row.role), ["assistant", "user", "assistant", "user"], "工具结果不进 utility");
+  assert.equal(safe[0].content, "今天外头风大。");
+  assert.equal(safe[2].content, "回来啦。", "多段文字要合并成一条，工具调用部分丢掉");
+  assert.equal(safe[1].content, "我回来了", "user 的字符串形态不动");
+
+  // 真正发出去的那份也得是字符串，不能在这里又被包回数组。
+  const ctx = utilityCtx(async () => ({ text: "嗯" }));
+  await askUtility(ctx, { systemPrompt: "短一句", messages: safe, maxTokens: 300 });
+  assert.equal(typeof ctx.requests[0].messages[0].content, "string");
+  assert.equal(typeof ctx.requests[0].messages[2].content, "string");
+});
+
+test("utility：宿主那家不吃温度时，去掉 temperature 再试一次，并记住下次不再带", async () => {
+  // 2026-11-01 实机：Codex 直提拒 temperature（400 Unsupported parameter），
+  // 同一份 body 只去掉这一项就 200。
+  const ctx = utilityCtx(async (request) => {
+    if ("temperature" in request) throw Object.assign(new Error("The auxiliary model provider could not complete the request."), { code: "APP_MODEL_PROVIDER_ERROR" });
+    return { text: "这下通了" };
+  });
+  const seen = [];
+  assert.equal(await askUtility(ctx, { userText: "测试", diagnostics: (row) => seen.push(row) }), "这下通了");
+  assert.equal(ctx.requests.length, 2, "先带温度撞一次，去掉再试一次");
+  assert.equal("temperature" in ctx.requests[0], true);
+  assert.equal("temperature" in ctx.requests[1], false, "不吃这味就不能再带这个键");
+  assert.ok(seen.some((row) => row.event === "models.utility.retry" && row.reason === "temperature-refused"));
+  // 记住了：下一次直接不带，不再白撞。
+  ctx.requests.length = 0;
+  await askUtility(ctx, { userText: "再来一次" });
+  assert.equal(ctx.requests.length, 1);
+  assert.equal("temperature" in ctx.requests[0], false);
+});
+
+test("utility：askUtility 自己就把历史洗干净，不用调用方记得先过一遍", async () => {
+  // 主动开口、未读跟进走的是 askCheap → askUtility，不经过回复兜底那条路，
+  // 所以清洗必须长在 askUtility 里面，否则一整天开口都是 400。
+  const ctx = utilityCtx(async () => ({ text: "好了" }));
+  await askUtility(ctx, {
+    systemPrompt: "短一句",
+    messages: [
+      { role: "assistant", content: [{ type: "text", text: "今天外头风大。" }] },
+      { role: "user", content: "我回来了" },
+    ],
+  });
+  assert.equal(typeof ctx.requests[0].messages[0].content, "string", "数组正文到不了宿主");
+  assert.equal(ctx.requests[0].messages[0].content, "今天外头风大。");
 });
 
 test("utility：已足够的预算不缩小，不虚增成无限上限", async () => {
@@ -405,7 +464,11 @@ test("回复的原有 utility 兜底也留出思考预算，完整上下文不�
   ];
   const ctx = utilityCtx(async (request) => {
     assert.equal(request.maxTokens, 8192);
-    assert.equal(request.messages, messages);
+    // assistant 那条单成一段，只是正文从数组换成纯字符串（Codex 只认 output_text，见上面那条用例）。
+    assert.deepEqual(request.messages.map((row) => row.role), ["user", "assistant", "user"]);
+    assert.deepEqual(request.messages[0], messages[0]);
+    assert.deepEqual(request.messages[2], messages[2]);
+    assert.equal(request.messages[1].content, "已有回复");
     return { text: "恢复原有备用回复" };
   });
   ctx.models.stream = async () => ({ text: async () => "" });
@@ -671,6 +734,24 @@ test("下拉目录：嵌入和生图那些不往里塞，当前焦点排最前",
   assert.deepEqual(rows.map((row) => row.key), ["openai-codex/gpt-5.6-luna", "deepseek/deepseek-flash"]);
   assert.equal(rows[0].isCurrent, true);
   assert.equal(chatModelOptions(null).length, 0);
+});
+
+test("模型下拉：带上厂商名，同一家名下多条通道才标通道", () => {
+  const rows = chatModelOptions({
+    models: [
+      { provider: "deepseek", model: "deepseek-flash", name: "DeepSeek Flash" },
+      { provider: "minimax", model: "m3", name: "MiniMax M3" },
+      { provider: "minimax-token-plan", model: "m3.1-flash", name: "MiniMax M3.1 Flash" },
+      { provider: "my-gateway", model: "some-model", name: "自建通道" },
+    ],
+  });
+  const groups = groupModelsByProvider(rows);
+  assert.deepEqual(groups.map((group) => group.label), ["DeepSeek", "MiniMax", "my-gateway"]);
+  assert.equal(groups[0].showChannel, false, "只有一条通道时组标题已经说清是哪家");
+  assert.equal(groups[1].showChannel, true, "同一家名下有多条通道，得再标出哪条线");
+  assert.equal(groups[1].items[0].providerChannel, "官方接口");
+  assert.equal(groups[1].items[1].providerChannel, "Token 计划");
+  assert.equal(groups[2].items[0].providerLabel, "my-gateway", "没收录的通道照原值显示，不猜");
 });
 
 test("定模型：伙伴指定 > 全局默认 > 宿主当前", () => {

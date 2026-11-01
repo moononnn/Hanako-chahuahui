@@ -1,5 +1,7 @@
 # 本地开发用的东西，不进公开仓库
 
+# 本机调研/设计/优化建议文档（含私人名与本机路径，从不外传，也不进发布包）
+docs/
 DESIGN-*.md
 PLAN-*.md
 TEST-REFACTOR-PLAN.md

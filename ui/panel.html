@@ -170,17 +170,20 @@
           <div><strong>引用这条消息</strong><span id="pending-quote-text"></span></div>
           <button type="button" id="pending-quote-clear" aria-label="取消引用">×</button>
         </div>
-        <div class="composer-row">
+        <div class="composer-row" id="composer-row">
           <button class="jump-bottom" id="jump-bottom" type="button" title="回到底部" aria-label="回到底部" hidden>
             <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"/></svg>
           </button>
-          <button class="emoji-btn image-btn" id="btn-image" type="button" title="添加图片" aria-label="添加图片" disabled>
-            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.2" y="3.5" width="13.6" height="13" rx="2"></rect><circle cx="7.2" cy="7.5" r="1.2"></circle><path d="m4.8 14.2 3.4-3.4 2.4 2.2 1.8-1.7 2.8 2.9M14.8 3.2v4.2M12.7 5.3h4.2"></path></svg>
-          </button>
+          <!-- 两个工具按钮包一层：字写多了要整列转竖排，给文字腾出横向空间 -->
+          <div class="composer-tools" id="composer-tools">
+            <button class="emoji-btn image-btn" id="btn-image" type="button" title="添加图片" aria-label="添加图片" disabled>
+              <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.2" y="3.5" width="13.6" height="13" rx="2"></rect><circle cx="7.2" cy="7.5" r="1.2"></circle><path d="m4.8 14.2 3.4-3.4 2.4 2.2 1.8-1.7 2.8 2.9M14.8 3.2v4.2M12.7 5.3h4.2"></path></svg>
+            </button>
+            <button class="emoji-btn" id="btn-emoji" type="button" title="表情和表情包" aria-label="打开表情和表情包" disabled>
+              <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.2"></circle><path d="M6.8 11.8c.9 1.1 1.9 1.6 3.2 1.6s2.3-.5 3.2-1.6M7.2 8h.1M12.7 8h.1"></path></svg>
+            </button>
+          </div>
           <input id="image-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
-          <button class="emoji-btn" id="btn-emoji" type="button" title="表情和表情包" aria-label="打开表情和表情包" disabled>
-            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.2"></circle><path d="M6.8 11.8c.9 1.1 1.9 1.6 3.2 1.6s2.3-.5 3.2-1.6M7.2 8h.1M12.7 8h.1"></path></svg>
-          </button>
           <textarea id="input" rows="1" placeholder="说点什么…" title="Enter 发送，Shift+Enter 换行" aria-label="输入消息，最多 12000 字" disabled maxlength="12000"></textarea>
           <button class="send" id="btn-send" type="button" title="发送" aria-label="发送" disabled>
             <svg class="send-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="m3.2 9.1 13.5-5.4-3.4 13.1-3.1-5.1-7-2.6Z"></path><path d="m10.2 11.7 6.5-8"></path></svg>
@@ -240,6 +243,8 @@
       waitCupLayer: document.getElementById("wait-cup-layer"),
       waitCupSlot: document.getElementById("wait-cup-slot"),
       jumpBottom: document.getElementById("jump-bottom"),
+      composerRow: document.getElementById("composer-row"),
+      composerTools: document.getElementById("composer-tools"),
     threadTopTip: document.getElementById("thread-top-tip"),
       input: document.getElementById("input"),
       send: document.getElementById("btn-send"),
@@ -1909,8 +1914,96 @@
      */
     function autosizeInput() {
       el.input.classList.toggle("is-multiline", el.input.value.includes("\n"));
+      const fromHeight = el.input.getBoundingClientRect().height;
+      updateComposerStack(); // 先定排布，再按最终排版量高度
       el.input.style.height = "0px";
       el.input.style.height = `${el.input.scrollHeight}px`;
+      // 行数变了（包括换排导致的重排）让高度自己走过去，不硬跳一下
+      const toHeight = el.input.getBoundingClientRect().height;
+      if (inputHeightAnim) { inputHeightAnim.cancel(); inputHeightAnim = null; }
+      if (Math.abs(fromHeight - toHeight) >= 0.5) {
+        inputHeightAnim = el.input.animate(
+          [{ height: `${fromHeight}px` }, { height: `${toHeight}px` }],
+          { duration: 280, easing: "cubic-bezier(.22, 1.1, .36, 1)" }
+        );
+      }
+    }
+    let inputHeightAnim = null;
+
+    /**
+     * 左侧两个工具按钮的换排：字写多了就豦起来，把宽度还给文字。
+     * 判据跟 Hana 闲聊窗一致：按“豦排后能用的宽度”量一次行数，
+     * 两行以上才切；只占一行说明横着放得下，不折腾。
+     */
+    let composerMirror = null;
+    function ensureComposerMirror() {
+      if (composerMirror && composerMirror.isConnected) return composerMirror;
+      const mirror = document.createElement("div");
+      mirror.className = "composer-mirror";
+      mirror.setAttribute("aria-hidden", "true");
+      el.composerRow.appendChild(mirror);
+      composerMirror = mirror;
+      return mirror;
+    }
+    function countComposerLines(width) {
+      const mirror = ensureComposerMirror();
+      const cs = getComputedStyle(el.input);
+      // 每次抄一遍真输入框的排版参数，换主题换字号也不会量偏
+      mirror.style.font = cs.font;
+      mirror.style.lineHeight = cs.lineHeight;
+      mirror.style.letterSpacing = cs.letterSpacing;
+      mirror.style.padding = `${cs.paddingTop} ${cs.paddingRight} ${cs.paddingBottom} ${cs.paddingLeft}`;
+      mirror.style.boxSizing = "border-box";
+      mirror.style.width = `${width}px`;
+      mirror.textContent = el.input.value;
+      const lineHeight = parseFloat(cs.lineHeight) || 24;
+      const content = mirror.scrollHeight - (parseFloat(cs.paddingTop) || 0) - (parseFloat(cs.paddingBottom) || 0);
+      return Math.max(1, Math.round(content / lineHeight));
+    }
+    function flipComposerTools(apply) {
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const buttons = el.composerTools ? Array.from(el.composerTools.querySelectorAll(".emoji-btn")) : [];
+      const before = reduced ? [] : buttons.map((btn) => btn.getBoundingClientRect());
+      apply();
+      if (reduced) return;
+      buttons.forEach((btn, index) => {
+        const prev = before[index];
+        if (!prev) return;
+        const now = btn.getBoundingClientRect();
+        const dx = prev.left - now.left;
+        const dy = prev.top - now.top;
+        if (!dx && !dy) return;
+        // FLIP：先把它按原位摆回去，再让它自己走回新位置，看上去就是滑过去的
+        btn.style.transition = "none";
+        btn.style.transform = `translate(${dx}px, ${dy}px)`;
+        requestAnimationFrame(() => {
+          btn.style.transition = "transform .32s cubic-bezier(.22, 1.08, .36, 1)";
+          btn.style.transform = "";
+          const settle = () => { btn.style.transition = ""; btn.style.transform = ""; };
+          btn.addEventListener("transitionend", settle, { once: true });
+          setTimeout(settle, 480); // 兵底：切走/隐藏时 transitionend 可能不来，别把内联样式留着
+        });
+      });
+    }
+    function updateComposerStack() {
+      if (!el.composerRow || !el.composerTools || !el.input) return;
+      if (!el.input.value.trim()) {
+        if (el.composerRow.classList.contains("is-stacked")) flipComposerTools(() => el.composerRow.classList.remove("is-stacked"));
+        return;
+      }
+      const rowWidth = el.composerRow.clientWidth;
+      const btnWidth = el.composerTools.firstElementChild?.getBoundingClientRect().width || 38;
+      const gap = parseFloat(getComputedStyle(el.composerRow).columnGap) || 8;
+      const stackedWidth = Math.max(0, rowWidth - 2 * btnWidth - 2 * gap);
+      const horizontalWidth = Math.max(0, rowWidth - 3 * btnWidth - 3 * gap);
+      const stacked = el.composerRow.classList.contains("is-stacked");
+      // 进和出用不同门槛：字多到竖排能省行才进去，要等横排自己一行放得下才退出来。
+      // 两个门槛错开，在临界字数上不会来回横跳。
+      const shouldStack = stacked
+        ? countComposerLines(horizontalWidth) >= 2
+        : countComposerLines(stackedWidth) >= 2;
+      if (shouldStack === stacked) return;
+      flipComposerTools(() => el.composerRow.classList.toggle("is-stacked", shouldStack));
     }
     function settleComposerAfterLayout() {
       requestAnimationFrame(() => requestAnimationFrame(autosizeInput));

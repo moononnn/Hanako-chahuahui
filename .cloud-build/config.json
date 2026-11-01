@@ -4,7 +4,7 @@
     "id": "chahuahui",
     "name": "茶话会",
     "kind": "app",
-    "version": "0.15.1",
+    "version": "0.16.0",
     "repoUrl": "moononnn/Hanako-chahuahui"
   },
   "publisher": "moononnn & 小花",
@@ -30,7 +30,8 @@
       ".cloud-build",
       ".cache",
       "out",
-      "attachments"
+      "attachments",
+      "docs"
     ],
     "excludeFiles": [
       "PENDING_CHANGES.md",

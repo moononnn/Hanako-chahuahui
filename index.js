@@ -60,6 +60,7 @@ import {
   normalizeModelRef,
   chatModelOptions,
   visionModelOptions,
+  groupModelsByProvider,
   resolveModelChoice,
   setUsageObserver,
   withModelDeadline,
@@ -9065,6 +9066,9 @@ export function apply(ctx) {
             partners,
             models,
             visionModels,
+            // 模型按厂商分组：同一个模型名可能挂在好几家名下，分组标题就是厂商名。
+            modelGroups: groupModelsByProvider(models),
+            visionModelGroups: groupModelsByProvider(visionModels),
             imageStorage: imageStorageSummary(),
             voiceChoices: voiceChoicesForModel(store.getGlobalSettings().voiceModel),
             voiceGroups: voiceGroupsForModel(store.getGlobalSettings().voiceModel),

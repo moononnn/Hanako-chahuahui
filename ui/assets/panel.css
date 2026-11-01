@@ -1438,6 +1438,12 @@ body.slot-embedded .chat.has-bg .composer::before {
 .message-quote-label { flex: none; color: var(--primary-ink); font-size: 11px; }
 .message-quote-text { min-width: 0; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .composer-row { position: relative; display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; min-width: 0; }
+/* 两个工具按钮包成一群：横排时并排站，字写多了整列转竖排（见 .is-stacked），
+   把腾出来的横向空间还给文字。用 column-reverse 是为了让先声明的图片按钮落到下面。 */
+.composer-tools { display: flex; flex: none; flex-direction: row; align-items: center; gap: 8px; }
+.composer-row.is-stacked .composer-tools { flex-direction: column-reverse; align-items: center; align-self: flex-start; gap: 4px; }
+/* 量行数用的影子元素：跟着 textarea 同字体同内边距，但不占位、不可见 */
+.composer-mirror { position: absolute; top: 0; left: 0; visibility: hidden; pointer-events: none; white-space: pre-wrap; overflow-wrap: break-word; }
 .emoji-btn {
   flex: none;
   width: 38px;
@@ -1629,6 +1635,10 @@ textarea {
   transition: border-color .15s ease, box-shadow .15s ease;
 }
 textarea.is-multiline { padding: 8px 12px; line-height: 1.5; }
+/* 竖排：给文字让出了宽度，上限也跟着从三行放宽到六行 */
+/* 竖排时整行改成顶部对齐：按钮列从上面长下来，输入框不再因为行高变高而被居中推开 */
+.composer-row.is-stacked { align-items: flex-start; }
+.composer-row.is-stacked textarea { max-height: 172px; padding-top: 7px; padding-bottom: 7px; }
 textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(93, 174, 142, .13); }
 textarea::placeholder { color: var(--ink-faint); }
 button.send {
