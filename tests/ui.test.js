@@ -214,6 +214,27 @@ test("回复只有一条路能画：正在演的那轮归演出，剩下的归�
   assert.match(panel, /const alive = \(\) => current === agentId && viewSeq === threadViewSeq/);
 });
 
+test("同一句话不会被画成两个气泡：每片气泡只画一次", () => {
+  // 每条消息记下「哪几片已经在屏上」：两条路（逐段显现、实时演出）撞上时，谁来画都只画缺的那片。
+  assert.match(panel, /const drawnPieces = new Map\(\)/);
+  assert.match(panel, /function drawnPiecesFor\(messageId\)/);
+  assert.match(panel, /if \(index >= 0 && drawn\.has\(index\)\) continue;/);
+  assert.match(panel, /if \(index >= 0\) drawn\.add\(index\);/);
+  // 屏幕清空（整段重画）时这本账得跟着清：不然重画之后会把该画的片漏掉。
+  assert.match(panel, /el\.stream\.innerHTML = "";[\s\S]*?drawnPieces\.clear\(\);/);
+  // 两条逐片画的路都要报出自己画的是第几片。
+  assert.match(panel, /renderMessage\(payload\.message, \{[\s\S]*?pieceIndex: index,[\s\S]*?assistantPieces: \[item\.text\]/);
+  assert.match(panel, /renderMessage\(m, \{[\s\S]*?pieceIndex: index,[\s\S]*?assistantPieces: \[m\.bubbles\[index\]\]/);
+  // 按文字画的那一条也照记语音状态：否则下一轮会误判「语音变了」而整段重画，
+  // 整段重画撞上正在演的那一趟，同一句就被画成两泡（2026-11-01 实机）。
+  assert.match(panel, /if \(m\.voice\) \{\s*voiceStates\.set\(m\.id, voiceStateKey\(m\)\);/);
+  assert.doesNotMatch(panel, /if \(m\.voice && !Array\.isArray\(opts\.assistantPieces\)\)/, "按文字画的那一条也得记语音状态");
+  // 实时演出发现屏幕被整段重画过就收手：别再往上面补泡。
+  assert.match(panel, /const generation = renderGeneration;/);
+  assert.match(panel, /const alive = \(\) => current === agentId && viewSeq === threadViewSeq && generation === renderGeneration;/);
+  assert.match(panel, /generation !== renderGeneration && !hasVoiceBubble\(payload\.message\)/);
+});
+
 test("茶话会在场心跳不被取数轮询冒充", () => {
   assert.match(panel, /async function loadPartners\(\)\s*\{[\s\S]*?api\("GET", "partners"\)/);
   assert.doesNotMatch(app, /app\.get\("\/partners"[\s\S]{0,500}panelSeenAt = Date\.now\(\)/);

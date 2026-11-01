@@ -273,6 +273,8 @@ function panelHarness(names) {
     console, setTimeout, clearTimeout, Date, Audio: class { addEventListener() {} },
     el, document: { createElement: (tag) => new Node(tag), createTextNode: (text) => { const n = new Node("#text"); n.textContent = text; return n; }, querySelectorAll: (s) => root.querySelectorAll(s), body: root },
     partners: [], current: "partner-a", currentMessages: [], seenIds: new Set(), voiceStates: new Map(),
+    // 「哪几片气泡已经在屏上」这本账：整段重画时会清，见 panel.html 的 drawnPieces。
+    drawnPieces: new Map(),
     transcriptOpen: new Map(),
     partnerFeedNodes: new Map(), userCols: new Map(), tickNodes: new Map(), pendingDrafts: new Map(),
     actionEmoji: new Map(), liveDots: null, autoScrollAllowed: true, renderingAll: false, prepending: false, prependAnchor: null,
@@ -304,7 +306,7 @@ function panelHarness(names) {
   vm.runInContext(actual, context);
   return { context, root, el, binds, mounts, states, paints, opened, statuses, requests };
 }
-const renderFunctions = ["renderAll", "rememberTranscriptOpen", "voiceStateKey", "hasVoiceBubble", "voiceLeftoverBubbles", "invalidateRendering", "renderMessage", "renderAction", "renderVoiceMessage", "fillBubbleText", "bubble", "quoteBlock", "attachQuote", "place", "messageTime", "bubbleTimeText", "timeDivider", "timeDividerText", "stickerIdOf", "isBareImageMarker", "isBareStickerMarker", "readUserIds", "scrollDown", "updateJumpBottom", "isAtBottom", "tick", "formatVoiceDuration", "appendImageToBubble", "markMessageSoundVisible"];
+const renderFunctions = ["renderAll", "rememberTranscriptOpen", "voiceStateKey", "hasVoiceBubble", "voiceLeftoverBubbles", "invalidateRendering", "renderMessage", "renderAction", "renderVoiceMessage", "fillBubbleText", "bubble", "quoteBlock", "attachQuote", "place", "messageTime", "bubbleTimeText", "timeDivider", "timeDividerText", "stickerIdOf", "isBareImageMarker", "isBareStickerMarker", "readUserIds", "drawnPiecesFor", "bubblesIndexOf", "scrollDown", "updateJumpBottom", "isAtBottom", "tick", "formatVoiceDuration", "appendImageToBubble", "markMessageSoundVisible"];
 function renderHarness() {
   const h = panelHarness(renderFunctions);
   vm.runInContext("const STICKER_PREFIX = \"\\u0001stk:\"; const BARE_IMAGE_MARKER_RE = /^\\[图片\\]$/; const BARE_MARKER_RE = /^\\[表情\\]$/; const renderedMessageSoundIds = new Set(); const pendingMessageSoundById = new Map(); const BUBBLE_LINK = /https?:\\/\\/[^\\s<>\"'\\u3000-\\u303f\\u4e00-\\u9fff\\uff00-\\uffef]+/gu;", h.context);

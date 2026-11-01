@@ -19,7 +19,8 @@ test("index.js 能被真的加载，导出齐全", async () => {
   const mod = await import("../index.js");
   assert.equal(mod.name, "chahuahui");
   assert.equal(typeof mod.apply, "function");
-  assert.match(mod.version, /^\d+\.\d+\.\d+$/);
+  // 版本号：正式号 x.y.z；开发期按版本号纪律带 -dev.N（开发号不得打包、不得进市场）。
+  assert.match(mod.version, /^\d+\.\d+\.\d+(-dev\.\d+)?$/);
 });
 
 test("apply 跑得通（装载那一刻出错会让整个应用消失）", async () => {

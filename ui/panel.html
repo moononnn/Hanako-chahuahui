@@ -359,6 +359,31 @@
      */
     const pendingClientIds = new Set();
     const voiceStates = new Map();
+    /**
+     * 每条消息已经画在屏幕上的气泡片（按 m.bubbles 的下标记）。
+     *
+     * 为什么要有这本账：一条消息有两条路会画它——轮询那头的「逐段显现」，
+     * 和「实时演出」。两条撞上时 seenIds 只挡得住第一片（第一片走的是不带
+     * allowSeen 的路），后面几片因为 allowSeen 绕过了 seenIds，会被各画一遍：
+     * 屏幕上就是同一句多出一泡（2026-11-01 实机，末泡重复）。
+     * 这里记下「哪几片已经在屏上」，谁来画都只画缺的那几片。
+     */
+    const drawnPieces = new Map();
+    /** 这条消息已经画过的片（没有就建一份空的）。 */
+    function drawnPiecesFor(messageId) {
+      const key = String(messageId ?? "");
+      let set = drawnPieces.get(key);
+      if (!set) {
+        set = new Set();
+        drawnPieces.set(key, set);
+      }
+      return set;
+    }
+    /** 一片正文在 m.bubbles 里是第几片（找不到就是 -1）。 */
+    function bubblesIndexOf(message, piece) {
+      const list = Array.isArray(message?.bubbles) ? message.bubbles : [];
+      return list.indexOf(piece);
+    }
     /** 消息 id → 她把「转文字」点开了没有。整段重画时按这个摆回去，别替她合上。 */
     const transcriptOpen = new Map();
     /**
@@ -3104,7 +3129,11 @@
     const liveSkipRepliedTo = new Set();
     async function playLiveTurn(agentId, viewSeq, started, tickEl) {
       const repliedTo = started.messageId;
-      const alive = () => current === agentId && viewSeq === threadViewSeq;
+      // 这一趟演的是哪一代画面：整段重画过（换外观、语音状态变了、撤回）就说明
+      // 屏幕已经换了主人，这一趟就别再往上面补泡——同一句两泡就是这么来的
+      // （2026-11-01 实机）。
+      const generation = renderGeneration;
+      const alive = () => current === agentId && viewSeq === threadViewSeq && generation === renderGeneration;
       liveSkipRepliedTo.add(repliedTo);
       let dots = null;
       try {
@@ -3132,10 +3161,20 @@
         for (let index = 0; index < (payload.items || []).length; index += 1) {
           const item = payload.items[index];
           await sleep(Math.max(120, Number(item.gapMs) || 700));
-          if (!alive()) return;
+          if (!alive()) {
+            // 整段重画过了：这一趟交出去，别再往屏幕上补泡。
+            // 这一条要是没被那趟重画带上，就在这里整条补上——补画走同一套去重，
+            // 缺哪片补哪片，不会多出重复的片（语音条不在这里补：那条走另一条路）。
+            if (current === agentId && viewSeq === threadViewSeq
+              && generation !== renderGeneration && !hasVoiceBubble(payload.message)) {
+              renderMessage(payload.message, { allowSeen: true, bindAssistantActions: true });
+            }
+            return;
+          }
           // 实时演出也必须走统一消息渲染入口，否则新气泡没有右键投喂绑定。
           renderMessage(payload.message, {
             allowSeen: index > 0,
+            pieceIndex: index,
             assistantPieces: [item.text],
             bindAssistantActions: index === payload.items.length - 1,
           });
@@ -3443,7 +3482,11 @@
         if (isLatestUserMessage(m)) bindMessageActions(row, m);
         if (m.notice?.text) row.insertAdjacentElement("afterend", noticeBubble(m.notice.text));
       } else {
-        if (m.voice && !Array.isArray(opts.assistantPieces)) {
+        // 语音状态照记不误：这一条是按文字画的（语音还没合成好或已经失败）也得记上。
+        // 以前只在画成语音条时记，于是「按文字画过」的那一条会被下一轮轮询
+        // 误判成「语音变了」而整段重画；整段重画撞上正在演的那一趟，
+        // 同一句就被画成两泡（2026-11-01 实机）。
+        if (m.voice) {
           voiceStates.set(m.id, voiceStateKey(m));
         }
         const voice = hasVoiceBubble(m);
@@ -3464,9 +3507,25 @@
         // 光杆 [表情] 不渲染（老消息清不掉，屏幕上也别再看到它）；整条只剩它时才退回原文
         const filtered = rawList.filter((piece) => !isBareStickerMarker(piece));
         const list = filtered.length ? filtered : rawList;
+        const drawn = drawnPiecesFor(m.id);
+        const perPiece = Array.isArray(opts.assistantPieces);
+        // 这一条要画哪几片、每片是 m.bubbles 里的第几片：
+        // 整条画时按原顺序对号；逐片画（逐段显现 / 实时演出）时用外面给的下标。
+        const plan = perPiece
+          ? [{
+            index: Number.isInteger(opts.pieceIndex) ? opts.pieceIndex : bubblesIndexOf(m, list[0]),
+            text: list[0],
+          }]
+          : (Array.isArray(m.bubbles) && m.bubbles.length
+            ? m.bubbles.map((text, index) => ({ index, text })).filter((row) => list.includes(row.text))
+            : [{ index: -1, text: m.text }]);
         let lastRow = null;
-        for (const piece of list) {
+        for (const { index, text: piece } of plan) {
+          // 已经在屏上的那一片不再画一遍：两条路撞上同一句时只有第一片被 seenIds 挡住，
+          // 后面几片会被各画一遍（2026-11-01 实机）。
+          if (index >= 0 && drawn.has(index)) continue;
           const rendered = bubble("assistant", piece, null, m.at);
+          if (index >= 0) drawn.add(index);
           lastRow = rendered.row;
           bindMessageFeed(rendered.row, m, current, piece);
         }
@@ -3502,6 +3561,9 @@
         rememberTranscriptOpen();
         el.stream.innerHTML = "";
         seenIds = new Set();
+        // 屏幕清空了：「哪几片已经画过」那本账得跟着清：不然重画之后会以为
+        // 旧片还在屏上，把该画的那几片漏掉。
+        drawnPieces.clear();
         // DOM 全清了，登记也跟着清；旧节点已经不在文档里，留着只会挡住下一次登记。
         tickNodes.clear();
         voiceStates.clear();
@@ -3586,6 +3648,7 @@
             if (current !== agentId || viewSeq !== threadViewSeq || generation !== renderGeneration) return restoreScroll(added);
             renderMessage(m, {
               allowSeen: index > 0,
+              pieceIndex: index,
               assistantPieces: [m.bubbles[index]],
               bindAssistantActions: index === m.bubbles.length - 1,
             });
