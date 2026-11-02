@@ -1945,8 +1945,16 @@ export function apply(ctx) {
     const requestId = `chahuahui_image_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
     // 用完就释放：识图失败或中断时别让请求一直挂在模型那一侧
     // （文字那条路早就在 finally 里 cancel 了，识图这处漏了）。
+    // 2026-11-02：这条首选路以前没有期限。带图降级时它卡在回复的关键路径上，
+    // provider 挂住就是整轮干等；给 90 秒，超时按识图失败往上抛，不把回复一起拖死。
     try {
-      return await describeImageOnce(ref, attachment, requestId, context);
+      return await withModelDeadline(ctx, {
+        requestId,
+        timeoutMs: 90_000,
+        operation: "vision",
+        diagnostics,
+        run: () => describeImageOnce(ref, attachment, requestId, context),
+      });
     } finally {
       try {
         await ctx.models.cancel(requestId);
@@ -3175,7 +3183,9 @@ export function apply(ctx) {
       describeSticker: (id) => stickerLabels.get(id) ?? null,
     });
     // 主动开口也可能撞上她刚发的图：同一个记号，同一套塞法。
-    attachNativeImage(historyMessages, agentId);
+    // 2026-11-02：attachNativeImage 改成返回副本、不再就地改写数组，这里必须接住返回值——
+    // 丢掉它的话记号会原样当字面文进提示词，ta 主动开口时看不见那张图（也0.16.0 是就地改，才没露）。
+    const proactiveMessages = attachNativeImage(historyMessages, agentId);
     const recentAsks = threadRows
       .filter((row) => row.proactive && row.text)
       .slice(-3)
@@ -3259,7 +3269,7 @@ export function apply(ctx) {
           || (shareableVideo && !videoQuota())) return { ok: false, reason: "video-stale" };
         const generated = await generateReply(ctx, {
           systemPrompt: withNamePlate(`${spec.systemPrompt}\n\n${badgeHint}`, partnerName),
-          messages: [...historyMessages, { role: "user", content: spec.userText }], diagnostics, maxTokens: 1800,
+          messages: [...proactiveMessages, { role: "user", content: spec.userText }], diagnostics, maxTokens: 1800,
           modelRef: choice ? { provider: choice.provider, model: choice.model } : null, catalog,
           allowUtilityFallback: false,
           usageTag: { agentId, kind: "proactive" },
@@ -3267,7 +3277,7 @@ export function apply(ctx) {
         raw = generated.text;
       } else {
         raw = await askVoice(withNamePlate(`${spec.systemPrompt}\n\n${badgeHint}`, partnerName), spec.userText, 300, agentId, "proactive",
-          { messages: [...historyMessages, { role: "user", content: spec.userText }] });
+          { messages: [...proactiveMessages, { role: "user", content: spec.userText }] });
       }
     } catch (error) {
       diagnostics({ event: "proactive.failed", agentId, error: describeError(error) });

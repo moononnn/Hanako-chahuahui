@@ -67,8 +67,18 @@ test("原生看图把图片本体真的塞进请求，一条里有几个就兑�
   // 没带本体的那些得拿当时写下的描述顶上，不然下一轮她追问图里写了什么就没东西。
   assert.match(app, /readAttachmentMeta\(id\)\?\.description/);
   // 两条路线都要塞：正常回复和 ta 主动开口。
-  assert.match(app, /attachNativeImage\(messages, agentId\)/);
-  assert.match(app, /attachNativeImage\(historyMessages, agentId\)/);
+  assert.match(app, /const messagesWithBody = attachNativeImage\(messages, agentId\);/);
+  // 2026-11-02：attachNativeImage 改成返回副本后，主动开口那个调用点必须接住返回值。
+  // 丢掉的话记号会原样当字面文进提示词，ta 主动开口时看不见她刚发的图。
+  assert.match(app, /const proactiveMessages = attachNativeImage\(historyMessages, agentId\);/);
+  assert.match(app, /messages: \[\.\.\.proactiveMessages, \{ role: "user", content: spec\.userText \}\]/);
+  assert.doesNotMatch(app, /^\s*attachNativeImage\(historyMessages, agentId\);$/m, "丢返回值的写法会让主动开口里全是未兑付的记号");
+});
+
+test("识图首选路有期限：provider 挂住不能把回复一起拖死", () => {
+  // 2026-11-02：带图降级要先等这一次识图，没期限就是整轮干等。
+  assert.match(app, /async function describeImage\(modelRef, attachment, context = ""\) \{[\s\S]{0,900}?withModelDeadline\(ctx, \{/);
+  assert.match(app, /async function describeImage\(modelRef, attachment, context = ""\) \{[\s\S]{0,1200}?operation: "vision"/);
 });
 
 test("图片按钮不再只认识图模型：自己的模型能看图也算数", () => {
