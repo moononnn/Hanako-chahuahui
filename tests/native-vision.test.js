@@ -59,7 +59,7 @@ test("收图这条路先问聊天模型收不收图，能收就直给、不用�
 });
 
 test("原生看图把图片本体真的塞进请求，一条里有几个就兑几个", () => {
-  assert.match(app, /function attachNativeImage\(messages, agentId\)/);
+  assert.match(app, /function attachNativeImage\(messages, agentId, \{ withBody = true \} = \{\}\)/);
   // 逐个兑付，而不是一条只认第一个记号：她连发两张时只兑第一个，第二张就成了字面文。
   assert.match(app, /const done = rewriteNativeImageMarks\(row\.content, \{ imageOf, seenOf, budget \}\)/);
   assert.match(app, /hasNativeImageMark\(row\.content\)/);

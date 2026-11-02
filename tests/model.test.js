@@ -17,6 +17,7 @@ import {
   chatModelOptions,
   isChatModel,
   resolveModelChoice,
+  resolveModelChain,
   modelKey,
   STREAM_RETRY_DELAYS_MS,
 } from "../lib/model.js";
@@ -766,6 +767,35 @@ test("定模型：伙伴指定 > 全局默认 > 宿主当前", () => {
 
   const byCurrent = resolveModelChoice(CATALOG, {});
   assert.deepEqual([byCurrent.provider, byCurrent.model, byCurrent.source], ["openai-codex", "gpt-5.6-luna", "current"]);
+});
+
+test("降级链：同一条优先顺序攤成链，重复的只留一次（2026-11-02）", () => {
+  const chain = resolveModelChain(CATALOG, {
+    partnerRef: { provider: "openai-codex", model: "gpt-5.6-luna" },
+    globalRef: { provider: "deepseek", model: "deepseek-flash" },
+    agentRef: { provider: "deepseek", model: "deepseek-flash" },
+  });
+  assert.deepEqual(chain.map((row) => `${row.source}:${row.provider}/${row.model}`), [
+    "partner:openai-codex/gpt-5.6-luna",
+    "global:deepseek/deepseek-flash",
+  ], "焦点那一档就是伙伴档本人，不必再列一次");
+  assert.equal(chain[0].model, resolveModelChoice(CATALOG, {
+    partnerRef: { provider: "openai-codex", model: "gpt-5.6-luna" },
+    globalRef: { provider: "deepseek", model: "deepseek-flash" },
+  }).model, "链首就是原来那个答案");
+});
+
+test("降级链：目录里没有的不进链，空目录就是空链", () => {
+  const chain = resolveModelChain(CATALOG, {
+    partnerRef: { provider: "nope", model: "gone" },
+    globalRef: { provider: "deepseek", model: "deepseek-flash" },
+  });
+  assert.deepEqual(chain.map((row) => `${row.source}:${row.model}`), [
+    "global:deepseek-flash",
+    "current:gpt-5.6-luna",
+  ]);
+  assert.deepEqual(resolveModelChain({ models: [] }, { globalRef: { provider: "deepseek", model: "deepseek-flash" } }), []);
+  assert.deepEqual(resolveModelChain(null, {}), []);
 });
 
 test("定模型：伙伴在 Hana 里的默认模型垫在宿主焦点模型前面", () => {

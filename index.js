@@ -61,7 +61,9 @@ import {
   chatModelOptions,
   visionModelOptions,
   groupModelsByProvider,
+  modelKey,
   resolveModelChoice,
+  resolveModelChain,
   setUsageObserver,
   withModelDeadline,
 } from "./lib/model.js";
@@ -293,7 +295,7 @@ import { contentHash, isReusableAttachment, touchAttachmentMeta } from "./lib/at
 import { catalogRowSupportsImage } from "./lib/model.js";
 import { modelSupportsImage } from "./lib/vision.js";
 import { IMAGE_TOOL, IMAGE_TOOL_EMPTY_TEXT, IMAGE_TOOL_NAME, formatImageMatches, pickImageMessages, resolveImageRange } from "./lib/image-tool.js";
-import { NATIVE_IMAGE_BODY_ROWS, NATIVE_IMAGE_BYTES_PER_TURN, NATIVE_IMAGE_PER_TURN, hasNativeImageMark, rewriteNativeImageMarks } from "./lib/native-vision.js";
+import { NATIVE_IMAGE_BODY_ROWS, NATIVE_IMAGE_BYTES_PER_TURN, NATIVE_IMAGE_PER_TURN, MARK_RE, hasNativeImageMark, rewriteNativeImageMarks } from "./lib/native-vision.js";
 import { normalizeRetentionDays, planCleanup, summarizeStorage } from "./lib/image-retention.js";
 import { canAnswerPoke } from "./lib/poke.js";
 import { badgeGuide, badgeText, fallbackBadge, normalizeBadge, parseBadgeMarker } from "./lib/badges.js";
@@ -1698,25 +1700,30 @@ export function apply(ctx) {
    * ③ 不带本体的那些也不能留成字面文，用当时写下的描述顶上去。
    * ④ 描述也没有时（原生那条后台还没补完，或者原图按期限清了），退到最笼统的那句，
    *    让它知道自己少看了一张，别当成图里没内容。
+   *
+   * 2026-11-02：加了 withBody。降级到不收图的模型时还要再跑一遍，只带描述不带本体——
+   * 那一版也不动传进来的数组，两个版本各发各的。
    */
-  function attachNativeImage(messages, agentId) {
-    const rows = Array.isArray(messages) ? messages : [];
+  function attachNativeImage(messages, agentId, { withBody = true } = {}) {
+    const rows = Array.isArray(messages) ? [...messages] : [];
     // 从尾巴往前数 user 行：第 0 行带本体，第 1 行也带（她的追问就在这个位置），往后就不带了。
-    const withBody = new Set();
+    const bodyRows = new Set();
     const budget = { left: NATIVE_IMAGE_PER_TURN, bytesLeft: NATIVE_IMAGE_BYTES_PER_TURN };
     let seenUsers = 0;
-    for (let i = rows.length - 1; i >= 0 && seenUsers < NATIVE_IMAGE_BODY_ROWS; i -= 1) {
-      if (rows[i]?.role !== "user") continue;
-      withBody.add(i);
-      seenUsers += 1;
+    if (withBody) {
+      for (let i = rows.length - 1; i >= 0 && seenUsers < NATIVE_IMAGE_BODY_ROWS; i -= 1) {
+        if (rows[i]?.role !== "user") continue;
+        bodyRows.add(i);
+        seenUsers += 1;
+      }
+      if (!bodyRows.size) return rows;
     }
-    if (!withBody.size) return rows;
     // 描述只读元数据，不拉图片本体：绝大多数记号都走这条，别为了识图再读几兆字节进内存。
     const seenOf = (id) => String(readAttachmentMeta(id)?.description ?? "").trim();
     for (let i = rows.length - 1; i >= 0; i -= 1) {
       const row = rows[i];
       if (row?.role !== "user" || !hasNativeImageMark(row.content)) continue;
-      const takeBody = withBody.has(i) && budget.left > 0;
+      const takeBody = withBody && bodyRows.has(i) && budget.left > 0;
       const imageOf = takeBody
         ? (id) => {
           const stored = readAttachment(id, agentId);
@@ -1731,6 +1738,45 @@ export function apply(ctx) {
       rows[i] = { ...row, content: done.content };
     }
     return rows;
+  }
+
+  /**
+   * 降级到不收图的模型之前，先把这一轮要看的图交给辅助识图模型看一遍。
+   *
+   * 原生看图那条路的描述是后台补的，她发完图马上得到回复时往往还没补完；
+   * 一旦降到只吃文字的那一档，手上就只剩「她发过一张图」，等于白看。
+   * 这里只在真降级时等它一次：描述写进附件元数据，两路以后都用得上。
+   */
+  async function describeImagesForDegradedModel(agentId, messages, signal = null) {
+    const ids = new Set();
+    for (const row of Array.isArray(messages) ? messages : []) {
+      if (row?.role !== "user" || typeof row.content !== "string") continue;
+      // MARK_RE 是带 g 的共享正则，直接 matchAll 会带着上一次的 lastIndex，另起一个再扫。
+      for (const match of row.content.matchAll(new RegExp(MARK_RE.source, "gu"))) ids.add(match[1]);
+    }
+    if (!ids.size) return 0;
+    const vision = effectiveVisionConfig(store.getGlobalSettings().vision, store.getPartnerSettings(agentId).vision);
+    const ref = normalizeModelRef(vision.model);
+    if (!ref || vision.status !== "verified") {
+      diagnostics({ event: "vision.degrade.skip", agentId, reason: "no-vision-model", images: ids.size });
+      return 0;
+    }
+    let described = 0;
+    for (const id of ids) {
+      signal?.throwIfAborted();
+      const stored = readAttachment(id, agentId);
+      if (!stored?.data || String(stored.description ?? "").trim()) continue;
+      try {
+        const done = await describeImageWithFallback(ref, stored, "");
+        if (!done?.note) continue;
+        recordAttachmentDescription(id, { ...splitVisionNote(done.note), via: done.via });
+        described += 1;
+        diagnostics({ event: "vision.degrade.described", agentId, attachmentId: id, via: done.via });
+      } catch (error) {
+        diagnostics({ event: "vision.degrade.failed", agentId, attachmentId: id, error: describeError(error) });
+      }
+    }
+    return described;
   }
 
   /**
@@ -5690,6 +5736,24 @@ export function apply(ctx) {
   }
 
   /**
+   * 调不动过的模型先记十分钟，别让每一句都先撞一次同样的墙。
+   *
+   * 额度一般按小时恢复，凭据问题也得人去改配置；这点时间不会错过真正的恢复，
+   * 却能把“每句话都白等一次超时”挡掉。降级链走完之后，冷却中的模型仍然会被试
+   * （链上只剩它一个时总得开口），这里只负责把顺序往后推。
+   */
+  const MODEL_COOLDOWN_MS = 10 * 60 * 1000;
+  const coolingModels = new Map();
+  const modelCoolingDown = (ref) => {
+    const key = modelKey(ref);
+    return Boolean(key) && (coolingModels.get(key) ?? 0) > Date.now();
+  };
+  const coolDownModel = (ref) => {
+    const key = modelKey(ref);
+    if (key) coolingModels.set(key, Date.now() + MODEL_COOLDOWN_MS);
+  };
+
+  /**
    * 生成一份回复并落库。同步那条路（她在场）和异步那条路都用它。
    * 只管生成与入账，节奏、提醒那些外面各自接。
    */
@@ -6035,24 +6099,28 @@ export function apply(ctx) {
       mergeConsecutiveUser: true,
     });
     // 当期那张原生看的图真的塞进请求：prompt 里只留了个记号，这里换成本体。
-    attachNativeImage(messages, agentId);
+    // 两版：带原图的那版给收图的模型；降级到只吃文字的那档时，改用只带描述的那版。
+    const messagesWithBody = attachNativeImage(messages, agentId);
     diagnostics({ event: "reply.context", agentId, rows: windowed.length, messages: messages.length,
       rawChars: windowed.reduce((n, row) => n + String(row.text ?? "").length, 0),
       firstId: windowed[0]?.id ?? null, targetId: replyTargetId });
 
     // 这次用哪个模型：本应用单独指定 > 本应用全局指定 > 伙伴在 Hana 里的默认模型 > 兜底。
-    // 目录拉一次，resolve 和 stream 两处共用。拉不到也不播报，退回“跟当前模型走”。
+    // 目录拉一次，选型、降级、发请求三处共用。拉不到也不播报，退回“跟当前模型走”。
     let modelCatalog = null;
     try {
       modelCatalog = await ctx.models.list();
     } catch (error) {
       diagnostics({ event: "models.list.failed", agentId, error: describeError(error) });
     }
-    const choice = resolveModelChoice(modelCatalog, {
+    // 同一条优先顺序摊成一条降级链：伙伴指定 > 全局指定 > 伙伴自己的默认 > 宿主焦点。
+    // 第一档调不动（额度用完、凭据失效）就换下一档，而不是整轮哑掉。
+    const modelChain = resolveModelChain(modelCatalog, {
       partnerRef: store.getPartnerSettings(agentId).model,
       globalRef: store.getGlobalSettings().model,
       agentRef: await agentDefaultModel(agentId),
     });
+    const choice = modelChain[0] ?? null;
 
     let generated = null;
     // 这一轮给哪些工具：搜索和读视频各自独立，有几个给几个。
@@ -6074,38 +6142,70 @@ export function apply(ctx) {
         return { isError: true, text: "这个工具不存在。就用手上已有的东西说话。" };
       }
       : null;
-    // 「模型这会儿用不了」不是生成失败，是这一轮根本不该发生：
-    // 不换模型顶嘴（那会换掉 ta 的嗓子和记性），也不当失败重试。
+    // 「模型这会儿用不了」以前一律整轮哑掉：不换模型顶嘴（怕换掉 ta 的嗓子和记性），
+    // 也不当失败重试（额度得等几小时）。代价是全局明明还配着一个能用的，她这边一句也不回。
+    // 现在顺着降级链往下换：第一档调不动就试下一档，链走完才算这一轮真没模型可用。
+    // 已经降过一次就记在 chainStart 上，后面重写、重试那几次接着用降下来的那个模型。
+    let chainStart = 0;
     const callModel = async (system = systemPrompt) => {
       // 延迟回复也按真正发请求时的状态取背景；暂停、休息、结束后不带旧专注状态。
       const focusActive = focusCompanion.active();
       const focusText = focusChatText({ active: focusActive, agentId, userName: USER_NAME });
       diagnostics({ event: 'reply.focus.context', agentId, included: Boolean(focusText),
         ...(focusText ? { focusSessionId: focusActive.id, targetAt: focusActive.targetAt } : {}) });
-      try {
-        return await generateReply(ctx, {
-          systemPrompt: [system, focusText, feedbackPrompt].filter(Boolean).join('\n\n'),
-          messages,
-          diagnostics,
-          maxTokens: feedbackPrompt ? 1800 : 900,
-          modelRef: choice ? { provider: choice.provider, model: choice.model } : null,
-          catalog: modelCatalog,
-          usageTag: { agentId, kind: "chat" },
-          // 工具回合：伙伴自己决定要不要调、调哪个。搜索是查外面的事，
-          // 读视频是把她发过来的那条真看了——两个都由 ta 自己发起。
-          tools: chatTools.length ? chatTools : null,
-          executeTool: runChatTool,
-          maxToolCalls: 3,
-          maxToolRounds: 2,
-          signal,
-        });
-      } catch (error) {
-        if (error?.code === "MODEL_UNAVAILABLE") {
-          diagnostics({ event: "chat.model.unavailable", agentId, kind: error.kind ?? "provider", model: error.model ?? null });
-          return { unavailable: true, kind: error.kind ?? "provider" };
+      let lastKind = "provider";
+      let lastModel = null;
+      // 目录没拉到时保持老路：把选型交给 generateReply，别让目录缺失把这一轮也拖哑。
+      const attempts = modelChain.length ? modelChain : [null];
+      for (let index = chainStart; index < attempts.length; index += 1) {
+        const candidate = attempts[index];
+        // 刚证明调不动的模型先绕开，别让每一句都白撞一次；链上只剩它一个时仍然得试。
+        if (candidate && index < attempts.length - 1 && modelCoolingDown(candidate)) {
+          diagnostics({ event: "chat.model.cooling", agentId, provider: candidate.provider, model: candidate.model });
+          continue;
         }
-        throw error;
+        // 这一档收不收图：收就带本体；不收就先用辅助识图模型看一遍，再只给描述。
+        const seesImages = !candidate || !modelCatalog || catalogRowSupportsImage(modelCatalog, candidate);
+        if (!seesImages) await describeImagesForDegradedModel(agentId, messages, signal);
+        try {
+          const out = await generateReply(ctx, {
+            systemPrompt: [system, focusText, feedbackPrompt].filter(Boolean).join('\n\n'),
+            messages: seesImages ? messagesWithBody : attachNativeImage(messages, agentId, { withBody: false }),
+            diagnostics,
+            maxTokens: feedbackPrompt ? 1800 : 900,
+            modelRef: candidate ? { provider: candidate.provider, model: candidate.model } : null,
+            catalog: modelCatalog,
+            usageTag: { agentId, kind: "chat" },
+            // 工具回合：伙伴自己决定要不要调、调哪个。搜索是查外面的事，
+            // 读视频是把她发过来的那条真看了——两个都由 ta 自己发起。
+            tools: chatTools.length ? chatTools : null,
+            executeTool: runChatTool,
+            maxToolCalls: 3,
+            maxToolRounds: 2,
+            signal,
+          });
+          chainStart = index;
+          if (candidate) {
+            diagnostics({ event: "model.choice", agentId, source: candidate.source,
+              provider: candidate.provider, model: candidate.model, degraded: index > 0 });
+          }
+          return out;
+        } catch (error) {
+          if (error?.code !== "MODEL_UNAVAILABLE") throw error;
+          lastKind = error.kind ?? "provider";
+          lastModel = error.model ?? (candidate ? modelKey(candidate) : null);
+          if (candidate) coolDownModel(candidate);
+          diagnostics({ event: "chat.model.unavailable", agentId, kind: lastKind, model: lastModel,
+            attempt: index + 1, of: attempts.length });
+          if (index + 1 < attempts.length) {
+            diagnostics({ event: "chat.model.degrade", agentId, kind: lastKind,
+              from: lastModel ?? null, to: modelKey(attempts[index + 1]) });
+            continue;
+          }
+          return { unavailable: true, kind: lastKind, tried: attempts.length };
+        }
       }
+      return { unavailable: true, kind: lastKind, tried: attempts.length };
     };
     // 发模型之前最后查一次：能省掉一整次生成就别做。
     const staleBefore = supersededResult("before-model");
@@ -6135,7 +6235,7 @@ export function apply(ctx) {
       }
     }
     if (choice) {
-      diagnostics({ event: "model.choice", agentId, source: choice.source, provider: choice.provider, model: choice.model });
+      diagnostics({ event: "model.choice.chain", agentId, chain: modelChain.map((row) => modelKey(row)) });
     }
     // 模型回来了，她可能在这期间又补了话：这份稿子按旧上下文写的，直接送出去就是
     // 替没读的那句签收，还会让人再补一轮同样的话。丢掉重来。

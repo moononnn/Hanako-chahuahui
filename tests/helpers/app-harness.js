@@ -122,6 +122,8 @@ function createModelStub() {
   const calls = [];
   const cancelled = [];
   const rules = [];
+  // 目录可换：降级链的用例要摆好几档，看它是不是真按顺序往下换。
+  const catalog = { models: [{ provider: "test-provider", model: "test-model" }] };
   const safeMatch = (match, request) => {
     try { return Boolean(match(request)); } catch { return false; }
   };
@@ -130,6 +132,11 @@ function createModelStub() {
     pending,
     cancelled,
     rules,
+    /** 换模型目录，给降级链用例用。 */
+    setCatalog(models) {
+      catalog.models = Array.isArray(models) ? models : [];
+      return stub;
+    },
     /** 等到第 n 次（从0起）stream 请求挂起为止。 */
     async waitForCall(index = 0, timeoutMs = 4000) {
       const deadline = Date.now() + timeoutMs;
@@ -182,7 +189,7 @@ function createModelStub() {
       if (!entry) throw new Error(`没有第 ${target} 次模型调用`);
       entry.resolve({ ndjson: JSON.stringify({ type: "error", code, message }), asEvent: true });
     },
-    list: async () => ({ models: [{ provider: "test-provider", model: "test-model" }] }),
+    list: async () => ({ models: [...catalog.models] }),
     stream(request) {
       const index = stub.calls.length;
       const entry = { index, request, resolve: null, settled: false };

@@ -26,9 +26,14 @@ test("识图也有第二条路：首选真挂了才换，备用通道看不了�
   assert.match(app, /\.\.\.\(visionVia \? \{ visionVia \} : \{\}\)/);
 });
 
-test("模型不可用：不拿别的模型顶嘴，挂提示、慢速重试有上限", () => {
-  // 聊天回复那条：provider/配额类错误不当失败重试，改成 unavailable 往上报
-  assert.match(app, /if \(error\?\.code === "MODEL_UNAVAILABLE"\)/);
+test("模型调不动：先顺着降级链换下一档，全换完才挂提示、慢速重试有上限", () => {
+  // 聊天回复那条：provider/配额类错误先试下一档；链走完才算这一轮没模型可用。
+  // 2026-11-02 改：以前一律「不拿别的模型顶嘴」，实机结果是全局明明还配着一个能用的，
+  // 她这边一句也不回。现在换档由降级链负责，认输的还是同一处。
+  assert.match(app, /const modelChain = resolveModelChain\(modelCatalog, \{/);
+  assert.match(app, /if \(error\?\.code !== "MODEL_UNAVAILABLE"\) throw error;/);
+  assert.match(app, /event: "chat\.model\.degrade"/);
+  assert.match(app, /modelCoolingDown\(candidate\)\) \{/);
   assert.match(app, /return \{ ok: false, reason: "unavailable", kind: generated\.kind, generationMs/);
   assert.match(app, /chat\.model\.unavailable/);
   // 实时回合：挂提示、清待答、return，不进五分钟重试
