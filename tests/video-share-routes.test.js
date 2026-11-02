@@ -38,8 +38,10 @@ function seed(store) {
   store.setProactiveState(AGENT, { nextDueAt: new Date(Date.now() - 3600000).toISOString(),
     interestLearning: { curiosity: { startedAt: now(), thresholdMs: 86400000 } }, topicSeeds: { lastGrowAt: now(), seeds: [] },
   });
-  store.appendMessage(AGENT, { role: "user", text: "刚把手上的事情忙完", readAt: now(), at: now() });
-  store.appendMessage(AGENT, { role: "assistant", text: "我也歇一会儿", at: now() });
+  // 上一轮对话结束在一小时以前：普通主动跟刚结束的对话之间要留缓冲（2026-11-02），
+  // 这组用例验的是视频分享那条路，不该被那段缓冲排到后面。
+  store.appendMessage(AGENT, { role: "user", text: "刚把手上的事情忙完", readAt: now(), at: new Date(Date.now() - 70 * 60_000).toISOString() });
+  store.appendMessage(AGENT, { role: "assistant", text: "我也歇一会儿", at: new Date(Date.now() - 60 * 60_000).toISOString() });
   store.saveVideoBook(AGENT, addVideoCandidate(store.getVideoBook(AGENT), candidate()));
 }
 async function boot(t, seeded = seed) {

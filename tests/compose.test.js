@@ -335,7 +335,11 @@ test("上一条主动消息没回应时，提示词优先轻轻确认而不是�
   });
   assert.match(spec.userText, /还没有接住/);
   assert.match(spec.userText, /轻轻确认/);
-  assert.match(spec.userText, /旧话题不作为这次主动内容来源/);
+  // 2026-11-02 改口径：未回应那一串就是这次开口的语境，不再把「旧话题」整个禁掉。
+  assert.doesNotMatch(spec.userText, /旧话题不作为这次主动内容来源/);
+  assert.match(spec.userText, /接着它往下说是自然的/);
+  assert.match(spec.userText, /可以接着你自己最后停下的地方往下说/);
+  assert.match(spec.userText, /也可以说点手边新有的东西/, "新话题不被硬性禁掉");
   assert.match(spec.userText, /我又想到一个好玩的/);
   assert.doesNotMatch(spec.userText, /茶话会.*主动联系/);
 });
@@ -364,9 +368,10 @@ test("已读未回时给一库手法，不端新话题也不派以她没回为�
   assert.doesNotMatch(spec.userText, /第3条|第3次|连续第3/u, "计数只用于判断轻重，不写成聊天内容");
   assert.match(spec.userText, /戳一下/);
   assert.match(spec.userText, /直接搭话/);
+  assert.doesNotMatch(spec.userText, /手打一个图名|无语\.jpg/, "图库里没合适的就不硬凑，不教模型手打图名");
+  assert.match(spec.userText, /图库里真对得上才用这张/);
   assert.match(spec.userText, /不许照抄/, "手法示例得写明不是台词");
   assert.doesNotMatch(spec.userText, /你人嘞|溜哪儿去了嘛/, "示例里的现成句子不能给，模型会原样抄下去");
-  assert.match(spec.userText, /无语\.jpg/, "图库没合适的就手打一个图名");
   assert.match(spec.userText, /是不是讨厌我/, "红线要写明不许把沉默当成拒绝");
   assert.match(spec.userText, /不追问她为什么不回/);
   assert.match(spec.userText, /读过多久只用来把握轻重/);

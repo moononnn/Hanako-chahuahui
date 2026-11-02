@@ -394,8 +394,10 @@ test("行为：拿关系式由头开口时，不注入兴趣素材也不消耗�
   const app = await bootChahuahui({ seed: seedQuietPublicEvents });
   cleanupOn(t, app);
   const store = app.store;
-  store.appendMessage(AGENT, { role: "user", text: "你那个台灯还亮着吗", readAt: clockAt(0), at: clockAt(-0.4 * HOUR) });
-  store.appendMessage(AGENT, { role: "assistant", text: "亮着呢", at: clockAt(-0.3 * HOUR) });
+  // 聊完的那轮摆到一小时以外：普通主动跟刚结束的对话之间要留缓冲（2026-11-02），
+  // 这几条验的是由头那条路，不该被这段缓冲排到后面去。
+  store.appendMessage(AGENT, { role: "user", text: "你那个台灯还亮着吗", readAt: clockAt(0), at: clockAt(-1.2 * HOUR) });
+  store.appendMessage(AGENT, { role: "assistant", text: "亮着呢", at: clockAt(-HOUR) });
   const calls = stubUtility(app, "路过那家旧书摊，忽然想起你那盏台灯放窗台挺好");
 
   const knowing = store.getKnowing(AGENT);
@@ -436,8 +438,8 @@ test("行为：老路没坏——抽到兴趣那一条时照旧注入并消耗�
   const app = await bootChahuahui({ seed: seedQuietPublicEvents });
   cleanupOn(t, app);
   const store = app.store;
-  store.appendMessage(AGENT, { role: "user", text: "你那个台灯还亮着吗", readAt: clockAt(0), at: clockAt(-0.4 * HOUR) });
-  store.appendMessage(AGENT, { role: "assistant", text: "亮着呢", at: clockAt(-0.3 * HOUR) });
+  store.appendMessage(AGENT, { role: "user", text: "你那个台灯还亮着吗", readAt: clockAt(0), at: clockAt(-1.2 * HOUR) });
+  store.appendMessage(AGENT, { role: "assistant", text: "亮着呢", at: clockAt(-HOUR) });
   stubUtility(app, "那盏台灯我到现在也没想明白该搁哪儿，先放窗台了");
 
   await withRandom(0, () => app.request("POST", "/proactive/tick", { json: {} }));
@@ -453,8 +455,8 @@ test("行为：有真凭据的共同经历能发出去，凭据直接进到生�
   const app = await bootChahuahui({ seed: seedQuietPublicEvents });
   cleanupOn(t, app);
   const store = app.store;
-  store.appendMessage(AGENT, { role: "user", text: "你那个台灯还亮着吗", readAt: clockAt(0), at: clockAt(-0.4 * HOUR) });
-  store.appendMessage(AGENT, { role: "assistant", text: "亮着呢", at: clockAt(-0.3 * HOUR) });
+  store.appendMessage(AGENT, { role: "user", text: "你那个台灯还亮着吗", readAt: clockAt(0), at: clockAt(-1.2 * HOUR) });
+  store.appendMessage(AGENT, { role: "assistant", text: "亮着呢", at: clockAt(-HOUR) });
   store.appendWorkEvent({
     id: "wf_1", agentId: AGENT, at: clockAt(-60_000), role: "user", lifeDay: todayKey(),
     text: "刚顺手改了个配色", sourceKind: "computer-conversation", conversationId: "c1",

@@ -416,23 +416,24 @@ test("行为：普通主动把最近这段真聊天直接送进模型请求", { 
   const store = app.store;
 
   // 26 条正常对话 + 4 条不该进上下文的杂音（都排在窗口之内，必须靠过滤挡掉）
+  // 最后那一轮聊完已经一个小时了：普通主动跟刚结束的对话之间要留缓冲（2026-11-02）。
   for (let i = 1; i <= 26; i += 1) {
     store.appendMessage(AGENT, {
       role: i % 2 === 1 ? "user" : "assistant",
       text: `第${i}轮真聊天`,
-      at: clockAt(-(30 - i) * 5 * 60_000),
+      at: clockAt(-(30 - i) * 5 * 60_000 - HOUR),
     });
   }
-  store.appendMessage(AGENT, { role: "assistant", text: "动作杂音不该进来", kind: "action", at: clockAt(-60_000) });
-  store.appendMessage(AGENT, { role: "assistant", text: "戳一下杂音", kind: "poke", at: clockAt(-50_000) });
-  store.appendMessage(AGENT, { role: "assistant", text: "酒馆初见杂音", kind: "tavern-opening", at: clockAt(-40_000) });
-  store.appendMessage(AGENT, { role: "user", text: "硬撤回杂音", recalled: true, recallMode: "hard", at: clockAt(-30_000) });
+  store.appendMessage(AGENT, { role: "assistant", text: "动作杂音不该进来", kind: "action", at: clockAt(-HOUR - 60_000) });
+  store.appendMessage(AGENT, { role: "assistant", text: "戳一下杂音", kind: "poke", at: clockAt(-HOUR - 50_000) });
+  store.appendMessage(AGENT, { role: "assistant", text: "酒馆初见杂音", kind: "tavern-opening", at: clockAt(-HOUR - 40_000) });
+  store.appendMessage(AGENT, { role: "user", text: "硬撤回杂音", recalled: true, recallMode: "hard", at: clockAt(-HOUR - 30_000) });
   const { sticker } = importStickerBytes(app.dataDir,
     { id: "fixture", description: "一只点头的纸鸟", emotion: ["开心"], contentType: "image/png" },
     Buffer.from("synthetic-sticker-label-fixture"));
-  store.appendMessage(AGENT, { role: "user", kind: "sticker", text: "[表情]", bubbles: [`\u0001stk:${sticker.id}`], at: clockAt(-25_000) });
-  store.appendMessage(AGENT, { role: "user", text: "第27轮真聊天", readAt: clockAt(0), at: clockAt(-20_000) });
-  store.appendMessage(AGENT, { role: "assistant", text: "第28轮真聊天", at: clockAt(-10_000) });
+  store.appendMessage(AGENT, { role: "user", kind: "sticker", text: "[表情]", bubbles: [`\u0001stk:${sticker.id}`], at: clockAt(-HOUR - 25_000) });
+  store.appendMessage(AGENT, { role: "user", text: "第27轮真聊天", readAt: clockAt(0), at: clockAt(-HOUR - 20_000) });
+  store.appendMessage(AGENT, { role: "assistant", text: "第28轮真聊天", at: clockAt(-HOUR - 10_000) });
   store.appendMessage(OTHER, { role: "user", text: "别家伙伴的私话", at: clockAt(-5_000) });
 
   const calls = captureUtility(app, "顺手把窗台擦了一遍");
@@ -464,9 +465,10 @@ test("行为：正文里混入的无关字符重试时，同一段历史照样�
   const app = await bootChahuahui({ seed: (store) => seedWorld(store) });
   cleanupOn(t, app);
   const store = app.store;
-  store.appendMessage(AGENT, { role: "user", text: "第1轮真聊天", readAt: clockAt(0), at: clockAt(-20 * 60_000) });
-  store.appendMessage(AGENT, { role: "assistant", text: "第2轮真聊天", at: clockAt(-10 * 60_000) });
+  store.appendMessage(AGENT, { role: "user", text: "第1轮真聊天", readAt: clockAt(0), at: clockAt(-HOUR - 20 * 60_000) });
+  store.appendMessage(AGENT, { role: "assistant", text: "第2轮真聊天", at: clockAt(-HOUR - 10 * 60_000) });
 
+  // 生成重试那一段：对话结束一小时后才轮到普通主动（2026-11-02 的缓冲）。
   const calls = captureUtility(app, ["我把窗台擦了一遍asdf", "我把窗台擦了一遍"]);
   await withRandom(contactRnd(store), () => app.request("POST", "/proactive/tick", { json: {} }));
 
@@ -484,8 +486,8 @@ test("行为：视频分享那一路（generateReply 流式）也带着同一段
   const app = await bootChahuahui({ seed: (store) => seedWorld(store, { video: true }) });
   cleanupOn(t, app);
   const store = app.store;
-  store.appendMessage(AGENT, { role: "user", text: "第1轮真聊天", readAt: clockAt(0), at: clockAt(-20 * 60_000) });
-  store.appendMessage(AGENT, { role: "assistant", text: "第2轮真聊天", at: clockAt(-10 * 60_000) });
+  store.appendMessage(AGENT, { role: "user", text: "第1轮真聊天", readAt: clockAt(0), at: clockAt(-HOUR - 20 * 60_000) });
+  store.appendMessage(AGENT, { role: "assistant", text: "第2轮真聊天", at: clockAt(-HOUR - 10 * 60_000) });
 
   const pending = withRandom(0, () => app.request("POST", "/proactive/tick", { json: {} }));
   await app.models.waitForCall(0);

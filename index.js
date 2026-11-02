@@ -180,7 +180,7 @@ import {
   pickDomainForNews,
   rejectNewsItem,
 } from "./lib/news-feed.js";
-import { cleanVoice, farewellSpec, hasOpenHook, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNighttimeSleepQuestion, isNoReply, isUsableVoice, nightSpec, proactiveSpec, stirredSpec } from "./lib/compose.js";
+import { cleanVoice, farewellSpec, hasOpenHook, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNighttimeSleepQuestion, isNoReply, isStickerOnlyReply, isUsableVoice, nightSpec, proactiveSpec, stirredSpec } from "./lib/compose.js";
 import { formatSearchContext, isSafeSearchQuery } from "./lib/topic-search.js";
 import { searchVideos, fetchPopularVideos, collectVideoMaterials, readVideoCredential, writeVideoCredential, clearVideoCredential } from "./lib/video-source.js";
 import { packMaterials } from "./lib/video-materials.js";
@@ -393,6 +393,7 @@ import {
   isRepeatedPhrasing,
   lastUserVoiceAt,
   noteSent,
+  conversationBuffer,
   proactiveAnchor,
   proactiveDelayFactor,
   proactiveSilenceContext,
@@ -3322,11 +3323,13 @@ export function apply(ctx) {
       diagnostics({ event: "proactive.empty", agentId, rawHead: String(raw ?? "").slice(0, 160) });
       return { ok: false, reason: "empty" };
     }
-    if (!marker.keyword && isLowSignalProactive(text, { reason: sendReason })) {
+    // 两道内容关的豁免只给真正纯表情的那条（2026-11-02）：模型写了正文时，图不能替它走后门。
+    const stickerOnlyReply = isStickerOnlyReply({ keyword: marker.keyword, text });
+    if (!stickerOnlyReply && isLowSignalProactive(text, { reason: sendReason })) {
       diagnostics({ event: "proactive.low-signal", agentId, head: text.slice(0, 40) });
       return { ok: false, reason: "low-signal" };
     }
-    if (isAbstractOnlyProactive(text, { topic })) {
+    if (!stickerOnlyReply && isAbstractOnlyProactive(text, { topic })) {
       diagnostics({ event: "proactive.abstract-only", agentId, topic: topic?.title ?? null, head: text.slice(0, 40) });
       return { ok: false, reason: "abstract-only" };
     }
@@ -4397,6 +4400,31 @@ export function apply(ctx) {
         : null;
       const videoLoginNotice = gate.ok && !gate.exception && !todoHere && !followup && !wakeEcho && !farewellSend
         && videoPartnerEnabled(agentId) && videoNoticeDue(videoLoginState, now) ? videoLoginState : null;
+
+      // 自然对话刚结束的缓冲（2026-11-02）：她刚跟 ta 聊完一轮，普通主动就不贴着再开口。
+      // 兜底的是「追着人」那种感觉，不是频率：落点、配额、静默时段都照旧在别处管着。
+      // 有时效的例外不等：到点待办、节日天气、睡前收尾、醒来回声、登录提醒都有自己该说的那一刻；
+      // 未回应那一串也不是「刚聊完」（末尾就是主动那串），归 followup 那层管。
+      const chatBuffer = gate.ok && !todoHere && !publicEvent && !farewellSend && !followup && !wakeEcho && !videoLoginNotice
+        ? conversationBuffer({ tier: settings.tier, messages: thread.messages, now })
+        : { active: false };
+      if (chatBuffer.active) {
+        // 不发也不丢「想找你」：她在的时候那些话本来就不该现在说，留着等下个落点。
+        store.setProactiveState(agentId, {
+          ...store.getProactiveState(agentId),
+          nextDueAt: chatBuffer.untilAt,
+          ...(pending.intent ? { staged: [pending.intent, ...pending.rest] } : {}),
+        });
+        diagnostics({
+          event: "proactive.conversation-buffer",
+          agentId,
+          tier: settings.tier ?? null,
+          minutes: chatBuffer.minutes,
+          remainingMs: chatBuffer.remainingMs,
+        });
+        report.push({ agentId, action: "buffered", minutes: chatBuffer.minutes });
+        continue;
+      }
 
       // 锚点门（2026-10-06）：内容型开口得先有一件跟她有关的真凭据——到点的待办、
       // 刚聊过的一轮、她这几小时说过话、电脑那边刚动过。一件都没有时，宁可不发内容，
