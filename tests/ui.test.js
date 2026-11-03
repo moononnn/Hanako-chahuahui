@@ -713,6 +713,19 @@ test("语音消息采用播放胶囊，转文字独立成普通气泡", () => {
   assert.doesNotMatch(panel, /main\.append\(play, wave, duration, transcript\)/, "转文字按钮不能继续塞进语音胶囊");
 });
 
+test("语音胶囊在窄卡里跟着容器收，转文字不跟它挤同一行", () => {
+  // 2026-11-03 实机：茶话会拼进主页面小窗，拉到最窄时时长数字被顶出气泡、
+  // 「收起文字」压在气泡边上。根子是 max-width 用了 78vw（认宿主视口不认小卡），
+  // 再加上胶囊和那颗按钮硬挤同一行。
+  assert.match(panel, /rendered\.row\.classList\.add\("voice-row"\)/, "语音行要单独标出来，普通文字气泡不吃这条");
+  assert.match(panelCss, /\.voice-bubble \{\s*min-width: 0;\s*max-width: min\(330px, 100%\);/, "胶囊宽度要跟着父容器，不再写死视口单位");
+  assert.doesNotMatch(panelCss, /\.voice-bubble \{[\s\S]{0,60}?vw/, "胶囊与胶囊同级的宽度里不能用视口单位");
+  assert.match(panelCss, /\.row\.voice-row \{ max-width: 100%; \}/);
+  assert.match(panelCss, /\.row\.voice-row \.msg-line \{ width: 100%; flex-wrap: wrap; row-gap: 4px; \}/, "放不下时转文字要能折到下一行");
+  assert.match(panelCss, /\.voice-wave \{[\s\S]*?min-width: 40px;[\s\S]*?overflow: hidden;/, "波形要先让位，不把胶囊撑破");
+  assert.match(panelCss, /\.voice-transcript \{\s*max-width: min\(330px, 100%\);/);
+});
+
 test("带语音的新消息不会先演成文字气泡再变语音条", () => {
   // 2026-10-22 实测：轮询补画多气泡消息时走逐条演出，整条绕过了语音分支，
   // 屏幕上先出现普通气泡，下一轮发现语音状态变了才整段重画成语音条。

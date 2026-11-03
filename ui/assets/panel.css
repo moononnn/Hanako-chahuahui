@@ -776,11 +776,23 @@ body.slot-embedded .chat.has-bg .composer::before {
   border-bottom-left-radius: var(--r-xs);
   box-shadow: var(--sh-1);
 }
+/* 语音胶囊：宽度交给内容，别写死最小宽。
+   早先这里是 228px，但 .msg-line > .bubble 的 min-width:0 本来就盖住它，实际一直没生效；
+   真正把它撑出去的是下一条 max-width 里的 78vw —— vw 认的是宿主视口，
+   茶话会拼成小窗嵌进主页面以后视口还是整块屏，胶囊仍按 330 算，窄卡里就顶出容器。
+   所以这里一律用相对父容器的 100%。 */
 .voice-bubble {
-  min-width: 228px;
-  max-width: min(330px, 78vw);
+  min-width: 0;
+  max-width: min(330px, 100%);
   padding: 7px 9px;
 }
+/* 嵌进窄卡时「转文字」折到胶囊下面一行，别跟胶囊挤同行：
+   挤的结果是时长数字被顶出气泡、按钮压在气泡边上（2026-11-03 实机）。
+   语音行的 78% 也放开到 100%，一行只放一个胶囊，不吃对话气泡那条限制。
+   width:100% 是为了拿到真容器宽：只写 fit-content 时行宽按内容算，
+   比容器还宽，胶囊就连缩都无从缩起。 */
+.row.voice-row { max-width: 100%; }
+.row.voice-row .msg-line { width: 100%; flex-wrap: wrap; row-gap: 4px; }
 .voice-main {
   display: flex;
   align-items: center;
@@ -815,7 +827,9 @@ body.slot-embedded .chat.has-bg .composer::before {
 .voice-wave {
   flex: 1 1 auto;
   color: var(--voice-bg, var(--primary-ink));
-  min-width: 66px;
+  /* 波形是可以让的那一截：窄到放不下时先短、再裁，不把胶囊撑破 */
+  min-width: 40px;
+  overflow: hidden;
   height: 22px;
   display: flex;
   align-items: center;
@@ -871,7 +885,7 @@ body.slot-embedded .chat.has-bg .composer::before {
 .voice-transcript-toggle:hover { background: var(--accent-soft); color: var(--primary-ink); }
 .voice-transcript-line { margin-top: 6px; }
 .voice-transcript {
-  max-width: min(330px, 78vw);
+  max-width: min(330px, 100%);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   color: var(--ink);

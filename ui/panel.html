@@ -3240,6 +3240,10 @@
     function renderVoiceMessage(m, opts = {}) {
       const rendered = bubble("assistant", "", null, m.at);
       rendered.row.dataset.voiceId = m.id;
+      // 语音这一行要多占点宽度、还允许把「转文字」折到下一行：
+      // 嵌进宿主窄卡时她那边一挤，胶囊里的时长会被顶出气泡、按钮压在气泡边上（2026-11-03 实机）。
+      // 只给这一行，普通文字气泡仍收在 78% 里。
+      rendered.row.classList.add("voice-row");
       const box = rendered.bubble;
       box.classList.add("voice-bubble");
 
