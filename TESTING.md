@@ -1,5 +1,16 @@
 # TESTING · 茶话会
 
+## 表情包图库：拖着换位置、右键置顶（2026-11-03）
+
+- 起因：她要图库里能拖图调位置、右键把这个图置顶。翻了 git 历史，这块以前没做过（好友列表有拖动排序，图库只有「新入库排最前」这一种顺序），所以是新做的功能，不是修回归。
+- 存储：`sticker-library.json` 加一个顶层 `order`（前→后）。界面顺序是两段拼起来的：`order` 里有的按它排，不在里的（新导入的）永远排最前。删图时把它的 id 从 `order` 里一并抹掉，同一份图再导回来才不会被拽回老位置。
+- 拖动：格子 `draggable`，落点按横向中线判前后；管理态与正在搜图时不给拖；`img.draggable = false` 防图片抢走拖动。拖完只把这一屏可见的那些图套回它们原来占的坑位，别的图原地不动——不然在「猫猫」里拖一下，「全部」里别的图会莫名跟着跳。
+- 右键：`sticker-menu` 挂 body、`position: fixed`，跟着鼠标开，两项「置顶 / 放到最后」；Esc、外部点击、网格滚动都收。
+- 存盘失败：屏幕退回拖动前的顺序并提示「位置没存上」。连着拖时用 `stickerOrderSeq` 只让最新那份回包改屏幕，不让先发后到的回包把刚排好的拽回去。
+- 接口：`POST /library/stickers/order`（ids）、`POST /library/stickers/:id/pin`（position: top|bottom），都返回整份新顺序。
+- 验证：`node --test tests/sticker-library.test.js tests/ui.test.js tests/ui-loading.test.js` → **200 pass / 0 fail**；全量 `node --test --test-concurrency=2` → **2876 tests / 2872 pass / 0 fail / 4 skipped**，128.5 秒；`panel.html` 内联模块脚本 `node --check` 通过。
+- 未验：没在真浏览器里实拖一次。宿主里的 panel 页依赖 hana SDK，本地起不来；「父 `div.draggable` 从 `<button>` 子元素上起拖能不能命中」是照规范判的（drag 会往祖先找最近的可拖元素），没实机点过。像素位置、触屏都没验（手机端图库本来就只读）。
+
 ## 同一句话不再被画成两个气泡（2026-11-01）
 
 - 起因：2026-11-01 19:47 实机——「这个这段很不错诶！」那句回复，屏幕上出现三个气泡：第一句正常，后两句一模一样。账里只有一条消息、两个气泡（`app-data/chahuahui/v2/threads/hanako.json` seq 1819），`/thread` 接口原样下发两个气泡，服务器没发两遍，重复是前端画出来的。

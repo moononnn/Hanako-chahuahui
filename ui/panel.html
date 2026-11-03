@@ -1034,12 +1034,18 @@
         const cell = document.createElement("div");
         const armed = armedStickerId === row.id;
         cell.className = `sticker-choice${manageMode ? " managing" : ""}${armed ? " armed" : ""}`;
+        cell.dataset.stickerId = row.id;
+        // 拖着能换位置（搜图的时候不给拖：只排筛选出来的那几张，看图的人分不清发生了什么）
+        const canDrag = !manageMode && !String(el.stickerSearch.value || "").trim();
+        cell.draggable = canDrag;
         const button = document.createElement("button");
         button.type = "button";
         button.className = "sticker-pick";
         button.title = row.description || row.emotion?.[0] || row.scene?.[0] || "发送表情包";
         const img = document.createElement("img");
         img.alt = button.title;
+        // 图片自己别抢拖动：抢了以后拖出来的是一张图的幽灵图，格子排不动
+        img.draggable = false;
         button.appendChild(img);
         button.addEventListener("click", () => { if (!manageMode) selectSticker(row); });
         cell.appendChild(button);
@@ -1076,6 +1082,196 @@
       }
       el.stickerAddEmpty.hidden = loading;
     }
+
+    /*
+     * ── 图库格子：拖动换位置、右键置顶 ──
+     *
+     * 摆放顺序是图库自己的账，存在后端那份 order 里。这里只管两样：
+     * 手上拖出来的顺序长什么样，以及怎么把它老老实实交回去。
+     * 存不上就把屏幕上的也退回去，不让看到的和盘上的不一样。
+     */
+    let draggingStickerId = "";
+    let stickerDropBefore = true;
+    let stickerOrderSeq = 0;
+
+    function stickerIds() { return stickerRows.map((row) => row.id); }
+
+    /** 按整份 id 顺序重摆本地那份清单（对不上号的留到最后，不至于把图弄没）。 */
+    function applyStickerOrder(ids) {
+      const byId = new Map(stickerRows.map((row) => [row.id, row]));
+      const next = [];
+      for (const id of ids) {
+        const row = byId.get(id);
+        if (!row) continue;
+        next.push(row);
+        byId.delete(id);
+      }
+      for (const row of stickerRows) if (byId.has(row.id)) next.push(row);
+      stickerRows = next;
+    }
+
+    function stickerCellOf(node) { return node?.closest?.(".sticker-choice") || null; }
+
+    function clearStickerDropMarks() {
+      el.stickerGrid.querySelectorAll(".drop-before, .drop-after").forEach((node) => node.classList.remove("drop-before", "drop-after"));
+    }
+
+    /**
+     * 把新的摆放顺序交回图库。
+     * 先按本地那份摆出来，回包再对一次；出错就退回 previous。
+     * 连着拖时可能会有两三份在路上，只让最新那份的回包改屏幕——
+     * 不然先发的那份回来得晚，会把她刚排好的又拽回上一版。
+     */
+    async function saveStickerOrder(ids, previous) {
+      const seq = ++stickerOrderSeq;
+      try {
+        const result = await api("POST", "library/stickers/order", { ids });
+        if (seq !== stickerOrderSeq) return;
+        applyStickerOrder(Array.isArray(result?.order) && result.order.length ? result.order : ids);
+      } catch (error) {
+        if (seq !== stickerOrderSeq) return;
+        applyStickerOrder(previous);
+        setStatus(`位置没存上：${error.message}`);
+      } finally {
+        if (seq === stickerOrderSeq) renderStickerRows();
+      }
+    }
+
+    el.stickerGrid.addEventListener("dragstart", (event) => {
+      const cell = stickerCellOf(event.target);
+      if (!cell?.dataset.stickerId) return;
+      if (!cell.draggable) { event.preventDefault(); return; }
+      draggingStickerId = cell.dataset.stickerId;
+      cell.classList.add("dragging");
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", draggingStickerId);
+      }
+    });
+
+    el.stickerGrid.addEventListener("dragover", (event) => {
+      if (!draggingStickerId) return;
+      const cell = stickerCellOf(event.target);
+      if (!cell || cell.dataset.stickerId === draggingStickerId) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+      const rect = cell.getBoundingClientRect();
+      const before = event.clientX < rect.left + rect.width / 2;
+      clearStickerDropMarks();
+      cell.classList.add(before ? "drop-before" : "drop-after");
+      stickerDropBefore = before;
+    });
+
+    el.stickerGrid.addEventListener("drop", (event) => {
+      if (!draggingStickerId) return;
+      const cell = stickerCellOf(event.target);
+      clearStickerDropMarks();
+      if (!cell?.dataset.stickerId) return;
+      event.preventDefault();
+      const dragged = draggingStickerId;
+      draggingStickerId = "";
+      const target = cell.dataset.stickerId;
+      if (target === dragged) return;
+      // 屏幕上能看到的这一份先排好，再套回整份清单
+      const visible = rowsForGroup().map((row) => row.id);
+      if (!visible.includes(dragged) || !visible.includes(target)) return;
+      const ordered = visible.filter((id) => id !== dragged);
+      const at = ordered.indexOf(target);
+      ordered.splice(stickerDropBefore ? at : at + 1, 0, dragged);
+      /*
+       * 只把这一屏里的图互相换位：它们在整份清单里占的那几个坑位不变，
+       * 别的位置上的图一个都不动。否则在「猫猫」里拖一下，
+       * 「全部」里别的图会莫名其妙跟着跳。
+       */
+      const moving = new Set(ordered);
+      const slots = [];
+      stickerRows.forEach((row, index) => { if (moving.has(row.id)) slots.push(index); });
+      const full = stickerIds();
+      slots.forEach((slot, i) => { full[slot] = ordered[i]; });
+      const previous = stickerIds();
+      if (previous.join("\u0000") === full.join("\u0000")) return;
+      applyStickerOrder(full);
+      renderStickerRows();
+      void saveStickerOrder(full, previous);
+    });
+
+    el.stickerGrid.addEventListener("dragend", () => {
+      draggingStickerId = "";
+      clearStickerDropMarks();
+      el.stickerGrid.querySelectorAll(".dragging").forEach((node) => node.classList.remove("dragging"));
+    });
+
+    /* 右键一张图：置顶 / 放到最后。格子只有五十来像素，别往格子里塞按钮。 */
+    const stickerMenu = document.createElement("div");
+    stickerMenu.className = "sticker-menu";
+    stickerMenu.hidden = true;
+    document.body.appendChild(stickerMenu);
+
+    function closeStickerMenu() { stickerMenu.hidden = true; }
+
+    function placeStickerMenu(event) {
+      const margin = 8;
+      const box = stickerMenu.getBoundingClientRect();
+      const left = Math.max(margin, Math.min(event.clientX, window.innerWidth - box.width - margin));
+      const top = Math.max(margin, Math.min(event.clientY, window.innerHeight - box.height - margin));
+      stickerMenu.style.left = `${Math.round(left)}px`;
+      stickerMenu.style.top = `${Math.round(top)}px`;
+    }
+
+    function stickerMenuButton(label, handler) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.addEventListener("click", handler);
+      return button;
+    }
+
+    async function pinStickerRow(row, position) {
+      closeStickerMenu();
+      const previous = stickerIds();
+      const rest = stickerRows.filter((item) => item.id !== row.id);
+      const ids = (position === "bottom" ? [...rest, row] : [row, ...rest]).map((item) => item.id);
+      applyStickerOrder(ids);
+      renderStickerRows();
+      try {
+        const result = await api("POST", `library/stickers/${encodeURIComponent(row.id)}/pin`, { position });
+        applyStickerOrder(Array.isArray(result?.order) && result.order.length ? result.order : ids);
+      } catch (error) {
+        applyStickerOrder(previous);
+        setStatus(`位置没存上：${error.message}`);
+      } finally {
+        renderStickerRows();
+      }
+    }
+
+    function openStickerMenu(event, row) {
+      event.preventDefault();
+      event.stopPropagation();
+      const title = document.createElement("div");
+      title.className = "sticker-menu-title";
+      title.textContent = row.description || row.emotion?.[0] || row.scene?.[0] || "这张表情";
+      stickerMenu.replaceChildren(
+        title,
+        stickerMenuButton("置顶", () => void pinStickerRow(row, "top")),
+        stickerMenuButton("放到最后", () => void pinStickerRow(row, "bottom")),
+      );
+      stickerMenu.hidden = false;
+      stickerMenu.style.left = "-9999px";
+      stickerMenu.style.top = "-9999px";
+      placeStickerMenu(event);
+    }
+
+    el.stickerGrid.addEventListener("contextmenu", (event) => {
+      const cell = stickerCellOf(event.target);
+      if (!cell?.dataset.stickerId) return;
+      const row = stickerRows.find((item) => item.id === cell.dataset.stickerId);
+      if (row) openStickerMenu(event, row);
+    });
+    el.stickerGrid.addEventListener("scroll", closeStickerMenu, { passive: true });
+    document.addEventListener("pointerdown", (event) => {
+      if (!stickerMenu.hidden && !stickerMenu.contains(event.target)) closeStickerMenu();
+    });
+    window.addEventListener("resize", closeStickerMenu);
 
     /**
      * 图库和来源是两份不相干的数据：分组 tab 和网格只靠图库，
@@ -2992,6 +3188,7 @@
       if (event.key === "Escape") {
         closeMessageActions();
         closeMessageFeed();
+        closeStickerMenu();
       }
     });
     el.stream.addEventListener("contextmenu", (event) => {

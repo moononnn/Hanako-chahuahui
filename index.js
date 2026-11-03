@@ -282,6 +282,7 @@ import {
   createStickerGroup,
   importStickerBytes,
   listStickerLibrary,
+  moveStickerToEdge,
   readOwnSticker,
   readStickerBytesOf,
   readStickerLibrary,
@@ -289,6 +290,7 @@ import {
   removeSticker,
   removeStickerGroup,
   renameStickerGroup,
+  reorderStickers,
 } from "./lib/sticker-library.js";
 import { ensureStickerThumb, startThumbWarmup } from "./lib/sticker-thumb.js";
 import { contentHash, isReusableAttachment, touchAttachmentMeta } from "./lib/attachment-hash.js";
@@ -10213,6 +10215,30 @@ export function apply(ctx) {
           const found = await readStickerBytes(ctx, row.file, guessedHanaHome);
           if (!found) return c.json({ ok: false, error: { message: "读不到这张图" } }, 404);
           return c.body(found.bytes, 200, { "Content-Type": found.contentType, "Cache-Control": "private, max-age=3600" });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 500);
+        }
+      });
+
+      // 图库里拖一下就能换位置。传上来的是这一屏排好的顺序，
+      // 后端只把这批图挪回它们原来占的坑位，别的图不跟着跳。
+      app.post("/library/stickers/order", async (c) => {
+        try {
+          const body = await c.req.json();
+          return c.json({ ok: true, ...reorderStickers(ctx.dataDir, body?.ids) });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 500);
+        }
+      });
+
+      // 右键「置顶 / 放到最后」：一次只动一张，返回整份新顺序。
+      app.post("/library/stickers/:id/pin", async (c) => {
+        try {
+          const body = await c.req.json().catch(() => ({}));
+          const position = body?.position === "bottom" ? "bottom" : "top";
+          const result = moveStickerToEdge(ctx.dataDir, String(c.req.param("id") ?? ""), position);
+          if (!result.ok) return c.json({ ok: false, error: { message: "图库里没有这张" } }, 404);
+          return c.json({ ok: true, ...result });
         } catch (error) {
           return c.json({ ok: false, error: describeError(error) }, 500);
         }

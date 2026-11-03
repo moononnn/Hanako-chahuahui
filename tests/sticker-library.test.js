@@ -7,11 +7,13 @@ import {
   createStickerGroup,
   importStickerBytes,
   listStickerLibrary,
+  moveStickerToEdge,
   readOwnSticker,
   readStickerLibrary,
   removeSticker,
   removeStickerGroup,
   renameStickerGroup,
+  reorderStickers,
 } from "../lib/sticker-library.js";
 
 function tempDir() { return fs.mkdtempSync(path.join(os.tmpdir(), "chahuahui-library-")); }
@@ -20,7 +22,7 @@ test("茶话会图库：坏 JSON 会隔离，后续新建分组不能覆盖原�
   const dir = tempDir();
   const file = path.join(dir, "sticker-library.json");
   fs.writeFileSync(file, "{坏图库", "utf8");
-  assert.deepEqual(readStickerLibrary(dir), { version: 1, groups: [], stickers: [] });
+  assert.deepEqual(readStickerLibrary(dir), { version: 1, groups: [], stickers: [], order: [] });
   const siblings = fs.readdirSync(dir);
   assert.equal(siblings.filter((name) => name.startsWith("sticker-library.json.corrupt-")).length, 1);
   assert.ok(!fs.existsSync(file));
@@ -132,4 +134,78 @@ test("茶话会图库：改成原来那个名字就当没改，幂等且不报�
   const cats = createStickerGroup(dir, "猫猫");
   assert.equal(renameStickerGroup(dir, cats.id, "猫猫").name, "猫猫");
   assert.deepEqual(listStickerLibrary(dir).groups.map((row) => row.name), ["猫猫"]);
+});
+
+// 拖动排序：她亲手排的顺序得被记住；而她刚加进来的新图仍要一眼看到，所以排最前。
+test("茶话会图库：拖出来的顺序存得住，新导入的图仍然排最前", () => {
+  const dir = tempDir();
+  const a = importStickerBytes(dir, { id: "sa", contentType: "image/png" }, Buffer.from("a"), []).sticker.id;
+  const b = importStickerBytes(dir, { id: "sb", contentType: "image/png" }, Buffer.from("b"), []).sticker.id;
+  const c = importStickerBytes(dir, { id: "sc", contentType: "image/png" }, Buffer.from("c"), []).sticker.id;
+  assert.deepEqual(listStickerLibrary(dir).stickers.map((row) => row.id), [c, b, a], "没排过的时候还是新到旧");
+
+  const moved = reorderStickers(dir, [a, c, b]);
+  assert.equal(moved.changed, true);
+  assert.deepEqual(moved.order, [a, c, b]);
+  assert.deepEqual(listStickerLibrary(dir).stickers.map((row) => row.id), [a, c, b], "重开面板还是她排的这个顺序");
+
+  // 只交上来一部分（比如只在一个分组里拖）：只换这几个坑位，别的图原地不动
+  reorderStickers(dir, [b, a]);
+  assert.deepEqual(listStickerLibrary(dir).stickers.map((row) => row.id), [b, c, a], "没交上来的 c 不该被挤走位");
+
+  // 后加的图不在顺序里，永远排最前
+  const d = importStickerBytes(dir, { id: "sd", contentType: "image/png" }, Buffer.from("d"), []).sticker.id;
+  assert.deepEqual(listStickerLibrary(dir).stickers.map((row) => row.id), [d, b, c, a]);
+});
+
+test("茶话会图库：顺序没变就不动盘，认不出的 id 一律不接", () => {
+  const dir = tempDir();
+  const a = importStickerBytes(dir, { id: "sa", contentType: "image/png" }, Buffer.from("a"), []).sticker.id;
+  const b = importStickerBytes(dir, { id: "sb", contentType: "image/png" }, Buffer.from("b"), []).sticker.id;
+  const file = path.join(dir, "sticker-library.json");
+  const before = fs.readFileSync(file, "utf8");
+
+  const same = reorderStickers(dir, [b, a]);
+  assert.equal(same.changed, false);
+  assert.equal(fs.readFileSync(file, "utf8"), before, "顺序没变就别写盘");
+
+  assert.equal(reorderStickers(dir, ["local_没有这张", b, a]).changed, false);
+  assert.equal(reorderStickers(dir, []).changed, false);
+  assert.equal(reorderStickers(dir, null).changed, false);
+});
+
+test("茶话会图库：右键置顶与放到最后", () => {
+  const dir = tempDir();
+  const a = importStickerBytes(dir, { id: "sa", contentType: "image/png" }, Buffer.from("a"), []).sticker.id;
+  const b = importStickerBytes(dir, { id: "sb", contentType: "image/png" }, Buffer.from("b"), []).sticker.id;
+  const c = importStickerBytes(dir, { id: "sc", contentType: "image/png" }, Buffer.from("c"), []).sticker.id;
+  assert.deepEqual(listStickerLibrary(dir).stickers.map((row) => row.id), [c, b, a]);
+
+  assert.deepEqual(moveStickerToEdge(dir, a, "top").order, [a, c, b]);
+  assert.deepEqual(listStickerLibrary(dir).stickers.map((row) => row.id), [a, c, b]);
+
+  assert.deepEqual(moveStickerToEdge(dir, a, "bottom").order, [c, b, a]);
+  assert.deepEqual(listStickerLibrary(dir).stickers.map((row) => row.id), [c, b, a]);
+
+  // 已经在那头的再点一次：什么都不变，也不该报错
+  assert.deepEqual(moveStickerToEdge(dir, c, "top"), { ok: true, order: [c, b, a] });
+
+  // 图库里没有这张
+  assert.deepEqual(moveStickerToEdge(dir, "local_没有这张", "top"), { ok: false, order: [c, b, a] });
+  assert.deepEqual(moveStickerToEdge(dir, "", "top"), { ok: false, order: [c, b, a] });
+});
+
+test("茶话会图库：删掉的图不在顺序里留坑，重新导入当成新图排最前", () => {
+  const dir = tempDir();
+  const a = importStickerBytes(dir, { id: "sa", contentType: "image/png" }, Buffer.from("a"), []).sticker.id;
+  const b = importStickerBytes(dir, { id: "sb", contentType: "image/png" }, Buffer.from("b"), []).sticker.id;
+  reorderStickers(dir, [a, b]);
+  assert.equal(removeSticker(dir, a), true);
+  assert.deepEqual(listStickerLibrary(dir).stickers.map((row) => row.id), [b], "删了就只剩 b，不留空位");
+
+  // 拿同一份字节再导一次（她一时后悔了）：SHA 一样就算新的一条，按新图排最前
+  const again = importStickerBytes(dir, { id: "sa", contentType: "image/png" }, Buffer.from("a"), []).sticker.id;
+  const listed = listStickerLibrary(dir).stickers.map((row) => row.id);
+  assert.equal(listed[0], again, "重新导进来的排最前");
+  assert.deepEqual(new Set(listed), new Set([b, again]));
 });

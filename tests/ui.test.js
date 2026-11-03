@@ -1802,6 +1802,30 @@ test("表情包：管理态能改分组名，改不成就留在原地让她重�
   assert.doesNotMatch(panel, /sticker-[a-z-]*(group|rename)[a-z-]*[\s\S]{0,60}?它/);
 });
 
+test("表情包图库：图片能拖着换位置，右键能置顶", () => {
+  // 盘上记住顺序：拖动和置顶都落在同一本账上，刷新后不跑回去
+  assert.match(app, /app\.post\("\/library\/stickers\/order"/);
+  assert.match(app, /app\.post\("\/library\/stickers\/:id\/pin"/);
+  assert.match(panel, /cell\.dataset\.stickerId = row\.id;/);
+  assert.match(panel, /cell\.draggable = canDrag;/, "管理态和正在搜图的时候不给拖");
+  assert.match(panel, /img\.draggable = false;/, "图片别抢拖动，抢了拖出来的是一张幽灵图，格子排不动");
+  assert.match(panel, /api\("POST", "library\/stickers\/order", \{ ids \}\)/);
+  assert.match(panel, /api\("POST", `library\/stickers\/\$\{encodeURIComponent\(row\.id\)\}\/pin`, \{ position \}\)/);
+  // 拖动只动这一屏可见的那些图的坑位，别的图不能跟着跳
+  assert.match(panel, /const moving = new Set\(ordered\);/, "只重排看得见的这一屏");
+  assert.match(panel, /slots\.forEach\(\(slot, i\) => \{ full\[slot\] = ordered\[i\]; \}\);/, "按原来那几个坑位对齐");
+  // 右键菜单挂在 body 上，跟着鼠标开
+  assert.match(panel, /stickerMenu\.className = "sticker-menu"/);
+  assert.match(panel, /document\.body\.appendChild\(stickerMenu\)/);
+  assert.match(panel, /stickerMenuButton\("置顶"/);
+  assert.match(panel, /stickerMenuButton\("放到最后"/);
+  assert.match(panelCss, /\.sticker-menu \{[^}]*position: fixed;/s);
+  // 没存上就退回原来的顺序，别让屏幕上的和盘上的不一样
+  assert.match(panel, /catch \(error\) \{\s*if \(seq !== stickerOrderSeq\) return;\s*applyStickerOrder\(previous\);\s*setStatus\(`位置没存上/);
+  // 连着拖的时候只让最新那份回包改屏幕
+  assert.match(panel, /const seq = \+\+stickerOrderSeq;/);
+});
+
 test("表情包面板：[hidden] 要有样式兜底，不然两块会同时冒出来", () => {
   assert.match(panelCss, /\.emoji-grid\[hidden\], \.sticker-grid\[hidden\], \.sticker-picker\[hidden\] \{ display: none; \}/);
   assert.match(panelCss, /\.sticker-import\[hidden\]/);
