@@ -2569,12 +2569,13 @@ export function startMobileClient(doc = document, { analyzeBackground = analyzeB
       container.append(row);
       return;
     }
-    if (message.voice && (message.voice.status === "ready" || message.voice.status === "pending")) {
+    if (!message.attachment?.id && message.voice && (message.voice.status === "ready" || message.voice.status === "pending")) {
       container.append(voiceRow(message, partnerName));
       return;
     }
     const pieces = (Array.isArray(message.bubbles) && message.bubbles.length ? message.bubbles : [message.text])
-      .filter((piece) => piece != null && String(piece) !== "");
+      .filter((piece) => piece != null && String(piece) !== "")
+      .filter((piece) => !message.attachment?.id || !/^\s*\[图片\]\s*$/.test(String(piece)));
     if (!pieces.length && !message.attachment?.id) pieces.push("…");
     const row = doc.createElement("div");
     row.className = "row " + (mine ? "me" : "ta");

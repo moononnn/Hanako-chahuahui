@@ -1,0 +1,13 @@
+.image-tier-options, .reference-style-options { display:flex; gap:6px; flex-wrap:wrap; margin:12px 0; }
+.image-tier-options button, .reference-style-options button { white-space:nowrap; flex:1 1 auto; min-height:36px; }
+.reference-preview { display:grid; justify-items:start; gap:8px; margin:12px 0; }
+.reference-preview img { display:block; width:auto; max-width:100%; max-height:320px; object-fit:contain; border-radius:16px; background:var(--mint-soft); }
+.reference-history { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; max-height:220px; overflow:auto; }
+.reference-thumb { padding:3px; border:2px solid transparent; border-radius:12px; background:var(--mint-soft); cursor:pointer; }
+.reference-thumb.on { border-color:var(--mint-deep); }
+.reference-thumb img { display:block; width:64px; height:64px; object-fit:cover; border-radius:8px; }
+.reference-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:12px 0; }
+.reference-actions button { min-width:0; white-space:nowrap; }
+.reference-actions .primary-button { background:var(--mint-deep); color:white; }
+.image-operation-note { overflow-wrap:anywhere; }
+.image-operation-note:empty { display:none; }

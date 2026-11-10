@@ -8,7 +8,7 @@
   <title>茶话会 · 设置</title>
   <script>
     // 样式表得现拉，不能等缓存（同 panel.html：宿主给静态文件挂了长缓存）
-    for (const href of ["assets/settings.css", "assets/beautify-select.css", "assets/bubble-skins.css"]) {
+    for (const href of ["assets/settings.css", "assets/beautify-select.css", "assets/bubble-skins.css", "assets/image-settings.css"]) {
       const link = document.createElement("link");
       link.rel = "stylesheet";
       link.href = `${href}?t=${Date.now()}`;
@@ -250,6 +250,11 @@
       <div class="section-head">
         <div><h2>生图</h2><p>茶话会自己的一条生图通路。用的就是你 Hana 里已经登录的那个账号，不用为它另买一份额度。</p></div>
       </div>
+      <article class="setting-card">
+        <div class="setting-copy"><h3>聊天照片的每日总上限</h3><p>所有伙伴一起用的额度。默认关闭；打开后还需在具体伙伴里选择档位。</p></div>
+        <div id="image-global-tier" class="seg image-tier-options" role="group" aria-label="聊天生图每日总上限"></div>
+        <small class="detail-field-note">关闭／每天最多4张／8张／16张，本地时间零点更新。生成成功才计入已出张数；等待结果的请求先占名额，超时不自动重试，结果未明时保留到次日。失败也可能产生上游费用。</small>
+      </article>
       <article class="setting-card" id="image-model-card">
         <div class="setting-copy">
           <h3>用哪家的模型</h3>
@@ -675,6 +680,7 @@
     import { hana as localHana } from "./assets/sdk.js";
     import { PROFILES, DEFAULT_PROFILE_ID, ensureAudio, normalizeSettings, play as playMessageSound } from "./assets/message-sound.js";
     import { mountMobileSettings } from "./assets/mobile-settings.js";
+    import { mountPartnerImageSettings } from "./assets/image-settings.js";
 
     // 嵌在聊天卡里时复用外层宿主桥；单独打开时仍保留原来的 SDK 兜底。
     const hana = window.parent !== window && window.parent.__chahuahuiHana ? window.parent.__chahuahuiHana : localHana;
@@ -692,7 +698,7 @@
 
     // 这一页自己的版本号：后端读同一个文件里的这一行，两边对不上就说明她眼前是旧的。
     // （以前用文件哈希当戳，但那个值是后端给的，页面旧了它照样显示新值，等于没测。）
-    const UI_BUILD = "20261031.5";
+    const UI_BUILD = "20261110.1";
 
     const el = {
       status: document.getElementById("status"),
@@ -746,6 +752,7 @@
     let pendingRemoveId = null;
     let pendingResetId = null;
     let partnerRequestSeq = 0;
+    let disposeImageSettings = null;
     let currentDetailTab = "contact";
     let personDraftTimer = null;
     let lastModalTrigger = null;
@@ -1369,6 +1376,12 @@
      * 还得先搞懂 provider 和 model 是两个东西。
      */
     function paintImageModel() {
+      const tierHost = document.getElementById("image-global-tier");
+      if (tierHost) choiceGroup(tierHost, [["off", "关闭"], ["less", "少一些"], ["normal", "适中"], ["more", "多一些"]], globalSettings.imageTier || "off", async value => {
+        for (const button of tierHost.querySelectorAll("button")) button.disabled = true;
+        try { await saveGlobal({ imageTier: value }, "聊天生图总上限已保存"); }
+        finally { paintImageModel(); }
+      });
       const cfg = globalSettings.imageModel || {};
       const select = document.getElementById("image-model-select");
       if (!select) return;
@@ -3275,6 +3288,7 @@
     }
 
     async function openPartner(agentId, detailTab = "contact") {
+      disposeImageSettings?.(); disposeImageSettings = null;
       const requestSeq = ++partnerRequestSeq;
       if (personDraftTimer && currentId !== agentId) { clearInterval(personDraftTimer); personDraftTimer = null; }
       // 保存后重开这一页时，别把滚动位置弄丢：partnerBody 清空的那一瞬内容塌到零高，
@@ -3619,6 +3633,13 @@
       previewRow.append(previewButton, previewNote);
       voiceCard.appendChild(previewRow);
       detailPanels.contact.appendChild(voiceCard);
+      const imageCard = detailCard("聊天里的照片", "要不要拍、拍什么由 ta 看聊天情境决定；这里管次数和外貌参考，不要求有求必应。");
+      detailPanels.contact.appendChild(imageCard);
+      disposeImageSettings = mountPartnerImageSettings(imageCard, {
+        agentId, api, apiWith, fetchImage: sub => hana.api.fetch(sub),
+        isCurrent: () => currentId === agentId && partnerRequestSeq === requestSeq,
+        saveTier: value => savePartner(agentId, { imageTier: value }, "伙伴聊天生图档位已保存"),
+      });
       // 作息不摆在这儿了（2026-09-13）：ta是伙伴的内在状态，跟隐性爱好一个待遇——
       // 影响行为，不上页面。看一眼就想改，那就别让她看见；睡着时也不再是"等ta醒"，回是回的，只是慢。
 

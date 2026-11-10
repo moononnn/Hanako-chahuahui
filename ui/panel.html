@@ -3340,7 +3340,7 @@
         tickEl?.remove();
         dots = typingIndicator(started.voiceRequested ? "voice" : "text");
         let payload = null;
-        for (let i = 0; i < 240; i += 1) {
+        for (let i = 0; i < 720; i += 1) {
           const state = await api("GET", `turns/${encodeURIComponent(started.turnId)}`);
           if (!alive()) return;
           if (state.status === "ready") { payload = state; break; }
@@ -3348,6 +3348,12 @@
           await sleep(500);
         }
         if (!payload) return;
+        if (payload.message?.attachment?.id) {
+          dots?.remove();
+          renderMessage(payload.message, { bindAssistantActions: true });
+          if (payload.replyMessageId) seenIds.add(payload.replyMessageId);
+          return;
+        }
         if (hasVoiceBubble(payload.message)) {
           // 语音合成中也要直接按语音那条画，先演一遍文字气泡再变语音条，屏幕上是看得出闪的。
           dots?.remove();
@@ -3725,7 +3731,17 @@
           // 已经在屏上的那一片不再画一遍：两条路撞上同一句时只有第一片被 seenIds 挡住，
           // 后面几片会被各画一遍（2026-11-01 实机）。
           if (index >= 0 && drawn.has(index)) continue;
-          const rendered = bubble("assistant", piece, null, m.at);
+          const rendered = bubble("assistant", m.attachment?.id && isBareImageMarker(piece) ? "" : piece, null, m.at);
+          if (m.attachment?.id && !drawn.has("image")) {
+            const imageNode = document.createElement("img");
+            imageNode.className = "message-image";
+            imageNode.alt = m.attachment.name || "伙伴分享的照片";
+            imageNode.loading = "lazy";
+            imageNode.dataset.visionNote = String(m.attachment.description ?? "");
+            appendImageToBubble(rendered.bubble, imageNode);
+            mountAttachmentImage(imageNode, m.attachment.id, current, Boolean(opts.keepBottom));
+            drawn.add("image");
+          }
           if (index >= 0) drawn.add(index);
           lastRow = rendered.row;
           bindMessageFeed(rendered.row, m, current, piece);
@@ -3844,7 +3860,7 @@
         // 回执还没回来的那条，屏幕上已经有占位气泡了（带同一个 clientMessageId）。
         // 这里再画一遍就是同一条消息出现两次——当初那条一模一样的就是这么来的。
         if (m?.clientMessageId && pendingClientIds.has(m.clientMessageId)) continue;
-        if (m?.role === "assistant" && Array.isArray(m.bubbles) && m.bubbles.length > 1 && !seenIds.has(m.id) && !hasVoiceBubble(m)) {
+        if (m?.role === "assistant" && Array.isArray(m.bubbles) && m.bubbles.length > 1 && !seenIds.has(m.id) && !hasVoiceBubble(m) && !m.attachment?.id) {
           for (let index = 0; index < m.bubbles.length; index += 1) {
             if (current !== agentId || viewSeq !== threadViewSeq || generation !== renderGeneration) return restoreScroll(added);
             renderMessage(m, {

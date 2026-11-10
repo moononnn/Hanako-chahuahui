@@ -475,6 +475,10 @@ import {
   listHostImageProviders,
   mimeOfImageBytes,
 } from "./lib/host-image.js";
+import { normalizeImageTier, chatImagePrompt, parseChatImage } from "./lib/chat-image.js";
+import { createImageQuota } from "./lib/image-quota.js";
+import { createImageReferences } from "./lib/image-reference.js";
+import { registerImageReferenceRoutes } from "./lib/image-reference-routes.js";
 import {
   MAX_NUDGE_BUBBLES,
   nudgeDelay,
@@ -611,6 +615,18 @@ export function apply(ctx) {
   });
   const videoUnderstanding = createVideoUnderstanding(ctx, { diagnostics });
   const store = createStore(ctx.dataDir);
+  const imageReferences = createImageReferences(ctx.dataDir);
+  let imageQuota = null;
+  let imageQuotaError = null;
+  try {
+    imageQuota = createImageQuota(ctx.dataDir, { getGlobal: () => store.getGlobalSettings(), getPartner: id => store.getPartnerSettings(id) });
+  } catch (error) { imageQuotaError = error; }
+  function imagePartnerView(agentId) {
+    return { ok: true, tier: store.getPartnerSettings(agentId).imageTier, globalTier: store.getGlobalSettings().imageTier,
+      usage: imageQuota?.usage(agentId) ?? null,
+      ...((imageQuotaError || chatImageServiceError) ? { quotaError: (imageQuotaError || chatImageServiceError).message } : {}),
+      reference: imageReferences.view(agentId) };
+  }
 
   /**
    * 她今天大致什么样子（心情日盘）。只用在主动消息的背景位。
@@ -802,7 +818,7 @@ export function apply(ctx) {
       retryDelaysMs: [], allowUtilityFallback: false, usageTag: { agentId, kind: "chat" } });
     if (!isCurrent() || !ownMessageCurrent()) return 'stale';
     // 这条路径不经过 splitReply，模型照抄历史消息的【日期 时间】前缀没人摘（2026-10-14 实机）。
-    const text = stripTimeHeader(cleanVoice(String(generated.text || ''), 'voice'));
+    const text = stripTimeHeader(cleanVoice(parseChatImage(generated.text).text, 'voice'));
     if (!text) return false;
     // 陪读消息也切成气泡：普通回复走 splitReply，不走的话它永远一坨一泡，界面上比别人的粗一档。
     const bubbles = splitReply(text);
@@ -1161,9 +1177,9 @@ export function apply(ctx) {
     // 图片留多久：30 / 45 / 60 / 90 天，或 0 = 永久不删。
     "imageRetentionDays",
     // 生图：一条自己的模型配置（含加密后的 Key），和朗读那条各走各的。
-    "imageModel",
+    "imageModel", "imageTier",
   ]);
-  const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "vision", "voice", "partnerFeedEnabled", "videoSharingEnabled"]);
+  const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "vision", "voice", "partnerFeedEnabled", "videoSharingEnabled", "imageTier"]);
 
   function pickSettingsPatch(input, allowed, label) {
     const body = input && typeof input === "object" && !Array.isArray(input) ? input : {};
@@ -1178,6 +1194,7 @@ export function apply(ctx) {
 
   function normalizeGlobalSettingsPatch(input) {
     const patch = pickSettingsPatch(input, GLOBAL_SETTING_KEYS, "全局设置");
+    if (Object.prototype.hasOwnProperty.call(patch, "imageTier")) patch.imageTier = normalizeImageTier(patch.imageTier);
     if (Object.prototype.hasOwnProperty.call(patch, "myActionTail")) {
       patch.myAction = { text: actionTemplateFromTail(patch.myActionTail) };
       delete patch.myActionTail;
@@ -1293,6 +1310,7 @@ export function apply(ctx) {
   /** 伙伴设置里只挑形状对的模型透进去，别把脏东西写进账本。 */
   function normalizePartnerSettingsPatch(body) {
     const patch = pickSettingsPatch(body, PARTNER_SETTING_KEYS, "伙伴设置");
+    if (Object.prototype.hasOwnProperty.call(patch, "imageTier")) patch.imageTier = normalizeImageTier(patch.imageTier);
     if (Object.prototype.hasOwnProperty.call(patch, "videoSharingEnabled") && typeof patch.videoSharingEnabled !== "boolean") {
       throw new Error("浏览B站并分享视频请选择开启或关闭");
     }
@@ -1344,7 +1362,8 @@ export function apply(ctx) {
   }
 
   /** 先决定并合成；成功前不往聊天记录里落伙伴消息，避免文字先闪出来。 */
-  async function prepareVoice(agentId, text, { currentTurnId = null, triggerMessageId = null, kind = "reply" } = {}) {
+  async function prepareVoice(agentId, text, { currentTurnId = null, triggerMessageId = null, kind = "reply", hasPhoto = false } = {}) {
+    if (hasPhoto) return { reason: "photo" };
     const globalSettings = store.getGlobalSettings();
     const rawPartnerSettings = store.getPartnerSettings(agentId);
     const partnerSettings = { ...rawPartnerSettings, voice: effectivePartnerVoice(rawPartnerSettings, globalSettings) };
@@ -1942,6 +1961,70 @@ export function apply(ctx) {
         try { fs.rmSync(file, { force: true }); } catch { /* 回滚失败仍把原错误抛给上层 */ }
       }
       throw error;
+    }
+  }
+
+  // 生图发生在异步聊天回合中，不能继承已经结束的HTTP调用凭证。
+  // 私有自服务只接本进程已预占的工作号，不接外部路径、模型或任意生图参数。
+  const chatImageJobs = new Map();
+  let chatImageServiceReady = false;
+  let chatImageServiceError = null;
+  async function generateChatImage(_ctx, options, reservation, canStart) {
+    if (!chatImageServiceReady) throw Object.assign(new Error("聊天生图服务尚未就绪"), { imageOutcome: "failed" });
+    const job = { options, canStart, started: false, result: null };
+    chatImageJobs.set(reservation, job);
+    try {
+      const response = await ctx.bus.request("app:chahuahui/chat-image-generate", { id: reservation }, { timeout: 330_000 });
+      if (!response?.ok || !job.result) throw Object.assign(new Error(response?.message || "生图结果未能取回"), { imageOutcome: response?.imageOutcome || "unknown" });
+      return job.result;
+    } finally { chatImageJobs.delete(reservation); }
+  }
+
+  async function prepareChatImage(agentId, request, { stillCurrent = () => true, signal = null } = {}) {
+    if (!request) return { attachment: null, fallback: "" };
+    if (!stillCurrent() || signal?.aborted) return { attachment: null, stale: true };
+    if (!imageQuota?.available(agentId)) return { attachment: null, fallback: "这会儿先不拍，陪你聊会儿。" };
+    let reference = null;
+    try { if (request.self) reference = imageReferences.current(agentId); }
+    catch { return { attachment: null, fallback: "参考照这会儿没能读到，先不拍自己。" }; }
+    if (request.self && !reference) return { attachment: null, fallback: "还没定好我的参考照，这回先不拍自己。" };
+    let reservation;
+    try { reservation = imageQuota.reserve(agentId); }
+    catch (error) {
+      imageQuotaError = new Error("生图次数账本无法保存，聊天生图已暂停，请检查数据目录权限和剩余空间后重载应用");
+      imageQuota = null;
+      diagnostics({ event: "chat.image.quota-write.failed", agentId, error: describeError(error) });
+      return { attachment: null, fallback: "照片这会儿没能发出来，先聊着。" };
+    }
+    if (!reservation) return { attachment: null, fallback: "这会儿先不拍，陪你聊会儿。" };
+    let settled = false;
+    try {
+      const choice = normalizeImageModelPatch(store.getGlobalSettings().imageModel);
+      const result = await generateChatImage(ctx, {
+        prompt: [request.self ? "画面人物必须保持参考照中的同一角色、外貌特征和画风；按场景自然构图，不加文字水印。" : "只呈现下面的物件、食物或风景，不出现人物或陌生人的自拍。", request.prompt].join("\n"),
+        referencePaths: reference ? [reference.path] : [], provider: choice.provider || undefined, model: choice.model || undefined,
+      }, reservation, () => stillCurrent() && !signal?.aborted && store.getGlobalSettings().imageTier !== "off" && store.getPartnerSettings(agentId).imageTier !== "off" && (!reference || imageReferences.view(agentId).currentId === reference.id));
+      // 成功就算一次，即便等待期间旧稿作废或附件写入失败。
+      imageQuota.settle(reservation, "success");
+      settled = true;
+      const changed = reference && imageReferences.view(agentId).currentId !== reference.id;
+      if (!stillCurrent() || signal?.aborted || changed || store.getGlobalSettings().imageTier === "off" || store.getPartnerSettings(agentId).imageTier === "off") return { attachment: null, stale: true };
+      if (!detectImageType(result.bytes)) throw new Error("生成结果不是可用图片");
+      const saved = saveAttachment({ name: "聊天照片", mimeType: detectImageType(result.bytes), data: result.bytes.toString("base64"), agentId });
+      const { data, ...attachment } = saved;
+      recordAttachmentDescription(attachment.id, { title: "伙伴分享的照片", description: request.prompt, via: "generated" });
+      return { attachment: { ...attachment, description: request.prompt }, fallback: "" };
+    } catch (error) {
+      if (!settled) {
+        try { imageQuota.settle(reservation, error?.imageOutcome || "unknown"); }
+        catch (quotaError) {
+          imageQuotaError = new Error("生图次数账本无法保存，聊天生图已暂停，请检查数据目录权限和剩余空间后重载应用");
+          imageQuota = null;
+          diagnostics({ event: "chat.image.quota-write.failed", agentId, error: describeError(quotaError) });
+        }
+      }
+      diagnostics({ event: "chat.image.failed", agentId, outcome: error?.imageOutcome || "unknown", error: describeError(error) });
+      return { attachment: null, fallback: "这张暂时没发出来，先聊着。" };
     }
   }
 
@@ -2569,6 +2652,30 @@ export function apply(ctx) {
     }, { allowCrossApp: false });
   } catch (error) {
     diagnostics({ event: "memory.service.unavailable", error: describeError(error) });
+  }
+
+  try {
+    ctx.bus.handle("chat-image-generate", async (payload, { callerAppId, signal }) => {
+      if (callerAppId !== "chahuahui") throw new Error("聊天生图服务仅供本应用调用");
+      const job = typeof payload?.id === "string" ? chatImageJobs.get(payload.id) : null;
+      if (!job || job.started) return { ok: false, imageOutcome: "unknown", message: "本次生图工作已失效" };
+      job.started = true;
+      try {
+        if (signal?.aborted || !job.canStart()) return { ok: false, imageOutcome: "failed", message: "聊天情境已经变化，本次不再生图" };
+      } catch (error) {
+        return { ok: false, imageOutcome: "failed", message: "生图前检查未通过，本次未提交图片请求" };
+      }
+      try {
+        job.result = await generateViaHost(ctx, job.options);
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, imageOutcome: error?.imageOutcome || "unknown", message: String(error?.message || "本次生图未完成").slice(0, 240) };
+      }
+    }, { allowCrossApp: false });
+    chatImageServiceReady = true;
+  } catch (error) {
+    chatImageServiceError = new Error("聊天生图服务未能启动，请重载应用；仍失败时查看应用诊断");
+    diagnostics({ event: "chat.image.service.unavailable", error: describeError(error) });
   }
 
   // 记忆材料交给该伙伴当前的聊天模型；一次任务固定选择，不借共享工具模型代写。
@@ -3335,7 +3442,7 @@ export function apply(ctx) {
     const markerlessRaw = marker.keyword
       ? [marker.before, marker.after].filter(Boolean).join("\n")
       : badgeLessRaw;
-    const text = cleanVoice(markerlessRaw, "voice");
+    const text = cleanVoice(parseChatImage(markerlessRaw).text, "voice");
     if (videoLoginNotice && isNoReply(text)) {
       const currentLogin = await videoLoginManager.status();
       if (currentLogin.episodeId !== videoLoginNotice.episodeId || !videoNoticeDue(currentLogin) || !videoPartnerEnabled(agentId)) {
@@ -5759,7 +5866,7 @@ export function apply(ctx) {
    * （多余的标记在 parseStickerMarker 那里就被吃掉了）。
    */
   async function composeBubbles(agentId, rawText, { maxBubbles = 6, history = [], currentContext = {} } = {}) {
-    const mark = parseStickerMarker(rawText);
+    const mark = parseStickerMarker(parseChatImage(rawText).text);
     let stickerBubble = null;
     let stickerId = null;
     let stickerException = null;
@@ -6114,6 +6221,12 @@ export function apply(ctx) {
         hasSource: true, matched: true, replyTarget: replyTargetId ?? null,
         sourceHead: videoShelf[0]?.bvid ?? "" });
     }
+    const imageEnabled = chatImageServiceReady && imageQuota?.available(agentId) === true;
+    let hasImageReference = false;
+    if (imageEnabled) {
+      try { hasImageReference = Boolean(imageReferences.current(agentId)); } catch { /* 坏参考照不能变成陌生脸 */ }
+    }
+    const imagePromptText = chatImagePrompt({ enabled: imageEnabled, hasReference: hasImageReference });
     const systemPrompt = buildSystemPrompt({
       ruleProfile: agentId === compactReplyPilotId ? "compact-v1" : "legacy",
       partnerId: agentId,
@@ -6251,7 +6364,7 @@ export function apply(ctx) {
         if (!seesImages) await describeImagesForDegradedModel(agentId, messages, signal);
         try {
           const out = await generateReply(ctx, {
-            systemPrompt: [system, focusText, feedbackPrompt].filter(Boolean).join('\n\n'),
+            systemPrompt: [system, imagePromptText, focusText, feedbackPrompt].filter(Boolean).join('\n\n'),
             messages: seesImages ? messagesWithBody : attachNativeImage(messages, agentId, { withBody: false }),
             diagnostics,
             maxTokens: feedbackPrompt ? 1800 : 900,
@@ -6301,7 +6414,7 @@ export function apply(ctx) {
       return { ok: false, reason: "unavailable", kind: generated.kind, generationMs: Date.now() - startedAt };
     }
     let memoryFeedback = extractMemoryFeedback(generated.text, feedbackEntries, feedbackMessages);
-    const voiceRisk = inspectVoice(memoryFeedback.text);
+    const voiceRisk = inspectVoice(parseChatImage(memoryFeedback.text).text);
     if (voiceRisk.level === "retry") {
       diagnostics({ event: "chat.output.retry", agentId, reason: voiceRisk.reason, tail: voiceRisk.tail });
       const retried = await callModel(`${systemPrompt}\n\n刚才的输出末尾疑似混入了无关字符。请只重新输出要说给对方的自然正文，不要解释格式。`);
@@ -6309,7 +6422,7 @@ export function apply(ctx) {
         return { ok: false, reason: "unavailable", kind: retried.kind, generationMs: Date.now() - startedAt };
       }
       const retryFeedback = extractMemoryFeedback(retried.text, feedbackEntries, feedbackMessages);
-      const retryRisk = inspectVoice(retryFeedback.text);
+      const retryRisk = inspectVoice(parseChatImage(retryFeedback.text).text);
       diagnostics({ event: "chat.output.retry.result", agentId, level: retryRisk.level, reason: retryRisk.reason });
       if (retryRisk.level !== "retry") {
         generated = retried;
@@ -6329,24 +6442,30 @@ export function apply(ctx) {
     // 这是正常的回应结果，不是生成失败，也不能触发五分钟重试。
     // 协议必须先于徽章、表情、正文清洗和语音处理剥离；坏回包不提交判断。
     const rawGeneratedText = String(memoryFeedback.text ?? "");
-    const badgeMarker = parseBadgeMarker(rawGeneratedText);
+    const chatPhoto = parseChatImage(rawGeneratedText);
+    const badgeMarker = parseBadgeMarker(chatPhoto.text);
     if (badgeMarker.badge) store.setPartnerSettings(agentId, { badge: badgeMarker.badge });
     const badgeLessRaw = badgeMarker.found
       ? [badgeMarker.before, badgeMarker.after].filter(Boolean).join("\n")
-      : rawGeneratedText;
+      : chatPhoto.text;
     const marker = parseStickerMarker(badgeLessRaw);
     // 清洗会去掉表情标记，但分条器还需要它来挑图；先取出关键词，清洗正文后再放回规范写法。
     const markerlessRaw = marker.keyword
       ? [marker.before, marker.after].filter(Boolean).join("\n")
       : badgeLessRaw;
-    const cleanedText = cleanVoice(markerlessRaw, "voice");
+    let cleanedText = cleanVoice(markerlessRaw, "voice");
     if (isNoReply(cleanedText)) {
       const staleSilent = supersededResult("silent");
       if (staleSilent) return staleSilent;
       diagnostics({ event: "reply.silent", agentId, generationMs });
       return { ok: false, reason: "silent", generationMs };
     }
-    const replyText = marker.keyword
+    const preparedImage = await prepareChatImage(agentId, chatPhoto.request, {
+      signal, stillCurrent: () => (!isCurrent || isCurrent()) && targetStillLive() && !superseded()?.superseded,
+    });
+    if (preparedImage.stale) return { ok: false, reason: "stale", generationMs: Date.now() - startedAt };
+    if (preparedImage.fallback) cleanedText = preparedImage.fallback;
+    const replyText = marker.keyword && !preparedImage.fallback
       ? [cleanedText, `[表情:${marker.keyword}]`].filter(Boolean).join("\n")
       : cleanedText;
     // 真的说出口了才标成已讲；没提就留着，冷却期到了还能再给一次机会。
@@ -6368,7 +6487,7 @@ export function apply(ctx) {
       currentContext: { currentTurnId: currentMessageId || replyTargetId || repliedTo || "" },
     });
     const { bubbles } = composed;
-    if (bubbles.length === 0) {
+    if (bubbles.length === 0 && !preparedImage.attachment) {
       const staleEmpty = supersededResult("empty");
       if (staleEmpty) return staleEmpty;
       // 伙伴只想甩图，但这次没有可用匹配：跟安静收尾一样结束，别把图库缺图伪装成模型失败重试。
@@ -6402,12 +6521,13 @@ export function apply(ctx) {
 
     if (isCurrent && !isCurrent()) return { ok: false, reason: "stale", generationMs };
     let preparedVoice = await prepareVoice(agentId, cleanedText, {
+      hasPhoto: Boolean(preparedImage.attachment),
       kind: "reply",
       currentTurnId: currentMessageId || replyTargetId || repliedTo || "",
       triggerMessageId: replyTargetId,
     });
-    if (preparedVoice.reason === "cancelled") return { ok: false, reason: "stale", generationMs };
-    if (preparedVoice.reason === "stale") {
+    if (preparedVoice?.reason === "cancelled") return { ok: false, reason: "stale", generationMs };
+    if (preparedVoice?.reason === "stale") {
       if (isCurrent && !isCurrent()) return { ok: false, reason: "stale", generationMs };
       // 关系账在合成期间变化时，保住这次文字回复；下一轮再按新账决定是否发语音。
       diagnostics({ event: "voice.stale-fallback", agentId, triggerMessageId: replyTargetId });
@@ -6431,8 +6551,9 @@ export function apply(ctx) {
     }
     const reply = {
       role: "assistant",
-      text: visibleTextOf(bubbles),
+      text: visibleTextOf(bubbles) || (preparedImage.attachment ? "[图片]" : ""),
       bubbles,
+      ...(preparedImage.attachment ? { attachment: preparedImage.attachment } : {}),
       via: generated.via,
       reasoningChars: generated.reasoningChars ?? 0,
       repliedTo: replyTargetId,
@@ -8420,7 +8541,7 @@ export function apply(ctx) {
             hasMore,
             messages: page.map((message) => {
               if (message?.role === "assistant" && message.recalled && message.recallMode === "hard") {
-                return { ...message, text: recallLabel, bubbles: null, kind: "recalled" };
+                return { ...message, text: recallLabel, bubbles: null, attachment: null, voice: null, kind: "recalled" };
               }
               if (message?.role !== "user") return message;
               const active = [...turns.values()].find((turn) => turn.agentId === agentId && turn.userMessageId === message.id);
@@ -8856,6 +8977,14 @@ export function apply(ctx) {
         } catch (error) {
           return c.json({ ok: false, error: { message: String(error?.message ?? error).slice(0, 240) } }, 400);
         }
+      });
+
+      const imageReferenceOperations = registerImageReferenceRoutes(app, {
+        references: imageReferences, view: imagePartnerView, getPersona, listPartners,
+        generate: options => {
+          const choice = normalizeImageModelPatch(store.getGlobalSettings().imageModel);
+          return generateViaHost(ctx, { ...options, provider: choice.provider || undefined, model: choice.model || undefined });
+        },
       });
 
       // 生图：列出宿主里能用哪几家的哪个模型。不给密钥，只用已登录的账号。
@@ -9403,6 +9532,7 @@ export function apply(ctx) {
       app.post("/settings/partner/:agentId/purge", (c) => {
         const agentId = String(c.req.param("agentId") ?? "").trim();
         if (!isValidPartnerId(agentId)) return c.json({ ok: false, error: { message: "伙伴编号不合法" } }, 400);
+        imageReferenceOperations.invalidate(agentId);
         const result = store.purgePartner(agentId);
         const attachments = purgePartnerAttachments(agentId);
         const stickers = pruneStickerUsage(ctx.dataDir, agentId);
