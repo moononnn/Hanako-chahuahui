@@ -91,14 +91,22 @@ test("彻底删除伙伴会清掉参考照，且在途生成不能把删除的�
   assert.equal(result.status, 200);
   const referenceDir = path.join(app.dataDir, "v2", "image-references", id);
   assert.ok(fs.existsSync(referenceDir));
-  let finish;
+  let finish, completed = false;
+  const request = app.ctx.bus.request;
+  app.ctx.bus.request = async (type, ...args) => {
+    const value = await request(type, ...args);
+    if (type === "app:chahuahui/reference-image-generate") completed = true;
+    return value;
+  };
   app.ctx.media.getTask = () => new Promise(resolve => { finish = resolve; });
-  const pending = app.request("POST", `/image/reference/${id}/generate`, { json: { confirm: true } });
+  const pending = await app.request("POST", `/image/reference/${id}/generate`, { json: { confirm: true } });
+  assert.equal(pending.status, 202);
   for (let i = 0; i < 40 && !finish; i++) await new Promise(resolve => setTimeout(resolve, 5));
   assert.ok(finish);
   const purged = await app.request("POST", `/settings/partner/${id}/purge`, { json: {} });
   assert.equal(purged.status, 200); assert.equal(fs.existsSync(referenceDir), false);
   finish({ status: "completed" });
-  assert.equal((await pending).body.ok, false);
+  for (let i = 0; i < 40 && !completed; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(completed, true);
   assert.equal(fs.existsSync(referenceDir), false);
 });

@@ -8,7 +8,7 @@ function button(text, action, className = "soft-button") {
 }
 export function mountPartnerImageSettings(host, { agentId, api, apiWith, fetchImage, saveTier, isCurrent }) {
   let disposed = false, busy = false, data = null, selectedId = null, style = "", pendingGeneration = null;
-  let generation = 0;
+  let generation = 0, refreshRevision = 0, pollTimer = null, pollFailures = 0, localBusy = false;
   let historyLimit = 8;
   const urls = new Set();
   const alive = () => !disposed && isCurrent();
@@ -51,13 +51,22 @@ export function mountPartnerImageSettings(host, { agentId, api, apiWith, fetchIm
   const confirmGeneration = button("确认生成", async () => {
     if (!pendingGeneration || busy || !alive()) return;
     const payload = { ...pendingGeneration, prompt: description.value.trim(), style: style === "custom" ? customStyle.value.trim() : style, confirm: true };
-    await operation(() => apiWith("POST", `image/reference/${encoded}/generate`, payload, 340000), true);
+    await operation(() => apiWith("POST", `image/reference/${encoded}/generate`, payload, 12000), true);
   }, "primary-button");
   confirmationActions.append(cancelGeneration, confirmGeneration);
   confirmation.append(node("p", "detail-field-note", "这次生成会消耗 Hana 生图额度，不占聊天每日次数。确认后才会提交，不会自动重试。"), confirmationActions);
   const cost = node("p", "detail-field-note", "上传或生成的图片先留作候选，点「用这张作为参考」才会选定。每次生成与调整都会消耗 Hana 生图额度，需单独确认，不占聊天每日次数。");
   const heading = node("h4", "", "伙伴参考照");
-  host.append(tiers, tierHint, usage, heading, preview, history, styles, customStyle, description, controls, confirmation, input, cost, note);
+  const refreshCandidates = button("刷新候选", async () => {
+    if (!alive()) return;
+    refreshCandidates.disabled = true;
+    try { await refresh(); if (alive() && !referenceRunning() && !data?.referenceGeneration) note.textContent = "候选列表已更新，没有重新生图。"; }
+    catch (error) { if (alive()) note.textContent = `候选暂时没读到：${error.message}。没有重新生图。`; }
+    finally { if (alive()) refreshCandidates.disabled = false; }
+  });
+  refreshCandidates.title = "只读取已保存的候选，不会重新生图";
+  const referenceHeading = node("div", "detail-actions"); referenceHeading.append(heading, refreshCandidates);
+  host.append(tiers, tierHint, usage, referenceHeading, preview, history, styles, customStyle, description, controls, confirmation, input, cost, note);
   for (const [value, label] of TIERS) {
     const pick = button(label, async () => {
       if (busy || !alive()) return;
@@ -71,14 +80,16 @@ export function mountPartnerImageSettings(host, { agentId, api, apiWith, fetchIm
     pick.dataset.tier = value; tiers.append(pick);
   }
   function dismissConfirmation() { pendingGeneration = null; confirmation.hidden = true; }
+  const referenceRunning = () => data?.referenceGeneration?.status === "running";
   function setBusy(value) {
-    busy = value;
-    if (value) dismissConfirmation();
-    confirmGeneration.disabled = value;
-    cancelGeneration.disabled = value;
-    for (const el of [...controls.querySelectorAll("button"), ...tiers.querySelectorAll("button")]) el.disabled = value;
-    if (!value) { adjust.disabled = !selectedId; choose.disabled = !selectedId || selectedId === data?.reference?.currentId; }
-    fresh.textContent = value ? "请稍等…" : "生成新参考照";
+    localBusy = value;
+    busy = value || referenceRunning();
+    if (busy) dismissConfirmation();
+    confirmGeneration.disabled = busy;
+    cancelGeneration.disabled = busy;
+    for (const el of [...controls.querySelectorAll("button"), ...tiers.querySelectorAll("button")]) el.disabled = busy;
+    if (!busy) { adjust.disabled = !selectedId; choose.disabled = !selectedId || selectedId === data?.reference?.currentId; }
+    fresh.textContent = referenceRunning() ? "参考照生成中…" : busy ? "请稍等…" : "生成新参考照";
   }
   function clearUrls() { for (const url of urls) URL.revokeObjectURL(url); urls.clear(); }
   async function imageInto(img, id, version) {
@@ -114,17 +125,57 @@ export function mountPartnerImageSettings(host, { agentId, api, apiWith, fetchIm
       thumb.append(image); history.append(thumb); void imageInto(image, row.id, version);
     }
     if (rows.length > historyLimit) history.append(button("查看更多候选", () => { if (!busy) { historyLimit += 8; paint(); } }));
-    setBusy(busy);
+    setBusy(localBusy);
+  }
+  function schedulePoll() {
+    clearTimeout(pollTimer); pollTimer = null;
+    if (!alive() || !referenceRunning() || pollFailures >= 3) return;
+    pollTimer = setTimeout(async () => {
+      pollTimer = null;
+      try { await refresh(); }
+      catch (error) {
+        if (!alive()) return;
+        pollFailures++;
+        note.textContent = `进度暂时没读到：${error.message}。不会重新生图，可点「刷新候选」查看。`;
+        schedulePoll();
+      }
+    }, 1500);
   }
   async function refresh(next) {
+    clearTimeout(pollTimer); pollTimer = null;
+    const revision = ++refreshRevision;
     const result = next || await api("GET", `image/partner/${encoded}`);
-    if (alive()) { data = result; paint(); }
+    if (!alive() || revision !== refreshRevision) return;
+    if (!Array.isArray(result?.reference?.history)) throw new Error("候选列表回包不完整");
+    const head = result.reference.history[0]?.id;
+    const changed = JSON.stringify(data) !== JSON.stringify(result);
+    if (!data || head !== data.reference?.history?.[0]?.id) selectedId = head || null;
+    data = result; pollFailures = 0;
+    if (changed) paint(); else setBusy(localBusy);
+    if (referenceRunning()) note.textContent = "参考照正在后台生成，完成后会自动显示，不要重复生成。";
+    else if (data.referenceGeneration?.status === "succeeded") note.textContent = "新候选已显示，尚未自动选用为参考照。";
+    else if (data.referenceGeneration?.status === "failed") note.textContent = `本次结果未能取回：${data.referenceGeneration.error || "请查看应用诊断"}。未自动重试。`;
+    schedulePoll();
   }
   async function operation(action, candidate = false) {
     if (busy || !alive()) return;
+    const beforeHead = data?.reference?.history?.[0]?.id;
+    const beforeJob = data?.referenceGeneration?.id;
     setBusy(true); note.textContent = "正在处理，完成前不要重复点击…";
-    try { const result = await action(); if (alive()) { if (candidate) selectedId = result?.reference?.history?.[0]?.id || selectedId; await refresh(result); note.textContent = "已保存，候选不会自动替换当前参考照。"; } }
-    catch (error) { if (alive()) note.textContent = `没能完成：${error.message}。未自动重试。`; }
+    try {
+      const result = await action();
+      if (alive()) {
+        if (candidate) selectedId = result?.reference?.history?.[0]?.id || selectedId;
+        await refresh(result);
+        if (!referenceRunning() && data?.referenceGeneration?.status !== "failed") note.textContent = "已保存，候选不会自动替换当前参考照。";
+      }
+    } catch (error) {
+      if (alive()) {
+        // 提交回包丢失不等于生成失败；只重新读取状态，绝不重发POST。
+        try { await refresh(); } catch { /* 留下原错误和手动只读刷新入口 */ }
+        if (alive() && !referenceRunning() && data?.reference?.history?.[0]?.id === beforeHead && data?.referenceGeneration?.id === beforeJob) note.textContent = `没能完成：${error.message}。未自动重试。`;
+      }
+    }
     finally { if (alive()) setBusy(false); }
   }
   function generate(useBase) {
@@ -148,7 +199,7 @@ export function mountPartnerImageSettings(host, { agentId, api, apiWith, fetchIm
   });
   setBusy(true);
   void refresh().catch(error => { if (alive()) note.textContent = `照片设置没读出来：${error.message}`; }).finally(() => { if (alive()) setBusy(false); });
-  const dispose = () => { disposed = true; dismissConfirmation(); generation++; clearUrls(); window.removeEventListener("pagehide", dispose); };
+  const dispose = () => { disposed = true; dismissConfirmation(); clearTimeout(pollTimer); refreshRevision++; generation++; clearUrls(); window.removeEventListener("pagehide", dispose); };
   window.addEventListener("pagehide", dispose, { once: true });
   return dispose;
 }

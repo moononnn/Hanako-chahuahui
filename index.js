@@ -8980,7 +8980,7 @@ export function apply(ctx) {
       });
 
       const imageReferenceOperations = registerImageReferenceRoutes(app, {
-        references: imageReferences, view: imagePartnerView, getPersona, listPartners,
+        references: imageReferences, view: imagePartnerView, getPersona, listPartners, bus: ctx.bus,
         generate: options => {
           const choice = normalizeImageModelPatch(store.getGlobalSettings().imageModel);
           return generateViaHost(ctx, { ...options, provider: choice.provider || undefined, model: choice.model || undefined });

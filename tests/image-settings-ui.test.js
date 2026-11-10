@@ -14,16 +14,16 @@ class Node {
   click() { if (!this.disabled) return this.events.click?.(); }
 }
 const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
-function setup({ initial = null, nativeConfirm = () => false, request = null } = {}) {
-  const host = new Node("div"), calls = [], revoked = [];
-  let nativeConfirmCalls = 0;
+function setup({ initial = null, nativeConfirm = () => false, request = null, background = false, lostResponse = false } = {}) {
+  const host = new Node("div"), calls = [], revoked = [], images = [], timers = new Map();
+  let nativeConfirmCalls = 0, timerId = 0, readError = null;
   let current = true, saveResult = true;
   let data = initial || { tier: "off", globalTier: "off", usage: {}, reference: { currentId: null, history: [] } };
-  const context = vm.createContext({ document: { createElement: tag => new Node(tag) }, window: { confirm: () => { nativeConfirmCalls++; return nativeConfirm(); }, addEventListener() {}, removeEventListener() {} }, URL: { createObjectURL: () => "blob:test", revokeObjectURL: value => revoked.push(value) } });
+  const context = vm.createContext({ setTimeout(fn) { timers.set(++timerId, fn); return timerId; }, clearTimeout(id) { timers.delete(id); }, document: { createElement: tag => new Node(tag) }, window: { confirm: () => { nativeConfirmCalls++; return nativeConfirm(); }, addEventListener() {}, removeEventListener() {} }, URL: { createObjectURL: blob => `blob:${blob.route || "test"}`, revokeObjectURL: value => revoked.push(value) } });
   vm.runInContext(source.replace("export function", "function") + "\nglobalThis.mount = mountPartnerImageSettings;", context);
-  const options = { agentId: "one", isCurrent: () => current, fetchImage: async () => ({ ok: true, blob: async () => ({}) }), api: async (method, route, payload) => { calls.push({ method, route, payload }); if (method === "PUT") data = { ...data, reference: { ...data.reference, currentId: payload.referenceId } }; return data; }, apiWith: async (method, route, payload, timeout) => { calls.push({ method, route, payload, timeout }); if (request) await request; data = { ...data, reference: { ...data.reference, history: [{ id: "new", source: "generated" }, ...data.reference.history] } }; return data; }, saveTier: async value => { if (saveResult) data = { ...data, tier: value }; return saveResult; } };
+  const options = { agentId: "one", isCurrent: () => current, fetchImage: async route => { images.push(route); return { ok: true, blob: async () => ({ route }) }; }, api: async (method, route, payload) => { calls.push({ method, route, payload }); if (method === "GET" && readError) throw readError; if (method === "PUT") data = { ...data, reference: { ...data.reference, currentId: payload.referenceId } }; return data; }, apiWith: async (method, route, payload, timeout) => { calls.push({ method, route, payload, timeout }); if (request) await request; if (background) { data = { ...data, referenceGeneration: { id: "job_one", status: "running", error: null } }; if (lostResponse) throw new Error("HTTP 500"); return data; } data = { ...data, reference: { ...data.reference, history: [{ id: "new", source: "generated" }, ...data.reference.history] } }; return data; }, saveTier: async value => { if (saveResult) data = { ...data, tier: value }; return saveResult; } };
   const dispose = context.mount(host, options);
-  return { host, calls, revoked, dispose, setCurrent(value) { current = value; }, failSave() { saveResult = false; }, get buttons() { return host.querySelectorAll("button"); }, get data() { return data; }, get nativeConfirmCalls() { return nativeConfirmCalls; }, get confirmation() { return host.querySelectorAll("div").find(el => el.className === "reference-cost-confirm"); } };
+  return { host, calls, revoked, images, dispose, get timerCount() { return timers.size; }, async poll() { const entry = timers.entries().next().value; if (!entry) return false; timers.delete(entry[0]); await entry[1](); await flush(); return true; }, setData(next) { data = next; }, setReadError(error) { readError = error; }, get previewImage() { return host.querySelectorAll("div").find(el => el.className === "reference-preview")?.children[0]; }, setCurrent(value) { current = value; }, failSave() { saveResult = false; }, get buttons() { return host.querySelectorAll("button"); }, get data() { return data; }, get nativeConfirmCalls() { return nativeConfirmCalls; }, get confirmation() { return host.querySelectorAll("div").find(el => el.className === "reference-cost-confirm"); } };
 }
 test("伙伴界面默认关闭，只有四档不填数，生成必须逐次确认", async () => {
   const s = setup(); await flush();
@@ -46,7 +46,7 @@ test("生成后展示新候选但不自动选用，选用单独PUT；调整有ba
   assert.equal(s.calls.filter(call => call.method === "POST").length, 0);
   await s.buttons.find(button => button.textContent === "确认生成").click(); await flush();
   const generated = s.calls.find(call => call.method === "POST");
-  assert.equal(generated.payload.confirm, true); assert.equal(generated.timeout, 340000);
+  assert.equal(generated.payload.confirm, true); assert.equal(generated.timeout, 12000);
   assert.equal(s.data.reference.currentId, null);
   await s.buttons.find(button => button.textContent === "按这张调整").click(); await flush();
   await s.buttons.find(button => button.textContent === "确认生成").click(); await flush();
@@ -118,6 +118,52 @@ test("失败的档位保存不会假亮新选项，切人后的旧异步回包�
   assert.ok(s.host.children[0].children[0].className.split(" ").includes("on"));
   assert.equal(s.host.children[0].children[1].className.split(" ").includes("on"), false);
   s.setCurrent(false); s.dispose();
+});
+test("短提交后只读轮询进度，完成后自动展示新候选且不自动选用", async () => {
+  const s = setup({ background: true, initial: { tier: "off", globalTier: "off", usage: {}, reference: { currentId: "old", history: [{ id: "old" }] } } }); await flush();
+  await s.buttons.find(button => button.textContent === "生成新参考照").click();
+  await s.buttons.find(button => button.textContent === "确认生成").click(); await flush();
+  assert.equal(s.buttons.find(button => button.textContent === "参考照生成中…").disabled, true);
+  const images = s.images.length;
+  await s.poll();
+  assert.equal(s.images.length, images, "进度未变时不重复下载大图或重画预览");
+  s.setData({ ...s.data, referenceGeneration: { id: "job_one", status: "succeeded" }, reference: { currentId: "old", history: [{ id: "anime" }, { id: "old" }] } });
+  await s.poll();
+  assert.match(s.previewImage.src, /\/anime$/);
+  assert.equal(s.data.reference.currentId, "old");
+  assert.equal(s.calls.filter(call => call.method === "POST").length, 1);
+  assert.equal(s.timerCount, 0); s.dispose();
+});
+test("提交回包丢失时GET接回已运行工作，不重发POST，完成后仍显示新图", async () => {
+  const s = setup({ background: true, lostResponse: true }); await flush();
+  await s.buttons.find(button => button.textContent === "生成新参考照").click();
+  await s.buttons.find(button => button.textContent === "确认生成").click(); await flush();
+  assert.match(s.host.children.at(-1).textContent, /正在后台生成/);
+  s.setData({ ...s.data, referenceGeneration: { id: "job_one", status: "succeeded" }, reference: { currentId: null, history: [{ id: "anime" }] } });
+  await s.poll();
+  assert.match(s.previewImage.src, /\/anime$/);
+  assert.equal(s.calls.filter(call => call.method === "POST").length, 1); s.dispose();
+});
+test("页面重挂能接回后台进度，刷新候选只读取现有图，不再生成", async () => {
+  const s = setup({ initial: { tier: "off", globalTier: "off", usage: {}, referenceGeneration: { id: "existing", status: "running" }, reference: { currentId: null, history: [{ id: "old" }] } } }); await flush();
+  assert.ok(s.timerCount);
+  s.setData({ ...s.data, referenceGeneration: { id: "existing", status: "succeeded" }, reference: { currentId: null, history: [{ id: "anime" }, { id: "old" }] } });
+  await s.buttons.find(button => button.textContent === "刷新候选").click(); await flush();
+  assert.match(s.previewImage.src, /\/anime$/);
+  assert.equal(s.calls.filter(call => call.method !== "GET").length, 0);
+  assert.equal(s.timerCount, 0); s.dispose();
+});
+test("进度读取连续失败三次就停止定时器，手动刷新可恢复，销毁清理轮询", async () => {
+  const s = setup({ initial: { tier: "off", globalTier: "off", usage: {}, referenceGeneration: { id: "existing", status: "running" }, reference: { currentId: null, history: [] } } }); await flush();
+  s.setReadError(new Error("测试断网"));
+  await s.poll(); await s.poll(); await s.poll();
+  assert.equal(s.timerCount, 0);
+  assert.match(s.host.children.at(-1).textContent, /不会重新生图/);
+  s.setReadError(null);
+  await s.buttons.find(button => button.textContent === "刷新候选").click(); await flush();
+  assert.equal(s.timerCount, 1);
+  s.dispose(); assert.equal(s.timerCount, 0);
+  assert.equal(s.calls.filter(call => call.method !== "GET").length, 0);
 });
 test("设置页给照片模块标记版本，重新打开不会命中旧的确认框代码", () => {
   const settings = fs.readFileSync(new URL("../ui/settings.html", import.meta.url), "utf8");
