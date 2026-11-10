@@ -59,6 +59,36 @@ test("参考照必须逐次明确确认，生成自动读取外貌并保持候�
   assert.match(calls[1].prompt, /头发长一点/);
   assert.equal(next.body.reference.history.length, 2);
 });
+test("二次元预设展开为可爱二维画风，新图及参考图调整都保留人物特征并避开半写实", async t => {
+  const calls = [];
+  const { run, settled } = setup(t, async options => { calls.push(options); return { bytes: PNG }; });
+  const uploaded = await run("post", "/image/reference/:agentId", { image: { data: PNG.toString("base64") } });
+  const baseId = uploaded.body.reference.history[0].id;
+  for (const base of [null, baseId]) {
+    await run("post", "/image/reference/:agentId/generate", { confirm: true, style: "二次元插画", ...(base ? { baseId: base } : {}) });
+    await settled();
+    const request = calls.at(-1);
+    assert.match(request.prompt, /可爱的日系二维动漫/);
+    assert.match(request.prompt, /圆润.*脸型/);
+    assert.match(request.prompt, /线稿/); assert.match(request.prompt, /赛璐璐/);
+    assert.match(request.prompt, /避免.*半写实/);
+    assert.match(request.prompt, /年龄.*发色.*瞳色/);
+    if (base) { assert.equal(request.referencePaths.length, 1); assert.match(request.prompt, /参考图偏写实/); }
+    else assert.match(request.prompt, /绿色短发/);
+  }
+});
+test("写实、跟随设定和自定义画风不混入二次元预设", async t => {
+  const calls = [];
+  const { run, settled } = setup(t, async options => { calls.push(options); return { bytes: PNG }; });
+  for (const style of ["写实摄影", "", "二次元水彩"]) {
+    await run("post", "/image/reference/:agentId/generate", { confirm: true, style });
+    await settled();
+    const prompt = calls.at(-1).prompt;
+    assert.doesNotMatch(prompt, /可爱的日系二维动漫|赛璐璐/);
+    if (style) assert.ok(prompt.includes(`画风：${style}`));
+    else assert.match(prompt, /遵循已有设定或参考图的画风/);
+  }
+});
 test("慢生成不占用HTTP：立即202，可独立读进度，重复点击或服务重入不重复生图", { timeout: 1500 }, async t => {
   let complete;
   let calls = 0;
