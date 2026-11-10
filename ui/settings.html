@@ -680,7 +680,7 @@
     import { hana as localHana } from "./assets/sdk.js";
     import { PROFILES, DEFAULT_PROFILE_ID, ensureAudio, normalizeSettings, play as playMessageSound } from "./assets/message-sound.js";
     import { mountMobileSettings } from "./assets/mobile-settings.js";
-    import { mountPartnerImageSettings } from "./assets/image-settings.js";
+    import { mountPartnerImageSettings } from "./assets/image-settings.js?v=20261110.2";
 
     // 嵌在聊天卡里时复用外层宿主桥；单独打开时仍保留原来的 SDK 兜底。
     const hana = window.parent !== window && window.parent.__chahuahuiHana ? window.parent.__chahuahuiHana : localHana;
@@ -698,7 +698,7 @@
 
     // 这一页自己的版本号：后端读同一个文件里的这一行，两边对不上就说明她眼前是旧的。
     // （以前用文件哈希当戳，但那个值是后端给的，页面旧了它照样显示新值，等于没测。）
-    const UI_BUILD = "20261110.1";
+    const UI_BUILD = "20261110.2";
 
     const el = {
       status: document.getElementById("status"),

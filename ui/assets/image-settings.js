@@ -6,8 +6,8 @@ function node(tag, className = "", text = "") {
 function button(text, action, className = "soft-button") {
   const el = node("button", className, text); el.type = "button"; el.addEventListener("click", action); return el;
 }
-export function mountPartnerImageSettings(host, { agentId, api, apiWith, fetchImage, saveTier, isCurrent, confirmCost = text => window.confirm(text) }) {
-  let disposed = false, busy = false, data = null, selectedId = null, style = "";
+export function mountPartnerImageSettings(host, { agentId, api, apiWith, fetchImage, saveTier, isCurrent }) {
+  let disposed = false, busy = false, data = null, selectedId = null, style = "", pendingGeneration = null;
   let generation = 0;
   let historyLimit = 8;
   const urls = new Set();
@@ -40,9 +40,24 @@ export function mountPartnerImageSettings(host, { agentId, api, apiWith, fetchIm
   const adjust = button("按这张调整", () => generate(true));
   const choose = button("用这张作为参考", select, "primary-button");
   controls.append(upload, fresh, adjust, choose);
+  const confirmation = node("div", "reference-cost-confirm"); confirmation.hidden = true;
+  confirmation.setAttribute("role", "group"); confirmation.setAttribute("aria-label", "确认本次生图花费");
+  const confirmationActions = node("div", "detail-actions");
+  const cancelGeneration = button("先不生成", () => {
+    if (busy || !alive()) return;
+    dismissConfirmation();
+    if (alive()) note.textContent = "已取消，本次没有提交生图请求。";
+  });
+  const confirmGeneration = button("确认生成", async () => {
+    if (!pendingGeneration || busy || !alive()) return;
+    const payload = { ...pendingGeneration, prompt: description.value.trim(), style: style === "custom" ? customStyle.value.trim() : style, confirm: true };
+    await operation(() => apiWith("POST", `image/reference/${encoded}/generate`, payload, 340000), true);
+  }, "primary-button");
+  confirmationActions.append(cancelGeneration, confirmGeneration);
+  confirmation.append(node("p", "detail-field-note", "这次生成会消耗 Hana 生图额度，不占聊天每日次数。确认后才会提交，不会自动重试。"), confirmationActions);
   const cost = node("p", "detail-field-note", "上传或生成的图片先留作候选，点「用这张作为参考」才会选定。每次生成与调整都会消耗 Hana 生图额度，需单独确认，不占聊天每日次数。");
   const heading = node("h4", "", "伙伴参考照");
-  host.append(tiers, tierHint, usage, heading, preview, history, styles, customStyle, description, controls, input, cost, note);
+  host.append(tiers, tierHint, usage, heading, preview, history, styles, customStyle, description, controls, confirmation, input, cost, note);
   for (const [value, label] of TIERS) {
     const pick = button(label, async () => {
       if (busy || !alive()) return;
@@ -55,8 +70,12 @@ export function mountPartnerImageSettings(host, { agentId, api, apiWith, fetchIm
     });
     pick.dataset.tier = value; tiers.append(pick);
   }
+  function dismissConfirmation() { pendingGeneration = null; confirmation.hidden = true; }
   function setBusy(value) {
     busy = value;
+    if (value) dismissConfirmation();
+    confirmGeneration.disabled = value;
+    cancelGeneration.disabled = value;
     for (const el of [...controls.querySelectorAll("button"), ...tiers.querySelectorAll("button")]) el.disabled = value;
     if (!value) { adjust.disabled = !selectedId; choose.disabled = !selectedId || selectedId === data?.reference?.currentId; }
     fresh.textContent = value ? "请稍等…" : "生成新参考照";
@@ -73,6 +92,8 @@ export function mountPartnerImageSettings(host, { agentId, api, apiWith, fetchIm
   }
   function paint() {
     if (!alive()) return;
+    if (pendingGeneration) note.textContent = "本次还没提交，需要时请重新点生成或调整。";
+    dismissConfirmation();
     const version = ++generation;
     clearUrls(); preview.replaceChildren(); history.replaceChildren();
     for (const child of tiers.children) { const on = child.dataset.tier === (data?.tier || "off"); child.classList.toggle("on", on); child.setAttribute("aria-pressed", String(on)); }
@@ -106,11 +127,11 @@ export function mountPartnerImageSettings(host, { agentId, api, apiWith, fetchIm
     catch (error) { if (alive()) note.textContent = `没能完成：${error.message}。未自动重试。`; }
     finally { if (alive()) setBusy(false); }
   }
-  async function generate(useBase) {
+  function generate(useBase) {
     if (busy || (useBase && !selectedId) || !alive()) return;
-    if (!await confirmCost("这次生成会消耗 Hana 的生图额度，不占聊天每日次数。要继续吗？")) return;
-    if (!alive()) return;
-    await operation(() => apiWith("POST", `image/reference/${encoded}/generate`, { prompt: description.value.trim(), style: style === "custom" ? customStyle.value.trim() : style, ...(useBase ? { baseId: selectedId } : {}), confirm: true }, 340000), true);
+    pendingGeneration = useBase ? { baseId: selectedId } : {};
+    confirmation.hidden = false;
+    note.textContent = "请确认本次生图花费，确认前不会提交。";
   }
   async function select() {
     if (!selectedId) return;
@@ -127,7 +148,7 @@ export function mountPartnerImageSettings(host, { agentId, api, apiWith, fetchIm
   });
   setBusy(true);
   void refresh().catch(error => { if (alive()) note.textContent = `照片设置没读出来：${error.message}`; }).finally(() => { if (alive()) setBusy(false); });
-  const dispose = () => { disposed = true; generation++; clearUrls(); window.removeEventListener("pagehide", dispose); };
+  const dispose = () => { disposed = true; dismissConfirmation(); generation++; clearUrls(); window.removeEventListener("pagehide", dispose); };
   window.addEventListener("pagehide", dispose, { once: true });
   return dispose;
 }
