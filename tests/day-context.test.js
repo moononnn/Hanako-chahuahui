@@ -14,10 +14,12 @@ import {
   buildOwnDayText,
   buildOwnFestivalResponseText,
   buildOwnDayContext,
+  buildOwnSolarTermText,
   decideWeatherMention,
   ownFestivalHasHint,
   ownFestivalOf,
   ownFestivals,
+  ownSolarTermOf,
   ownWeather,
   ownWeatherEvents,
   ownWeatherReady,
@@ -159,6 +161,58 @@ test("今天这一段：只摊事实，不写规矩", () => {
   const festival = buildOwnFestivalResponseText({ festival: "重阳节", userName: "她" });
   assert.match(festival, /【节日回应】今天是重阳节。/);
   assert.match(festival, /给她送过这个节日的祝福/);
+});
+
+test("节气单独一层：认得出立冬，不当节日祝福（2026-11-07 实机什么都没提）", () => {
+  const lidong = new Date(2026, 10, 7, 7, 10, 0);
+  assert.equal(ownSolarTermOf(lidong), "立冬");
+  // 节气不是节日：节日那一层不该认它，主动问候也不该当天跑起来。
+  assert.equal(ownFestivalOf(lidong), "");
+
+  const text = buildOwnSolarTermText({ term: "立冬", userName: "她" });
+  assert.match(text, /【时令】今天是立冬。/);
+  assert.match(text, /这不是节日/);
+  assert.match(text, /当令的吃食/);
+  assert.equal(buildOwnSolarTermText({ term: "" }), "");
+});
+
+test("清明这类既是节气又是节日的，只由节日那层说，不叠一遍", () => {
+  const qingming = new Date(2026, 3, 5, 9, 0, 0);
+  assert.equal(ownFestivalOf(qingming), "");
+  assert.equal(ownSolarTermOf(qingming), "", "清明节已经被节日层接管，节气层该让位");
+});
+
+test("「今天」这段要把放行条件写出来：光有刹车模型就一路沉默", () => {
+  const text = buildOwnDayText({ festivals: [{ name: "立冬", kind: "term" }] });
+  assert.match(text, /今天是：立冬。/);
+  assert.match(text, /别逐项播报/);
+  assert.match(text, /若这两天还没提过，可以自然带一句/);
+});
+
+test("节气那天：一天那一摊把时令给出去，节日回应仍是空", async () => {
+  const store = fakeStore({ weatherEnabled: false });
+  const context = await buildOwnDayContext({
+    store,
+    now: new Date(2026, 10, 7, 7, 10, 0),
+    userName: "她",
+  });
+  assert.equal(context.solarTerm, "立冬");
+  assert.equal(context.festival, "");
+  assert.match(context.dayText, /立冬/);
+  assert.match(context.solarTermText, /【时令】今天是立冬。/);
+  assert.equal(context.festivalText, "");
+});
+
+test("节日那天不拿节气充数：重阳就只有节日那一段", async () => {
+  const store = fakeStore({ weatherEnabled: false });
+  const context = await buildOwnDayContext({
+    store,
+    now: new Date(2026, 9, 18, 9, 0, 0),
+    userName: "她",
+  });
+  assert.equal(context.festival, "重阳节");
+  assert.equal(context.solarTerm, "");
+  assert.equal(context.solarTermText, "");
 });
 
 test("节日意象抽过就不重复抽", () => {

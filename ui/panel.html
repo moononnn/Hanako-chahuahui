@@ -6058,9 +6058,13 @@
       // 第零步：挑人。不自动跑——用户想先认识谁，就选谁。
       if (obStage === 0) {
         obEl.title.textContent = "先挑一位，认识一下";
-        obEl.sub.textContent = "伙伴得一个一个来。想先认识谁，点了 ta 就开始。";
+        obEl.sub.textContent = obQueue.length
+          ? "伙伴得一个一个来。想先认识谁，点了 ta 就开始。"
+          : "这会儿没有等着认识的伙伴。要自己捻一位就点下面新增；Hana 里刚建的伙伴刷新后会出现在名单里。";
         obEl.step.textContent = `还有 ${obQueue.length} 位没认识`;
-        obEl.back.hidden = true;
+        // 队列空着的时候这道门没人可挑，再不放人走就是死胡同（2026-11-05 实机）。
+        obEl.back.hidden = obQueue.length > 0;
+        obEl.back.textContent = "先回去聊";
         obEl.next.hidden = true;
         for (const partner of obQueue) {
           const pick = obNode("button", "ob-pick", partner.name);
@@ -6644,6 +6648,12 @@
     obEl.next.addEventListener("click", obNext);
     obEl.back.addEventListener("click", () => {
       if (!obState) return;
+      // 第零步没有上一层可退，只能直接出去；队列非空时这个按钮不给出来。
+      if (obStage === 0) {
+        obClose();
+        void bootChat();
+        return;
+      }
       if (obState.mode === "recognition" && obState.recognitionSaving) return;
       if (obState.mode === "recognition") {
         obState.recognitionSuggestSeq += 1;

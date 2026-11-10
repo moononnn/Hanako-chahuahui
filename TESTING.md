@@ -1,6 +1,25 @@
 # TESTING · 茶话会
 
+## 接入生图：最后走的是宿主，不是第三方 API（2026-11-06）
+
+- 范围：只做底层通路，不做证件照页、不让伙伴自己发图、不写回聊天。设置页多一栏，能真出一张图自检。
+- **路径变了两次，记下来免得下次再走一遍**：一开始按「接第三方图像 API」做，MiniMax 原生加 OpenAI 两条协议都写完了。后来她说明手上没有 API key，用的是 Hana 里 OAuth 登录的账号生图。这条路白走了一半，但留下的结论有用：
+  - **这条网络通道送不出 `FormData`**。`app-host-entry.js` 的 `serializeNetworkFetch` 只认字符串 / Uint8Array / ArrayBuffer，其余一律 `String(body)`，FormData 到了宿主变成 `"[object FormData]"`。以后要接任何 multipart 上传的接口，得自己拼字节。
+  - **ChatGPT 订阅不等于 API 额度**。先问清对方有没有 key，比先把两家协议写完省事。
+- 最终的实现：茶话会不自己发任何图像请求，走宿主 `media:generate-image` 总线动词，用的是她已经在 Hana 里登录好的那套（这台机器上是 `openai-codex-oauth`，模型 `gpt-image-2` / `gpt-image-2.5-sunburst` / `gpt-image-2.5-flare`）。`provider:media-providers` 能列出全部可用的（实测这台机器还有 OpenAI、Gemini、MiniMax、火山、阿里云百炼、Agnes）。
+- 请求形状（已核 APPS.md 与 SDK 类型）：`{ scope: "app", input: { prompt, count, referenceImages, ratio, quality, provider?, model? }, delivery: { mode: "response" } }`。App 范围必须用 response 投递，宿主会直接拒绝别的投递方式。**不指定 provider/model 时整条省略**，跟着宿主默认走，那才是常态。
+- 参考图：引用写作 `{ kind: "local-file", path }`，路径必须 realpath 后仍在茶话会自己的 dataDir 里。带参考图时显式写 `imageIntent: "edit"`，不交给 adapter 猜。
+- 异步：提交只回任务号，要 `ctx.media.getTask` 轮询到终态，再 `ctx.media.getTaskResources` 取资源、`ctx.resources.read` 读字节。轮询间隔 1.5 秒、上限 5 分钟（宿主给媒体调用的预算是 10 分钟）。终态认多种写法（completed / done / ready / success / finished 都算完成）。
+- 权限：新增 `app/media.generate`，默认关。她要到「扩展 → 茶话会 → 应用能力」里手动打开，这个功能才能用；没开时总线报错原文会带到界面上，不吞。
+- 设置项简化成 `imageModel: { provider, model }` 两格，**不存任何密钥**；两格都空就是跟随 Hana。之前做的加密存储那一套随第三方 API 一起撤掉了。
+- 验证：`node --test tests/host-image.test.js` → **19 pass / 0 fail**（含提交形状、参考图引用、超时不当成功、失败原因直出、终态多种写法）；`node --test tests/ui.test.js tests/ui-loading.test.js tests/load.test.js tests/video-settings-ui.test.js tests/host-image.test.js` → **204 pass / 0 fail**；`index.js`、`lib/host-image.js`、`settings.html` 内联模块脚本 `node --check` 均通过。
+- 全量：`node --test --test-concurrency=2` → **2896 tests / 2891 pass / 1 fail / 4 skipped**。
+- 遇到一个测试切片陷阱：`settings.html` 里 `reloadSettings()` 到 `boot()` 之间那段会被 `video-settings-ui.test.js` 单独拉出来跑，里面不能出现依赖整页装配的调用。第一次把 `loadImageModels()` 放在 `reloadSettings` 末尾就报 `loadImageModels is not defined`，改到 `boot()` 里就对了。
+- 未验：**一次真实出图都没跑过**，因为还没让应用拿到 `app/media.generate` 授权。请求形状是照文档和类型定义写的，真实总线、真实任务轮询、真实产出文件读取都没在真机上跑过。
+- **那个失败不属本轮**：`tests/topic-seeds.test.js` 的「聊透的母题不再被挑去长新种子」（`h_huoguo` 对 `h_qita`），单跑同样失败，本轮没碰 `lib/topic-seeds.js` 与它的测试。
+
 ## 表情包图库：拖着换位置、右键置顶（2026-11-03）
+
 
 - 起因：她要图库里能拖图调位置、右键把这个图置顶。翻了 git 历史，这块以前没做过（好友列表有拖动排序，图库只有「新入库排最前」这一种顺序），所以是新做的功能，不是修回归。
 - 存储：`sticker-library.json` 加一个顶层 `order`（前→后）。界面顺序是两段拼起来的：`order` 里有的按它排，不在里的（新导入的）永远排最前。删图时把它的 id 从 `order` 里一并抹掉，同一份图再导回来才不会被拽回老位置。

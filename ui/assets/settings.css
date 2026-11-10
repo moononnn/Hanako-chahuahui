@@ -211,6 +211,11 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 .voice-model-fields { display: grid; gap: 10px; margin-top: 10px; }
 .voice-model-presets { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .voice-model-presets small { color: var(--ink-soft); font-size: 12px; }
+/* 生图那一条：字段竖着排，模板按钮横着摆，出图以后直接看缩略图 */
+.image-model-fields { display: grid; gap: 10px; margin-top: 10px; }
+.image-model-presets { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.image-test-preview { margin-top: 12px; }
+.image-test-preview img { display: block; max-width: 240px; border-radius: 14px; border: 1px solid var(--line-soft); }
 .voice-model-presets button { border: 0; padding: 4px 11px; border-radius: 999px; background: var(--mint-soft); color: var(--mint-deep); font-size: 12px; cursor: pointer; transition: background 160ms ease; }
 @media (hover: hover) and (pointer: fine) { .voice-model-presets button:hover { background: #d8ebe2; } }
 /* 音色按语言折叠：一眼能扫完，不铺开成 70 个按钮墙 */

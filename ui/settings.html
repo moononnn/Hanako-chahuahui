@@ -84,6 +84,7 @@
       <button class="tab on" id="tab-chat" data-tab="chat" role="tab" aria-selected="true" aria-controls="panel-chat">聊天显示</button>
       <button class="tab" id="tab-sound" data-tab="sound" role="tab" aria-selected="false" aria-controls="panel-sound">提示音</button>
       <button class="tab" id="tab-voice" data-tab="voice" role="tab" aria-selected="false" aria-controls="panel-voice">语音</button>
+      <button class="tab" id="tab-image" data-tab="image" role="tab" aria-selected="false" aria-controls="panel-image">生图</button>
       <button class="tab" id="tab-immersion" data-tab="immersion" role="tab" aria-selected="false" aria-controls="panel-immersion">沉浸感</button>
       <button class="tab" id="tab-model" data-tab="model" role="tab" aria-selected="false" aria-controls="panel-model">模型</button>
       <button class="tab" id="tab-usage" data-tab="usage" role="tab" aria-selected="false" aria-controls="panel-usage">用量</button>
@@ -241,6 +242,32 @@
           <small id="voice-model-note">可以存多条朗读模型，随时切换。</small>
           <button class="soft-button" id="voice-model-test" type="button">测试模型连接</button>
           <small id="voice-model-test-note" class="detail-field-note"></small>
+        </div>
+      </article>
+    </section>
+
+    <section id="panel-image" role="tabpanel" aria-labelledby="tab-image" tabindex="0" hidden>
+      <div class="section-head">
+        <div><h2>生图</h2><p>茶话会自己的一条生图通路。用的就是你 Hana 里已经登录的那个账号，不用为它另买一份额度。</p></div>
+      </div>
+      <article class="setting-card" id="image-model-card">
+        <div class="setting-copy">
+          <h3>用哪家的模型</h3>
+          <p>默认跟着 Hana 的设置走。想指定也行，这里只记一个选择，不存任何密钥。</p>
+          <p class="setting-hint" id="image-permission-hint" hidden>茶话会还没有「请宿主生图」的权限。到 Hana 的「扩展 → 茶话会 → 应用能力」里给它打开「生成媒体」，这个功能才能用。</p>
+        </div>
+        <div class="detail-field">
+          <div class="image-model-fields">
+            <label class="inline-field"><span>生图模型</span><select id="image-model-select"></select></label>
+          </div>
+          <div class="detail-actions">
+            <button class="soft-button" id="image-model-save" type="button">保存</button>
+            <button class="soft-button" id="image-model-test" type="button">生成一张试试</button>
+          </div>
+          <small id="image-model-test-note" class="detail-field-note"></small>
+          <div class="image-test-preview" id="image-test-preview" hidden>
+            <img id="image-test-img" alt="试生成的结果">
+          </div>
         </div>
       </article>
     </section>
@@ -709,6 +736,8 @@
     let voiceGroups = [];
     let voiceTiers = [];
     let voicePresets = [];
+    /** 宿主里能用的生图模型（provider/model 展平成一张表） */
+    let imageHostModels = [];
     /** 新建朗读模型时的底稿；模板按钮只改这份，不动已保存的条目 */
     let voiceDraft = null;
     /** 当前表单里那份还没保存的配置；「测试模型连接」先用它 */
@@ -780,6 +809,7 @@
       chat: "只管聊天窗长什么样，不影响聊过的内容。",
       sound: "伙伴来消息时响什么、响多大，都在这一页。",
       voice: "伙伴偶尔发一条语音，念得带点情绪；怎么念、用哪个模型都在这一页。",
+      image: "茶话会自己的一条生图通路。先把接口接通、能出一张图；要拿它做什么另说。",
       immersion: "让伙伴多知道一点你这边今天的事。",
       model: "决定聊天时用哪个模型。给某位伙伴单独挑了就用挑的。",
       usage: "伙伴在后台花掉多少 token、缓存接住多少，都从 Hana 的账本里读。",
@@ -1329,7 +1359,61 @@
       paintGlobalVision();
       paintGlobalImageStorage();
       paintGlobalVoiceModel();
+      paintImageModel();
       paintSearchEngine();
+    }
+
+    /**
+     * 生图那一条：不碰任何密钥，只记一个「用哪个模型」。
+     * 首项永远是「跟随 Hana 的设置」——那才是正常情形，她不该为了用上这个功能
+     * 还得先搞懂 provider 和 model 是两个东西。
+     */
+    function paintImageModel() {
+      const cfg = globalSettings.imageModel || {};
+      const select = document.getElementById("image-model-select");
+      if (!select) return;
+      const current = cfg.provider && cfg.model ? `${cfg.provider}::${cfg.model}` : "";
+      select.replaceChildren();
+      const follow = document.createElement("option");
+      follow.value = "";
+      follow.textContent = "跟随 Hana 的设置";
+      select.appendChild(follow);
+      for (const row of imageHostModels) {
+        const option = document.createElement("option");
+        option.value = `${row.provider}::${row.model}`;
+        option.textContent = row.label;
+        select.appendChild(option);
+      }
+      select.value = current;
+      // 已存的选择在本次列表里找不到时，得回到「跟随」而不是空着——空着发出去就是错配置。
+      if (select.value !== current) select.value = "";
+    }
+
+    /** 拉一次宿主里能用的生图模型，展平成一张下拉表。 */
+    async function loadImageModels() {
+      try {
+        const data = await api("GET", "image/models");
+        const rows = [];
+        for (const provider of data.providers ?? []) {
+          for (const model of provider.models ?? []) {
+            if (!model.id) continue;
+            rows.push({ provider: provider.id, model: model.id, label: `${provider.name} · ${model.name}` });
+          }
+        }
+        imageHostModels = rows;
+      } catch {
+        // 拉不到就让下拉只剩「跟随 Hana 的设置」；测试按钮会把真正的错误说出来。
+        imageHostModels = [];
+      }
+      paintImageModel();
+    }
+
+    /** 页面上的选择，还没保存也能拿来试。 */
+    function imageConfigFromForm() {
+      const value = String(document.getElementById("image-model-select")?.value ?? "");
+      if (!value) return { provider: "", model: "" };
+      const [provider, model] = value.split("::");
+      return { provider: provider || "", model: model || "" };
     }
 
     // ── 模型：全局一份兜底，每位伙伴还能各自再压一个（2026-09-13）；
@@ -2630,6 +2714,42 @@
       } finally {
         button.disabled = false;
         button.textContent = "测试模型连接";
+      }
+    });
+    // ── 生图：保存与试生成 ────────────────────────────
+    document.getElementById("image-model-save").addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      button.textContent = "正在保存…";
+      try {
+        if (await saveGlobal({ imageModel: imageConfigFromForm() }, "生图模型已保存")) paintGlobal();
+      } finally {
+        button.disabled = false;
+        button.textContent = "保存";
+      }
+    });
+    document.getElementById("image-model-test").addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      const note = document.getElementById("image-model-test-note");
+      const preview = document.getElementById("image-test-preview");
+      const img = document.getElementById("image-test-img");
+      button.disabled = true;
+      button.textContent = "正在生成…";
+      note.textContent = "正在让 Hana 真出一张图。生图比聊天慢得多，等一两分钟也正常。";
+      try {
+        const data = await apiWith("POST", "image/test", { modelConfig: imageConfigFromForm() }, 340000);
+        if (data.image) {
+          img.src = data.image;
+          preview.hidden = false;
+        }
+        const used = [data.provider, data.model].filter(Boolean).join(" · ");
+        const extra = Number(data.extraFiles) > 0 ? `，另外还有 ${data.extraFiles} 张` : "";
+        note.textContent = `出图了，花了 ${(Number(data.ms) / 1000).toFixed(1)} 秒${used ? `，用的是 ${used}` : ""}${extra}。这张只是给你看看通不通，不进聊天。`;
+      } catch (error) {
+        note.textContent = `没通过：${error.message}`;
+      } finally {
+        button.disabled = false;
+        button.textContent = "生成一张试试";
       }
     });
     document.getElementById("daybook-switch").addEventListener("click", async () => {
@@ -5032,6 +5152,8 @@
         dressSelects(document);
         await reloadSettings();
         void refreshVideoStatus();
+        // 生图模型列表得单独问宿主；拉不到不影响其它设置显示，也不阻塞页面。
+        void loadImageModels();
         await loadMessageSound();
       } catch (error) {
         const message = String(error?.message ?? "");

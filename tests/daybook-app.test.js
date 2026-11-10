@@ -153,10 +153,14 @@ test("index保留await调用与开关门禁，检测接线不再探旧插件文�
   assert.ok(source.includes("buildFestivalResponseText(daybookSnapshot, { userName: USER_NAME })"), "普通回复应从当前快照生成节日回应引导");
   // 节日回应不进按天去重那笔账：它跟着自己那份节日走，自己的没有才用拾光记那份。
   assert.ok(
-    /daybookText = \[ownDayText, mergedDaybook, ownFestivalText \|\| festivalText\]\.filter\(Boolean\)\.join\("\\n\\n"\)/.test(source),
-    "节日回应不应被日常背景的按天去重吞掉",
+    /daybookText = \[ownDayText, mergedDaybook, ownFestivalText \|\| ownSolarTermText \|\| festivalText\]\.filter\(Boolean\)\.join\("\\n\\n"\)/.test(source),
+    "节日回应不应被日常背景的按天去重吞掉；节日缺席时由节气那一层补位",
   );
   assert.ok(source.includes("buildOwnDayContext("), "普通回复应先拼茶话会自己那一份（天气与节日不借拾光记）");
+  assert.ok(
+    source.includes("ownSolarTermText = own.solarTermText || \"\""),
+    "节气得接进普通回复：只命中【今天】那一行事实时，模型会一路沉默（2026-11-07 立冬）",
+  );
   // 主动消息那条路：先过开关门禁，再 await 读快照，最后拿这份快照拼情境并带上生理期由头。
   // （v0.7.515 改过接线，不再是「开关三元里直接 buildAmbientContextText(await readDaybook(...))」的一行式。）
   assert.ok(

@@ -467,6 +467,14 @@ import {
   audioDurationMs,
   synthesizeVoice,
 } from "./lib/voice.js";
+// 生图走宿主：她用 Hana 里已经登录的账号，茶话会不再自己接 API。
+import {
+  HOST_IMAGE_QUALITIES,
+  HOST_IMAGE_RATIOS,
+  generateViaHost,
+  listHostImageProviders,
+  mimeOfImageBytes,
+} from "./lib/host-image.js";
 import {
   MAX_NUDGE_BUBBLES,
   nudgeDelay,
@@ -832,10 +840,24 @@ export function apply(ctx) {
     }
   }
 
+  /**
+   * 生图设置就两格：跟哪家的哪个模型。两格都空就是跟随 Hana 当前设置，
+   * 那是绝大多数人该选的那个。这里没有任何密钥：用的是宿主里已经登录好的账号。
+   */
+  function normalizeImageModelPatch(value) {
+    const raw = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    return {
+      provider: String(raw.provider ?? "").trim().slice(0, 80),
+      model: String(raw.model ?? "").trim().slice(0, 80),
+    };
+  }
+
   function globalSettingsView() {
     const global = store.getGlobalSettings();
     const maskVoice = (config) => config ? { ...config, apiKey: config.apiKey ? "********" : "" } : null;
     const activeModel = global.voiceModel || {};
+    // 生图配置同样只回一个星号，Key 本身不出服务端。
+    const imageModel = normalizeImageModelPatch(global.imageModel);
     return {
       ...global,
       // 设置页自报构建号：webview 可能拿着缓存的旧页面，对不上时页面自己会把提示露出来。
@@ -846,6 +868,10 @@ export function apply(ctx) {
       voiceReady: Boolean(activeModel.baseUrl && activeModel.model && activeModel.apiKey),
       // 系统加密用不上时 Key 就是明文躺着，界面得如实说，不能让她以为已经加密。
       voiceKeyEncrypted: isProtectedKey(activeModel.apiKey),
+      // 生图：只回两格选择，没有密钥可言；能不能用看宿主那扇门开没开。
+      imageModel,
+      imageRatios: HOST_IMAGE_RATIOS,
+      imageQualities: HOST_IMAGE_QUALITIES,
       // 搜索增强：Key 不回传页面，只给「存没存」「这个月用了多少次」。
       searchEnhancement: {
         engine: global.searchEnhancement?.engine || "bing",
@@ -1134,6 +1160,8 @@ export function apply(ctx) {
     "weatherEnabled", "weatherLocation", "weatherArea", "weatherIntervalHours", "weatherForecastIntervalHours",
     // 图片留多久：30 / 45 / 60 / 90 天，或 0 = 永久不删。
     "imageRetentionDays",
+    // 生图：一条自己的模型配置（含加密后的 Key），和朗读那条各走各的。
+    "imageModel",
   ]);
   const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "vision", "voice", "partnerFeedEnabled", "videoSharingEnabled"]);
 
@@ -1175,6 +1203,10 @@ export function apply(ctx) {
     // 图片留多久：只收认得的那几档，其余一律回默认。
     if (Object.prototype.hasOwnProperty.call(patch, "imageRetentionDays")) {
       patch.imageRetentionDays = normalizeRetentionDays(patch.imageRetentionDays);
+    }
+    // 生图模型：只收认得的两个字段。
+    if (Object.prototype.hasOwnProperty.call(patch, "imageModel")) {
+      patch.imageModel = normalizeImageModelPatch(patch.imageModel);
     }
     // 拾光记今日情境：只收真布尔，别让 "false" 这种字符串混成真值
     if (Object.prototype.hasOwnProperty.call(patch, "daybookEnabled")) {
@@ -3316,6 +3348,12 @@ export function apply(ctx) {
       // 明确不想分享才冷却；生成失败或旧稿被门禁作废不消耗这次候选。
       store.saveVideoBook(agentId, offerVideoCandidate(store.getVideoBook(agentId), shareableVideo.id));
       return { ok: false, reason: "video-not-shared" };
+    }
+    // 安静收尾是所有主动由头共用的协议：提示词里到处写着「只想得出旧话就只输出[不回]」，
+    // 只认 followup 那一条就会把标记当正文发出去（2026-11-05 实机：shared 由头冒出 [不回]）。
+    if (isNoReply(text)) {
+      diagnostics({ event: "proactive.silent", agentId, reason: "no-reply-marker" });
+      return { ok: false, reason: "silent" };
     }
     if (!exception && kind === "proactive" && !String(todoNudge ?? "").trim() && isNighttimeSleepQuestion(text, now)) {
       diagnostics({ event: "proactive.sleep-check-skipped", agentId });
@@ -5923,6 +5961,8 @@ export function apply(ctx) {
     // 天气查不动就是没有，不猜；节日跟着自己的节日表走。
     let ownDayText = "";
     let ownFestivalText = "";
+    // 节气不归节日那一档：不送祝福，只给一个时令的坐标（2026-11-07 立冬）。
+    let ownSolarTermText = "";
     let ownFestival = "";
     let ownWeather = null;
     try {
@@ -5939,6 +5979,7 @@ export function apply(ctx) {
       });
       ownDayText = own.dayText || "";
       ownFestivalText = own.festivalText || "";
+      ownSolarTermText = own.solarTermText || "";
       ownFestival = own.festival || "";
       ownWeather = own.weather || null;
       // 这次天气露面了就记账：同一片天三小时内不再重复摆，事实变了可以立刻重说。
@@ -5991,7 +6032,8 @@ export function apply(ctx) {
     if (ownFestival) mergedDaybook = mergedDaybook.replace(/^今天是：.*$/m, "");
     if (ownWeather?.line) mergedDaybook = mergedDaybook.replace(/^窗外：.*$/m, "");
     mergedDaybook = mergedDaybook.replace(/\n{3,}/g, "\n\n").trim();
-    daybookText = [ownDayText, mergedDaybook, ownFestivalText || festivalText].filter(Boolean).join("\n\n");
+    // 节日那一段优先；没有节日才轮到节气；两个都空才用拾光记自己那份。
+    daybookText = [ownDayText, mergedDaybook, ownFestivalText || ownSolarTermText || festivalText].filter(Boolean).join("\n\n");
     const workfeedText = workfeedOn()
       ? buildWorkfeedText(store.readWorkfeed(), agentId, { lifeDay: dayKey(new Date()), userName: USER_NAME })
       : "";
@@ -8816,6 +8858,53 @@ export function apply(ctx) {
         }
       });
 
+      // 生图：列出宿主里能用哪几家的哪个模型。不给密钥，只用已登录的账号。
+      app.get("/image/models", async (c) => {
+        try {
+          const data = await listHostImageProviders(ctx);
+          const providers = Object.values(data?.providers ?? {}).map((row) => ({
+            id: String(row?.providerId ?? ""),
+            name: String(row?.displayName ?? row?.providerId ?? ""),
+            hasCredentials: row?.hasCredentials !== false,
+            models: (Array.isArray(row?.models) ? row.models : []).map((m) => ({
+              id: String(m?.id ?? ""),
+              name: String(m?.displayName ?? m?.name ?? m?.id ?? ""),
+            })),
+          }));
+          return c.json({ ok: true, providers, selection: data?.selection ?? null });
+        } catch (error) {
+          return c.json({ ok: false, error: { message: String(error?.message ?? error).slice(0, 300) } }, 400);
+        }
+      });
+
+      // 生图跑一次真请求，只回图片本身，不写聊天也不落盘。
+      // 设置页拿到它就能直接显示一张缩略图，比任何“连接正常”的字都硬。
+      app.post("/image/test", async (c) => {
+        try {
+          const body = await c.req.json().catch(() => ({}));
+          const choice = normalizeImageModelPatch(body?.modelConfig);
+          const startedAt = Date.now();
+          const result = await generateViaHost(ctx, {
+            prompt: String(body?.prompt || "一只橘猫坐在纸箱里，窗边自然光").slice(0, 300),
+            ratio: "1:1",
+            quality: "auto",
+            provider: choice.provider || undefined,
+            model: choice.model || undefined,
+          });
+          const mime = mimeOfImageBytes(result.bytes);
+          return c.json({
+            ok: true,
+            image: `data:${mime};base64,${result.bytes.toString("base64")}`,
+            ms: Date.now() - startedAt,
+            provider: result.provider,
+            model: result.model,
+            extraFiles: Math.max(0, Number(result.count) - 1),
+          });
+        } catch (error) {
+          return c.json({ ok: false, error: { message: String(error?.message ?? error).slice(0, 300) } }, 400);
+        }
+      });
+
       app.post("/voice/:agentId/:messageId/played", (c) => {
         const agentId = String(c.req.param("agentId") ?? "").trim();
         const messageId = String(c.req.param("messageId") ?? "").trim();
@@ -9496,6 +9585,7 @@ export function apply(ctx) {
               diagnostics({ event: "voice.key.local", reason: enc.reason });
             }
           }
+          // 生图没有需要落盘的密钥：用的是宿主里已经登录好的账号，这里只存一个选用哪家的偏好。
           // 搜索 Key 不走这条通用路：它有自己专门的路由（每家一把锁、各自的加密与状态）。
           // 通用路径一旦也写这个字段，就多一条可能明文落盘的口子。
           if (globalPatch.searchEnhancement) {
