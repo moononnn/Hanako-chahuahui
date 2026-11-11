@@ -20,6 +20,27 @@ test("生图档位缺失、旧值、对象均关闭，不自动启用", () => {
   assert.equal(chatImagePrompt({ enabled: false }), "");
   assert.match(chatImagePrompt({ enabled: true }), /只能self=false/);
 });
+test("伙伴档位区分主动发图意愿，不设发满指标；参考照和单图协议仍生效", () => {
+  const labels = { less: "少一些", normal: "适中", more: "多一些" };
+  const prompts = Object.entries(labels).map(([tier, label]) => {
+    const prompt = chatImagePrompt({ enabled: true, hasReference: true, tier });
+    assert.ok(prompt.includes(`【发图意愿：${label}】`));
+    assert.match(prompt, /不必等对方明确索要/);
+    assert.match(prompt, /不要为了用完额度凑图/);
+    assert.match(prompt, /不按固定轮数或随机抽签塞图/);
+    assert.match(prompt, /避免重复/);
+    assert.match(prompt, /必须self=true/); assert.match(prompt, /一次最多一张/);
+    assert.match(prompt, /配文只随成功的图片一起发/);
+    return prompt;
+  });
+  assert.equal(new Set(prompts).size, 3);
+  assert.match(prompts[0], /普通闲聊优先文字/);
+  assert.match(prompts[1], /自己的穿搭、吃喝、出门或小发现/);
+  assert.match(prompts[2], /积极考虑主动拍/);
+  for (const tier of ["off", "bad", null, 5, {}]) assert.equal(chatImagePrompt({ enabled: true, tier }), "");
+  for (const tier of Object.keys(labels)) assert.equal(chatImagePrompt({ enabled: false, tier }), "");
+  assert.match(chatImagePrompt({ enabled: true, hasReference: false, tier: "more" }), /只能self=false/);
+});
 test("照片协议带括号与转义仍正确，正文不含内部JSON", () => {
   const request = { prompt: '窗外的雨[夜色]和一张写着"晴"的纸', self: false };
   const parsed = parseChatImage(`瞅一眼\n[生图:${JSON.stringify(request)}]`);

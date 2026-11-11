@@ -49,7 +49,7 @@ test("真apply设置API默认关闭，双层档位可保存重开，上传不会
 });
 test("真apply聊天纯图请求只生成一次，附件真实落库并可读，后续上下文记得照片内容", async () => {
   const app = await boot(); const id = app.partner.id;
-  await app.request("PUT", "/settings/global", { json: { imageTier: "less" } });
+  await app.request("PUT", "/settings/global", { json: { imageTier: "more" } });
   await app.request("PUT", `/settings/partner/${id}`, { json: { imageTier: "less" } });
   app.models.answer(req => /【聊天照片】/.test(String(req.systemPrompt)), '[生图:{"prompt":"窗边的一杯咖啡，不出现人物","self":false}]');
   const started = await app.request("POST", "/turns", { json: { agentId: id, text: "让我看看你手边的咖啡", watching: true, clientMessageId: "photo_request_001" } });
@@ -62,6 +62,9 @@ test("真apply聊天纯图请求只生成一次，附件真实落库并可读，
     await new Promise(resolve => setTimeout(resolve, 20));
   }
   assert.ok(message, "最终图片应沿真实composeReply落库");
+  const prompt = app.models.replyCalls().find(row => row.request.systemPrompt.includes("【聊天照片】"))?.request.systemPrompt;
+  assert.match(prompt, /【发图意愿：少一些】/, "按伙伴档位给意愿，全局多一些仍只管总额度");
+  assert.doesNotMatch(prompt, /【发图意愿：多一些】/);
   assert.equal(app.mediaCalls.length, 1);
   const serviceCall = app.serviceCalls.find(row => row.type === "app:chahuahui/chat-image-generate");
   assert.ok(serviceCall, "异步生图必须通过独立App自服务作用域");

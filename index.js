@@ -3407,7 +3407,7 @@ export function apply(ctx) {
     if (imageEnabled) {
       try { photoReferenceId = imageReferences.current(agentId)?.id || null; } catch { /* 不能凭坏参考照编脸 */ }
     }
-    const imagePromptText = chatImagePrompt({ enabled: imageEnabled, hasReference: Boolean(photoReferenceId) });
+    const imagePromptText = chatImagePrompt({ enabled: imageEnabled, hasReference: Boolean(photoReferenceId), tier: store.getPartnerSettings(agentId).imageTier });
     let raw = "";
     try {
       // 主动来找这一路同样得报出当前佩戴结果：ta 得知道「自己现在是什么状态」才谈得上换。
@@ -6263,7 +6263,7 @@ export function apply(ctx) {
     if (imageEnabled) {
       try { hasImageReference = Boolean(imageReferences.current(agentId)); } catch { /* 坏参考照不能变成陌生脸 */ }
     }
-    const imagePromptText = chatImagePrompt({ enabled: imageEnabled, hasReference: hasImageReference });
+    const imagePromptText = chatImagePrompt({ enabled: imageEnabled, hasReference: hasImageReference, tier: store.getPartnerSettings(agentId).imageTier });
     const systemPrompt = buildSystemPrompt({
       ruleProfile: agentId === compactReplyPilotId ? "compact-v1" : "legacy",
       partnerId: agentId,

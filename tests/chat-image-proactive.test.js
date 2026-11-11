@@ -56,7 +56,9 @@ test("真主动调度：纯图沿既有消息通路保存并通知，只生成�
   assert.equal((await app.request("GET", `/attachment/${AGENT}/${message.attachment.id}`)).status, 200);
   const usage = (await app.request("GET", `/image/partner/${AGENT}`)).body.usage;
   assert.equal(usage.partnerUsed, 1); assert.equal(usage.globalUsed, 1); assert.equal(usage.partnerPending, 0);
-  assert.ok(app.prompts.some(req => req.systemPrompt.includes("【聊天照片】")));
+  const prompt = app.prompts.find(req => req.systemPrompt.includes("【聊天照片】"))?.systemPrompt;
+  assert.match(prompt, /【发图意愿：适中】/, "主动分享也按伙伴档位，不取全局少一些");
+  assert.doesNotMatch(prompt, /【发图意愿：少一些】/);
   assert.ok(app.serviceCalls.some(row => row.type === "app:chahuahui/chat-image-generate"));
   assert.ok(app.emittedAppEvents.some(row => row.type === "partner-message-arrived" && row.payload.messageId === message.id));
 });
