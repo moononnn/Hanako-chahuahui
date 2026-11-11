@@ -4,6 +4,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 const source = fs.readFileSync(new URL("../ui/assets/image-settings.js", import.meta.url), "utf8");
 const panel = fs.readFileSync(new URL("../ui/panel.html", import.meta.url), "utf8");
+const imageCss = fs.readFileSync(new URL("../ui/assets/image-settings.css", import.meta.url), "utf8");
+test("参考照画风两列等宽，操作按钮覆盖全局主按钮的偏移边距", () => {
+  const styles = imageCss.match(/\.reference-style-options\s*\{([^}]+)\}/)?.[1] || "";
+  assert.match(styles, /display:\s*grid/);
+  assert.match(styles, /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+  const buttons = imageCss.match(/\.reference-actions button\s*\{([^}]+)\}/)?.[1] || "";
+  assert.match(buttons, /margin:\s*0\s*;/);
+  assert.match(buttons, /width:\s*100%\s*;/);
+  assert.match(buttons, /align-self:\s*stretch/);
+});
 class Node {
   constructor(tag) { this.tagName = tag; this.children = []; this.events = {}; this.dataset = {}; this.value = ""; this.className = ""; this.classList = { toggle: (name, on) => { const set = new Set(this.className.split(" ").filter(Boolean)); on ? set.add(name) : set.delete(name); this.className = [...set].join(" "); } }; }
   append(...nodes) { this.children.push(...nodes); }
