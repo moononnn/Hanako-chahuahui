@@ -24,7 +24,7 @@ test("主动开口的每条由头都吞掉安静收尾标记", () => {
   assert.ok(loginAt > 0 && loginAt < markerAt, "登录提醒分支先跑，提醒记账不丢");
 
   // 拦在长度关之前：标记本身四个字符，够 isUsableVoice 的门槛
-  const usableAt = flow.indexOf("if (!isUsableVoice(text) && !marker.keyword)");
+  const usableAt = flow.indexOf("if (!isUsableVoice(text) && !marker.keyword");
   assert.ok(usableAt > markerAt, "静默标记要在可用性检查之前被拦下");
 
   // followup 那条保留自己的原因，诊断才分得清是哪种静默

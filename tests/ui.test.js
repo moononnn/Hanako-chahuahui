@@ -780,7 +780,7 @@ test("播语音时转文字不能被轮询重画收走", () => {
 test("判定发语音时先在后台合成，实时回合直接摆最终语音条", () => {
   assert.match(app, /async function prepareVoice\(/, "语音要有独立的后台准备阶段");
   assert.match(app, /let preparedVoice = await prepareVoice\(agentId, cleanedText/, "普通回复要在落消息前准备语音");
-  assert.match(app, /let preparedVoice = await prepareVoice\(agentId, text, \{ kind: "proactive" \}\)/, "主动联系也要先准备语音");
+  assert.match(app, /let preparedVoice = await prepareVoice\(agentId, text, \{ kind: "proactive", hasPhoto: Boolean\(preparedImage\.attachment\) \}\)/, "主动联系也要先准备语音，照片不能并发生成语音");
   assert.match(app, /let preparedVoice = await prepareVoice\(agentId, bubbles\.join\("\\n"\), \{ kind: "awaiting" \}\)/, "等回音也要先准备语音");
   assert.match(app, /const stored = appendPartnerMessage\(agentId, reply, preparedVoice, replaceMessageId\)/, "消息和语音要走同一提交点");
   assert.doesNotMatch(app, /void maybeGenerateVoice\(/, "不能再先落文字再异步补语音");

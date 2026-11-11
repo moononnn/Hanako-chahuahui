@@ -270,15 +270,16 @@ test("纯表情才免检：有正文就得照旧过内容关", () => {
   assert.equal(isStickerOnlyReply({}), false);
 });
 
-test("抽象总结和空洞搭话那两道关都只被纯表情绕过", () => {
+test("正文内容关只允许纯表情或有效纯照片绕过，有正文的配图不免检", () => {
   const start = INDEX_SOURCE.indexOf("isLowSignalProactive(text, { reason: sendReason })");
   assert.notEqual(start, -1, "低信号那一关还在");
-  const abstractAt = INDEX_SOURCE.indexOf("if (!stickerOnlyReply && isAbstractOnlyProactive", start);
+  const abstractAt = INDEX_SOURCE.indexOf("if (!stickerOnlyReply && !imageOnlyReply && isAbstractOnlyProactive", start);
   assert.ok(abstractAt > start, "抽象总结那一关也得走同一个豁免");
-  const window = INDEX_SOURCE.slice(INDEX_SOURCE.indexOf("const stickerOnlyReply"), abstractAt + 60);
+  const window = INDEX_SOURCE.slice(INDEX_SOURCE.indexOf("const stickerOnlyReply"), abstractAt + 80);
+  assert.match(INDEX_SOURCE, /const imageOnlyReply = Boolean\(chatPhoto\.request\) && !text && !marker\.keyword/);
   assert.match(window, /const stickerOnlyReply = isStickerOnlyReply\(\{ keyword: marker\.keyword, text \}\)/);
-  assert.match(window, /if \(!stickerOnlyReply && isLowSignalProactive\(/);
-  assert.match(window, /if \(!stickerOnlyReply && isAbstractOnlyProactive\(/);
+  assert.match(window, /if \(!stickerOnlyReply && !imageOnlyReply && isLowSignalProactive\(/);
+  assert.match(window, /if \(!stickerOnlyReply && !imageOnlyReply && isAbstractOnlyProactive\(/);
   assert.doesNotMatch(INDEX_SOURCE, /!marker\.keyword && is(?:LowSignal|AbstractOnly)Proactive/, "不再拿标记当通行证");
 });
 

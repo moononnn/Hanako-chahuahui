@@ -3193,7 +3193,8 @@ export function apply(ctx) {
 
   /** 把一条主动消息送进她那个窗（她不在也照发，显示未读）。 */
   async function deliverProactive(agentId, { partnerName, topic, hobby, discovery, seed, video = null, news = null, videoLoginNotice = null, reason = null, reasonCandidates = [], exception, followup, wakeEcho, sceneEcho, kind = "proactive", activity = null, sleepStart = "", greetingOnly = false, morningFirst = false, todoNudge = "", publicEvent = null }) {
-    const videoStamp = video || videoLoginNotice ? threadStamp(agentId) : null;
+    const photoStamp = threadStamp(agentId);
+    const videoStamp = video || videoLoginNotice ? photoStamp : null;
     await loadUserName();
     const memoryQuery = [reason?.kind === "interest" ? topic : "", reason?.text, hobby?.name, discovery?.text, seed?.title, video?.video?.title, news?.title, followup?.text, sceneEcho?.text]
       .filter((value) => typeof value === "string").join(" ");
@@ -3398,6 +3399,15 @@ export function apply(ctx) {
             })
           : proactiveSpec({ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, interestHistory, video: shareableVideo, news: shareableNews, videoLoginNotice, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, morningFirst: morningFirstScene, askBudgetSpent: askSpent, reason: sendReason, introducedText, moodText: moodLineFor(agentId) });
 
+    // 照片沿用普通聊天的动作与额度；提醒、告别和新闻/视频分享不混入付费生图。
+    const imageEnabled = kind === "proactive" && !exception && !followup && !wakeEcho && !greetingOnly
+      && !String(todoNudge ?? "").trim() && !publicEvent && !shareableVideo && !shareableNews && !videoLoginNotice
+      && chatImageServiceReady && imageQuota?.available(agentId) === true;
+    let photoReferenceId = null;
+    if (imageEnabled) {
+      try { photoReferenceId = imageReferences.current(agentId)?.id || null; } catch { /* 不能凭坏参考照编脸 */ }
+    }
+    const imagePromptText = chatImagePrompt({ enabled: imageEnabled, hasReference: Boolean(photoReferenceId) });
     let raw = "";
     try {
       // 主动来找这一路同样得报出当前佩戴结果：ta 得知道「自己现在是什么状态」才谈得上换。
@@ -3418,7 +3428,7 @@ export function apply(ctx) {
         });
         raw = generated.text;
       } else {
-        raw = await askVoice(withNamePlate(`${spec.systemPrompt}\n\n${badgeHint}`, partnerName), spec.userText, 300, agentId, "proactive",
+        raw = await askVoice(withNamePlate([spec.systemPrompt, badgeHint, imagePromptText].filter(Boolean).join("\n\n"), partnerName), spec.userText, 300, agentId, "proactive",
           { messages: [...proactiveMessages, { role: "user", content: spec.userText }] });
       }
     } catch (error) {
@@ -3433,16 +3443,17 @@ export function apply(ctx) {
       diagnostics({ event: "proactive.silent", agentId, reason: "read-followup" });
       return { ok: false, reason: "silent" };
     }
-    const badgeMarker = parseBadgeMarker(raw);
+    const chatPhoto = parseChatImage(raw);
+    const badgeMarker = parseBadgeMarker(chatPhoto.text);
     if (badgeMarker.badge) store.setPartnerSettings(agentId, { badge: badgeMarker.badge });
     const badgeLessRaw = badgeMarker.found
       ? [badgeMarker.before, badgeMarker.after].filter(Boolean).join("\n")
-      : raw;
+      : chatPhoto.text;
     const marker = parseStickerMarker(badgeLessRaw);
     const markerlessRaw = marker.keyword
       ? [marker.before, marker.after].filter(Boolean).join("\n")
       : badgeLessRaw;
-    const text = cleanVoice(parseChatImage(markerlessRaw).text, "voice");
+    const text = cleanVoice(markerlessRaw, "voice");
     if (videoLoginNotice && isNoReply(text)) {
       const currentLogin = await videoLoginManager.status();
       if (currentLogin.episodeId !== videoLoginNotice.episodeId || !videoNoticeDue(currentLogin) || !videoPartnerEnabled(agentId)) {
@@ -3466,17 +3477,19 @@ export function apply(ctx) {
       diagnostics({ event: "proactive.sleep-check-skipped", agentId });
       return { ok: false, reason: "nighttime-sleep-check" };
     }
-    if (!isUsableVoice(text) && !marker.keyword) {
+    if (chatPhoto.request && !imageEnabled) return { ok: false, reason: "image-disabled" };
+    const imageOnlyReply = Boolean(chatPhoto.request) && !text && !marker.keyword;
+    if (!isUsableVoice(text) && !marker.keyword && !imageOnlyReply) {
       diagnostics({ event: "proactive.empty", agentId, rawHead: String(raw ?? "").slice(0, 160) });
       return { ok: false, reason: "empty" };
     }
-    // 两道内容关的豁免只给真正纯表情的那条（2026-11-02）：模型写了正文时，图不能替它走后门。
+    // 无正文的纯表情或有效纯照片可跳过正文内容关；有配文时，图不能替文字走后门。
     const stickerOnlyReply = isStickerOnlyReply({ keyword: marker.keyword, text });
-    if (!stickerOnlyReply && isLowSignalProactive(text, { reason: sendReason })) {
+    if (!stickerOnlyReply && !imageOnlyReply && isLowSignalProactive(text, { reason: sendReason })) {
       diagnostics({ event: "proactive.low-signal", agentId, head: text.slice(0, 40) });
       return { ok: false, reason: "low-signal" };
     }
-    if (!stickerOnlyReply && isAbstractOnlyProactive(text, { topic })) {
+    if (!stickerOnlyReply && !imageOnlyReply && isAbstractOnlyProactive(text, { topic })) {
       diagnostics({ event: "proactive.abstract-only", agentId, topic: topic?.title ?? null, head: text.slice(0, 40) });
       return { ok: false, reason: "abstract-only" };
     }
@@ -3521,7 +3534,7 @@ export function apply(ctx) {
       history: store.getThread(agentId).messages,
     });
     let bubbles = composed.bubbles;
-    if (bubbles.length === 0) return { ok: false, reason: marker.keyword ? "sticker-unavailable" : "no-bubbles" };
+    if (bubbles.length === 0 && !chatPhoto.request) return { ok: false, reason: marker.keyword ? "sticker-unavailable" : "no-bubbles" };
     if (shareableVideo) {
       // 分享这一段由系统给：真人点 B 站「分享」拿到的就是「【标题-哔哩哔哩】 短链」，
       // 让模型自己写只会写成一条裸链接（而且它没能力生成短链，也不该编）。
@@ -3545,7 +3558,22 @@ export function apply(ctx) {
       return { ok: false, reason: "news-stale" };
     }
 
-    let preparedVoice = await prepareVoice(agentId, text, { kind: "proactive" });
+    const photoStillCurrent = () => {
+      try {
+        const global = store.getGlobalSettings(), partner = store.getPartnerSettings(agentId);
+        const gate = autonomousGateNow(agentId, "proactive");
+        return threadStamp(agentId) === photoStamp && !hasReplyInFlight(agentId)
+          && global.rhythmProactiveEnabled === true && partner.proactiveEnabled !== false
+          && global.imageTier !== "off" && partner.imageTier !== "off"
+          && gate.ok && !gate.exception
+          && (!chatPhoto.request?.self || imageReferences.view(agentId).currentId === photoReferenceId);
+      } catch { return false; }
+    };
+    // 先过正文、去重和语义关再花额度。失败不投递空头配文，也不重试原生图请求。
+    const preparedImage = await prepareChatImage(agentId, chatPhoto.request, { stillCurrent: photoStillCurrent });
+    if (preparedImage.stale) return { ok: false, reason: "stale" };
+    if (chatPhoto.request && !preparedImage.attachment) return { ok: false, reason: "image-unavailable" };
+    let preparedVoice = await prepareVoice(agentId, text, { kind: "proactive", hasPhoto: Boolean(preparedImage.attachment) });
     if (preparedVoice.reason === "cancelled") {
       diagnostics({ event: "proactive.cancelled", agentId });
       return { ok: false, reason: "stale" };
@@ -3566,6 +3594,11 @@ export function apply(ctx) {
       diagnostics({ event: "video.share.stale", agentId, videoId: shareableVideo?.id ?? null });
       return { ok: false, reason: "video-stale" };
     }
+    if (preparedImage.attachment && !photoStillCurrent()) {
+      removeAttachment(preparedImage.attachment.id);
+      releaseVoiceGeneration(preparedVoice);
+      return { ok: false, reason: "stale" };
+    }
     // 这条是拿哪条由头开的口：落在已有的 proactiveContext 里，不另立一套 schema。
     // 有跟进语境时照旧用 proactiveContextFor 的那份，只多挂一个 reason；
     // 没有跟进语境但这一轮走了关系式由头，就只为记下这个 kind（回复那侧只认 kind / previousText）。
@@ -3584,8 +3617,9 @@ export function apply(ctx) {
         : null);
     const stored = appendPartnerMessage(agentId, {
       role: "assistant",
-      text: visibleTextOf(bubbles),
+      text: visibleTextOf(bubbles) || (preparedImage.attachment ? "[图片]" : ""),
       bubbles,
+      ...(preparedImage.attachment ? { attachment: preparedImage.attachment } : {}),
       proactive: true,
       form: "word",
       proactiveKind: kind,
@@ -3601,7 +3635,10 @@ export function apply(ctx) {
       interestName: shareableHobby?.name ?? shareableDiscovery?.interestName ?? null,
       interestObject: shareableHobby?.object ?? null,
     }, preparedVoice);
-    if (!stored) return { ok: false, reason: "message-missing" };
+    if (!stored) {
+      if (preparedImage.attachment) removeAttachment(preparedImage.attachment.id);
+      return { ok: false, reason: "message-missing" };
+    }
     if (shareableVideo) {
       store.saveVideoBook(agentId, recordVideoShare(store.getVideoBook(agentId), shareableVideo, stored));
       store.setGlobalRuntime({ videoShares: noteVideoSent(store.getGlobalRuntime().videoShares, dayKey(new Date(stored.at))) });
