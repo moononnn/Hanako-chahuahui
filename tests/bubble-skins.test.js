@@ -28,6 +28,7 @@ test("气泡装扮只认白名单里那几套，认不出的一律回原味", ()
   assert.deepEqual(BUBBLE_SKINS.map((skin) => skin.id), [
     "plain", "celadon", "outline",
     "jelly", "sakura", "bear", "marshmallow",
+    "ill-croc", "ill-fox", "ill-berry", "ill-whale",
     "rainbow", "polka", "holo", "star", "neon", "rain", "pixel",
   ]);
   assert.equal(normalizeBubbleSkin("sakura"), "sakura");

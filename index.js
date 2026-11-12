@@ -12095,7 +12095,7 @@ export function apply(ctx) {
           return stampMobileHtml(fs.readFileSync(mobilePagePath, "utf8"));
         }
         if (op === "mobile.asset") {          const assetName = String(payload?.name ?? "");
-          if (!/^[a-zA-Z0-9._-]+$/.test(assetName)) throw new Error("资源名不对");
+          if (!/^(?:illustrated-bubbles\/)?[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/.test(assetName)) throw new Error("资源名不对");
           const bytes = fs.readFileSync(path.join(mobileAssetsDir, assetName));
           return { base64: bytes.toString("base64"), type: assetMime(assetName) };
         }

@@ -453,9 +453,9 @@ export function createMobileGateway(options = {}) {
   }
 
   async function serveAsset(res, name) {
-    // 资源名只放行「字母数字开头 + 允许的扩展名」，别的一律当不存在
+    // Only the fixed illustration directory may nest; arbitrary paths remain forbidden.
     const ext = path.posix.extname(name).toLowerCase();
-    if (!ASSET_EXT.has(ext) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/.test(name)) {
+    if (!ASSET_EXT.has(ext) || !/^(?:illustrated-bubbles\/)?[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/.test(name)) {
       return json(res, 404, { ok: false, error: { message: "没有这个资源" } });
     }
     try {

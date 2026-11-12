@@ -585,6 +585,20 @@ test("手机页与脚本：模块引用带固定 build 戳，脚本按 JS 类型
   assert.match(body, /export function startMobileClient/, "白名单要真能把手机脚本发出去");
 });
 
+test("手机插画资源：只开放固定目录，字节与 MIME 原样返回", async () => {
+  const { access } = await boot();
+  for (const name of ["illustrated-bubbles/croc-motion.webp", "illustrated-bubbles/whale-still.png"]) {
+    const result = await access.dispatch("mobile.asset", { name });
+    const expected = fs.readFileSync(new URL(`../ui/assets/${name}`, import.meta.url));
+    assert.deepEqual(Buffer.from(result.base64, "base64"), expected);
+    assert.equal(result.type, name.endsWith(".webp") ? "image/webp" : "image/png");
+  }
+  for (const name of ["../manifest.json", "illustrated-bubbles/../panel.css", "other/croc.png",
+    "illustrated-bubbles/nested/croc.png", "illustrated-bubbles\\\\croc.png", "/panel.css", ".hidden.css"]) {
+    await assert.rejects(() => access.dispatch("mobile.asset", { name }), /资源名不对/);
+  }
+});
+
 test("手机要的窗口和服务端允许的上限对得上", async () => {
   const { access } = await boot();
   // 客户端侧的常量：首屏 50，上翻按已加载数扩大，但永远不越过上限

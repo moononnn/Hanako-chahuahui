@@ -6,6 +6,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import { readFileSync } from "node:fs";
 import { createMobileGateway, MOBILE_OPS } from "../runtime/mobile-gateway.mjs";
 
 const PASSWORD = "246813";
@@ -340,6 +341,32 @@ test("静态资源：只放行允许的类型与名字，公共样式不用登�
     assert.equal(res.status, 404, `${pathname} 应该 404，实际 ${res.status}`);
   }
   assert.equal(calls.filter((row) => row.op === "mobile.asset").length, 1, "怪名字不许去问宿主");
+});
+
+test("插画嵌套资源经网关保留动画字节，其他目录与穿越仍被拒绝", async (t) => {
+  const { port, base, calls } = await boot(t, { overrides: {
+    "mobile.asset": ({ name }) => ({
+      base64: readFileSync(new URL(`../ui/assets/${name}`, import.meta.url)).toString("base64"),
+      type: name.endsWith(".webp") ? "image/webp" : "image/png",
+    }),
+  } });
+  for (const stem of ["croc", "fox", "berry", "whale"]) {
+    for (const file of [`${stem}.png`, `${stem}-still.png`, `${stem}-motion.webp`]) {
+      const name = `illustrated-bubbles/${file}`;
+      const response = await fetch(`${base}/assets/${name}`, { headers: { connection: "close" } });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("content-type"), file.endsWith(".webp") ? "image/webp" : "image/png");
+      const bytes = Buffer.from(await response.arrayBuffer());
+      assert.deepEqual(bytes, readFileSync(new URL(`../ui/assets/${name}`, import.meta.url)));
+    }
+  }
+  const before = calls.filter(row => row.op === "mobile.asset").length;
+  for (const pathname of ["/assets/other/croc.png", "/assets/illustrated-bubbles/deep/croc.png",
+    "/assets/illustrated-bubbles/%2e%2e%2fpanel.css", "/assets/illustrated-bubbles/a%5cb.png",
+    "/assets/illustrated-bubbles/.hidden.css", "/assets/illustrated-bubbles/payload.json"]) {
+    assert.equal((await raw(port, { path: pathname })).status, 404, pathname);
+  }
+  assert.equal(calls.filter(row => row.op === "mobile.asset").length, before);
 });
 
 test("同 IP 的长连接有上限", async (t) => {

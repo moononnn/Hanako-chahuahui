@@ -1,5 +1,15 @@
 # TESTING · 茶话会
 
+## 四款原生动态插画气泡（2026-11-12，0.16.4-dev.9）
+
+- 设置「气泡装扮／可爱」增加团团小鳄、杏桃小狐、草莓奶霜、奶蓝云鲸。四款也按各自 moods 进入伙伴池；保留当前选择，不强换伙伴的现有皮肤。
+- 动作直接编码在原生动画 WebP 内，不使用上一版预览依赖的 SVG 滤镜或 SMIL。原完整外壳 PNG 未改；角部静态／动态素材由 `scripts/build-illustrated-bubbles.py` 离线生成，Python/Pillow 仅为构建依赖，App 运行不需要它们。四张动画分别 23／33／24／45 帧，逐帧检查确认有实际像素变化、首帧与静态角一致。
+- 同一份 CSS 供桌面、手机和设置预览使用。九切片底图裁掉角色角，再补带透明边距的动画角；正文在独立的普通文字层。左右文字留白不跟宽切片绑定，避免长消息挤成细柱。两侧资源各自继承，另一侧小熊的 CSS 动画不能带动插画层。
+- 只让最后最多三行轻动，历史行静态；系统减少动态时，聊天和样张都静态，设置卡明确提示原因。照片、语音胶囊与转写、贴图、撤回提示不走新整壳规则。
+- 手机网关与 App 分发同时只放行固定 `illustrated-bubbles/` 一级目录，不扩大任意子路径读取。HTTP 测试对十二件真实素材验证 MIME 与字节一致，并拒绝穿越、反斜杠、未知目录、二级目录和隐藏文件。
+- 相关测试：`node --test tests/bubble-skins.test.js tests/bubble-skin-mood.test.js tests/ui.test.js tests/ui-loading.test.js tests/mobile-ui.test.js tests/illustrated-bubbles.test.js tests/mobile-gateway-http.test.js tests/mobile-routes.test.js tests/load.test.js`，**449 通过／0 失败**。另有 JS 语法检查、资源重建与像素差分检查、源码独立复核。没有运行全量，也没有调用真实生图或模型 API。
+- **未验**：宿主内连续动画播放和实际长短文像素效果。后台 browser 导航报告 `Browser view layout did not become ready`，card_screenshot 报 helper 未产出结果；离线拼图与帧差分不是宿主截图，不据此宣称实机播放已验收。仍需在开发版里确认观感。
+
 ## 伙伴气泡不再永久停在兼容旧款（2026-11-12，0.16.4-dev.8）
 
 - 反馈为长期未见伙伴换气泡。现有实现是系统按每日心情自动挑款，没有聊天模型选装动作；旧逻辑只要当前款仍在对应心情池就直接返回，完全绕过后面的换款概率，因而可以永久固定。本轮只修既有自动装扮，不增加模型调用、聊天协议、设置项或新皮肤。

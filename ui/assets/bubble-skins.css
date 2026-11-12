@@ -21,6 +21,10 @@
    挑选权分开：设置页只挑自己那枚 data-me-skin；伙伴那枚 data-ta-skin
    由后端按 ta 当天的心情定（lib/bubble-skin-mood.js），���天最多翻一次。
 
+   2026-11-12 新增四款插画气泡（ill-croc / ill-fox / ill-berry / ill-whale）：
+   壳是一张画，角色那一角会自己动。做法全在文件末尾「插画气泡」那一节，
+   不用脚本、不用 SVG、不用滤镜，也不跟着整只泡泡转。
+
    目前 12 套（2026-10-28 删了便签、宣纸、亚麻、缎带、糖果、奶油泡芙、
    猫爪、云朵、液态金属、星球、极光、烈焰这十二套）。删掉的原文留在
    临时目录的 bubble-skins-24-full-20261028.css，要捡回来照抄即可。
@@ -648,4 +652,358 @@
   color: var(--skin-me-fg, var(--ink, #43403a));
   border-bottom-right-radius: 6px;
   box-shadow: var(--skin-me-shadow, none);
+}
+
+/* ============================================================
+   插画气泡：四款带角色角的气泡（2026-11-12 新增）
+   ------------------------------------------------------------
+   只用 CSS：没有脚本、没有 SVG、没有滤镜、没有 SMIL，动效是原生动画图。
+
+     · ::before —— 原壳做 border-image 九切片，整张壳按切片整数铺满气泡框，
+       再用 clip-path 把含角色角的那一块挖掉（挖的正是角色的位置）；
+     · ::after —— 拿补了 24px 原生坐标边距的动图把那一角补回来，
+       背景不重复、尺寸铺满，图自己在动；
+     · 文字还是 .bubble 自己的内容。泡泡开 isolation 造一层叠放上下文，
+       伪元素压在文字下面（::before -2、::after -1），
+       泡泡本身上：背景透明、不描边、不加影、不裁切，
+       也不把整只泡泡转起来（转了字会跟着歪）。
+
+   坐标全是原图像素：切片整数乘 --ill-unit 就是屏幕上的尺寸。
+   聊天里 --ill-unit = .18，设置页那枚小样张 .12。
+   ============================================================ */
+
+/* ── 四款的变量 ──
+   me / ta 各写一份：同一个容器上两枚属性都挂着，谁也别串到谁那边去。
+   --skin-*-ill-top/right/bottom/left 是原壳九切片的整数（原生像素）；
+   --skin-*-ill-corner-w/h 是角色角那一块的宽高：
+   角在右上就取右切片（宽）和上切片（高），角在左上就取左切片和上切片。 */
+[data-me-skin="ill-croc"] {
+  --skin-me-bg: #e9f7e3;
+  --skin-me-border-color: #b6d89c;
+  --skin-me-fg: #33502a;
+  --skin-me-shadow: none;
+  --skin-me-ill-art: url("illustrated-bubbles/croc.png");
+  --skin-me-ill-motion: url("illustrated-bubbles/croc-motion.webp");
+  --skin-me-ill-still: url("illustrated-bubbles/croc-still.png");
+  --skin-me-ill-top: 248;
+  --skin-me-ill-right: 340;
+  --skin-me-ill-bottom: 158;
+  --skin-me-ill-left: 189;
+  --skin-me-ill-corner-w: 340;
+  --skin-me-ill-corner-h: 248;
+}
+[data-ta-skin="ill-croc"] {
+  --skin-ta-bg: #f2fbe9;
+  --skin-ta-border-color: #c8e3b1;
+  --skin-ta-fg: #37552d;
+  --skin-ta-shadow: none;
+  --skin-ta-ill-art: url("illustrated-bubbles/croc.png");
+  --skin-ta-ill-motion: url("illustrated-bubbles/croc-motion.webp");
+  --skin-ta-ill-still: url("illustrated-bubbles/croc-still.png");
+  --skin-ta-ill-top: 248;
+  --skin-ta-ill-right: 340;
+  --skin-ta-ill-bottom: 158;
+  --skin-ta-ill-left: 189;
+  --skin-ta-ill-corner-w: 340;
+  --skin-ta-ill-corner-h: 248;
+}
+
+[data-me-skin="ill-fox"] {
+  --skin-me-bg: #fdeedf;
+  --skin-me-border-color: #e8b795;
+  --skin-me-fg: #5a3a26;
+  --skin-me-shadow: none;
+  --skin-me-ill-art: url("illustrated-bubbles/fox.png");
+  --skin-me-ill-motion: url("illustrated-bubbles/fox-motion.webp");
+  --skin-me-ill-still: url("illustrated-bubbles/fox-still.png");
+  --skin-me-ill-top: 262;
+  --skin-me-ill-right: 346;
+  --skin-me-ill-bottom: 167;
+  --skin-me-ill-left: 154;
+  --skin-me-ill-corner-w: 346;
+  --skin-me-ill-corner-h: 262;
+}
+[data-ta-skin="ill-fox"] {
+  --skin-ta-bg: #fff6ec;
+  --skin-ta-border-color: #efc7a8;
+  --skin-ta-fg: #5f3e29;
+  --skin-ta-shadow: none;
+  --skin-ta-ill-art: url("illustrated-bubbles/fox.png");
+  --skin-ta-ill-motion: url("illustrated-bubbles/fox-motion.webp");
+  --skin-ta-ill-still: url("illustrated-bubbles/fox-still.png");
+  --skin-ta-ill-top: 262;
+  --skin-ta-ill-right: 346;
+  --skin-ta-ill-bottom: 167;
+  --skin-ta-ill-left: 154;
+  --skin-ta-ill-corner-w: 346;
+  --skin-ta-ill-corner-h: 262;
+}
+
+[data-me-skin="ill-berry"] {
+  --skin-me-bg: #ffeef0;
+  --skin-me-border-color: #eda3b0;
+  --skin-me-fg: #5b2b33;
+  --skin-me-shadow: none;
+  --skin-me-ill-art: url("illustrated-bubbles/berry.png");
+  --skin-me-ill-motion: url("illustrated-bubbles/berry-motion.webp");
+  --skin-me-ill-still: url("illustrated-bubbles/berry-still.png");
+  --skin-me-ill-top: 191;
+  --skin-me-ill-right: 261;
+  --skin-me-ill-bottom: 152;
+  --skin-me-ill-left: 161;
+  --skin-me-ill-corner-w: 261;
+  --skin-me-ill-corner-h: 191;
+}
+[data-ta-skin="ill-berry"] {
+  --skin-ta-bg: #fff6f6;
+  --skin-ta-border-color: #f3b7c0;
+  --skin-ta-fg: #633038;
+  --skin-ta-shadow: none;
+  --skin-ta-ill-art: url("illustrated-bubbles/berry.png");
+  --skin-ta-ill-motion: url("illustrated-bubbles/berry-motion.webp");
+  --skin-ta-ill-still: url("illustrated-bubbles/berry-still.png");
+  --skin-ta-ill-top: 191;
+  --skin-ta-ill-right: 261;
+  --skin-ta-ill-bottom: 152;
+  --skin-ta-ill-left: 161;
+  --skin-ta-ill-corner-w: 261;
+  --skin-ta-ill-corner-h: 191;
+}
+
+/* 云鲸的角在左上：角宽取左切片，角高取上切片 */
+[data-me-skin="ill-whale"] {
+  --skin-me-bg: #e6f3fa;
+  --skin-me-border-color: #a2cbe4;
+  --skin-me-fg: #274b5e;
+  --skin-me-shadow: none;
+  --skin-me-ill-art: url("illustrated-bubbles/whale.png");
+  --skin-me-ill-motion: url("illustrated-bubbles/whale-motion.webp");
+  --skin-me-ill-still: url("illustrated-bubbles/whale-still.png");
+  --skin-me-ill-top: 217;
+  --skin-me-ill-right: 205;
+  --skin-me-ill-bottom: 154;
+  --skin-me-ill-left: 334;
+  --skin-me-ill-corner-w: 334;
+  --skin-me-ill-corner-h: 217;
+}
+[data-ta-skin="ill-whale"] {
+  --skin-ta-bg: #f0f8fd;
+  --skin-ta-border-color: #b6d8ea;
+  --skin-ta-fg: #2b5064;
+  --skin-ta-shadow: none;
+  --skin-ta-ill-art: url("illustrated-bubbles/whale.png");
+  --skin-ta-ill-motion: url("illustrated-bubbles/whale-motion.webp");
+  --skin-ta-ill-still: url("illustrated-bubbles/whale-still.png");
+  --skin-ta-ill-top: 217;
+  --skin-ta-ill-right: 205;
+  --skin-ta-ill-bottom: 154;
+  --skin-ta-ill-left: 334;
+  --skin-ta-ill-corner-w: 334;
+  --skin-ta-ill-corner-h: 217;
+}
+
+/* ── 尺度：屏幕上一格等于原图的几个像素 ──
+   聊天 .18；设置页那枚小样张 .12（小一号，别把两列卡撑破）。 */
+[data-me-skin^="ill-"], [data-ta-skin^="ill-"] { --ill-unit: .18; }
+.skin-sample-bubble[data-me-skin^="ill-"],
+.skin-sample-bubble[data-ta-skin^="ill-"] { --ill-unit: .12; }
+
+/* ── 变量归口：把两侧各自的资源收成一份中性名字 ──
+   下面的规则只认 --ill-*：me 拿 --skin-me-*、ta 拿 --skin-ta-*，
+   同一个容器上两枚属性都在也不会互相串。 */
+[data-me-skin^="ill-"] .row.me .bubble,
+.skin-sample-bubble[data-me-skin^="ill-"].me {
+  --ill-art: var(--skin-me-ill-art);
+  --ill-motion: var(--skin-me-ill-motion);
+  --ill-still: var(--skin-me-ill-still);
+  --ill-frame-image: var(--ill-motion);
+  --ill-top: var(--skin-me-ill-top);
+  --ill-right: var(--skin-me-ill-right);
+  --ill-bottom: var(--skin-me-ill-bottom);
+  --ill-left: var(--skin-me-ill-left);
+  --ill-corner-w: var(--skin-me-ill-corner-w);
+  --ill-corner-h: var(--skin-me-ill-corner-h);
+}
+[data-ta-skin^="ill-"] .row.ta .bubble,
+.skin-sample-bubble[data-ta-skin^="ill-"].ta {
+  --ill-art: var(--skin-ta-ill-art);
+  --ill-motion: var(--skin-ta-ill-motion);
+  --ill-still: var(--skin-ta-ill-still);
+  --ill-frame-image: var(--ill-motion);
+  --ill-top: var(--skin-ta-ill-top);
+  --ill-right: var(--skin-ta-ill-right);
+  --ill-bottom: var(--skin-ta-ill-bottom);
+  --ill-left: var(--skin-ta-ill-left);
+  --ill-corner-w: var(--skin-ta-ill-corner-w);
+  --ill-corner-h: var(--skin-ta-ill-corner-h);
+}
+
+/* ── 泡泡本身：透明、无描边、无影、不裁切 ──
+   顶部为角色留空，左右文字留白独立于图像切片，避免长文被挤成细柱。
+   带图、带语音、带表情的气泡不吃这套：照片保持原来的尺寸和浅色回退。 */
+:is(
+  :is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]) .row.me .bubble,
+  .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]).me,
+  :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]) .row.ta .bubble,
+  .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]).ta
+):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio)) {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  overflow: visible;
+  isolation: isolate;
+  position: relative;
+  /* Keep text below the character, not inside the wide image-slice gutters. */
+  padding: calc(var(--ill-top) * var(--ill-unit) * 1px + 6px) 20px 20px;
+}
+/* 聊天里的插画气泡：最小宽度给一点，壳的内圈才放得下字 */
+:is(
+  :is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]) .row.me .bubble,
+  :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]) .row.ta .bubble
+):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio)) { min-inline-size: min(168px, 100%); }
+/* 设置页那枚小样张：壳小一号，文字留够地方，别把两列卡撑破 */
+.skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]).me,
+.skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]).ta {
+  min-inline-size: min(104px, 100%);
+  padding: calc(var(--ill-top) * var(--ill-unit) * 1px + 3px) 12px 14px;
+}
+
+/* ── ::before：原壳铺满（四款共用这一条） ──
+   九切片的四边就是原图像素乘 --ill-unit（切片值本身是原图的裸整数）；
+   中间那一块用 fill 铺进气泡内圈，所以壳是完整的，不靠拉伸。
+   角色角那一块由下面两条 clip-path 挖掉（角在右上还是左上，各挖各的）。 */
+:is(
+  :is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]) .row.me .bubble,
+  .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]).me,
+  :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]) .row.ta .bubble,
+  .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]).ta
+):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  border-style: solid;
+  border-color: transparent;
+  border-width:
+    calc(var(--ill-top) * var(--ill-unit) * 1px)
+    calc(var(--ill-right) * var(--ill-unit) * 1px)
+    calc(var(--ill-bottom) * var(--ill-unit) * 1px)
+    calc(var(--ill-left) * var(--ill-unit) * 1px);
+  border-image-source: var(--ill-art);
+  border-image-slice: var(--ill-top) var(--ill-right) var(--ill-bottom) var(--ill-left) fill;
+  border-image-width:
+    calc(var(--ill-top) * var(--ill-unit) * 1px)
+    calc(var(--ill-right) * var(--ill-unit) * 1px)
+    calc(var(--ill-bottom) * var(--ill-unit) * 1px)
+    calc(var(--ill-left) * var(--ill-unit) * 1px);
+  border-image-repeat: stretch;
+  /* A bear skin on the other side must not animate this image layer. */
+  animation: none !important;
+}
+/* 挖角：角宽角高 = 切片右边（云鲸是左边）和上边。
+   接缝留两像素重叠，覆盖角图透明边缘的采样晕线；正文不参与裁切。 */
+:is(
+  :is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"]) .row.me .bubble,
+  .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"]).me,
+  :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]) .row.ta .bubble,
+  .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]).ta
+):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::before {
+  /* 角在右上：挖掉右上那一块 */
+  clip-path: polygon(
+    0 0,
+    calc(100% - (var(--ill-corner-w) * var(--ill-unit) * 1px - 2px)) 0,
+    calc(100% - (var(--ill-corner-w) * var(--ill-unit) * 1px - 2px)) calc(var(--ill-corner-h) * var(--ill-unit) * 1px - 2px),
+    100% calc(var(--ill-corner-h) * var(--ill-unit) * 1px - 2px),
+    100% 100%,
+    0 100%
+  );
+}
+/* 云鲸的角在左上：挖掉左上那一块 */
+:is(
+  :is([data-me-skin="ill-whale"]) .row.me .bubble,
+  .skin-sample-bubble:is([data-me-skin="ill-whale"]).me,
+  :is([data-ta-skin="ill-whale"]) .row.ta .bubble,
+  .skin-sample-bubble:is([data-ta-skin="ill-whale"]).ta
+):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::before {
+  clip-path: polygon(
+    calc(var(--ill-corner-w) * var(--ill-unit) * 1px - 2px) 0,
+    100% 0,
+    100% 100%,
+    0 100%,
+    0 calc(var(--ill-corner-h) * var(--ill-unit) * 1px - 2px),
+    calc(var(--ill-corner-w) * var(--ill-unit) * 1px - 2px) calc(var(--ill-corner-h) * var(--ill-unit) * 1px - 2px)
+  );
+}
+
+/* ── ::after：把角色角补回来（四款共用这一条） ──
+   动图是原角色角那块（外加 24px 原生坐标的透明边距）编出来的：
+   角在右上就往右上摆 24 格，角在左上就往左上摆（下面两条各管一边）。
+   尺寸 = 角宽角高各加 48（两边各 24），背景铺满、不重复，图自己在动。
+   上面那条公用的小尖尾规则（10px 方块、rotate 45°、压在下角）在这里全部清掉：
+   bottom / transform / border-radius 都不留，尾巴形状不跟插画角打架。 */
+:is(
+  :is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]) .row.me .bubble,
+  .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]).me,
+  :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]) .row.ta .bubble,
+  .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]).ta
+):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
+  content: "";
+  position: absolute;
+  top: calc(-24 * var(--ill-unit) * 1px);
+  bottom: auto;
+  left: auto;
+  right: auto;
+  width: calc((var(--ill-corner-w) + 48) * var(--ill-unit) * 1px);
+  height: calc((var(--ill-corner-h) + 48) * var(--ill-unit) * 1px);
+  transform: none;
+  border-radius: 0;
+  background: none;
+  background-image: var(--ill-frame-image);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  animation: none !important;
+  z-index: -1;
+  pointer-events: none;
+}
+/* 角在右上：动图往右上摆 24 格 */
+:is(
+  :is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"]) .row.me .bubble,
+  .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"]).me,
+  :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]) .row.ta .bubble,
+  .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]).ta
+):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
+  right: calc(-24 * var(--ill-unit) * 1px);
+}
+/* 云鲸的角在左上：动图往左上摆 24 格 */
+:is(
+  :is([data-me-skin="ill-whale"]) .row.me .bubble,
+  .skin-sample-bubble:is([data-me-skin="ill-whale"]).me,
+  :is([data-ta-skin="ill-whale"]) .row.ta .bubble,
+  .skin-sample-bubble:is([data-ta-skin="ill-whale"]).ta
+):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
+  left: calc(-24 * var(--ill-unit) * 1px);
+}
+
+/* ── 什么时候用静态角 ──
+   一、老消息：只让末尾三条动，一屏几十条一起动就成了动图墙；
+   二、开了「减少动态」：换静态角。
+   设置页那枚样张不在 .stream 里，不吃历史那条规则，一眼能看见四款在动。 */
+:is(
+  :is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]),
+  :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"])
+) :is(.stream, .ch-stream) .row:nth-last-child(n+4) .bubble::after { --ill-frame-image: var(--ill-still); }
+@media (prefers-reduced-motion: reduce) {
+  :is(
+    :is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]),
+    :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"])
+  ) .row .bubble::after,
+  .skin-sample-bubble:is([data-me-skin^="ill-"], [data-ta-skin^="ill-"])::after {
+    --ill-frame-image: var(--ill-still);
+  }
+  .skin-pick:has(.skin-sample-bubble:is([data-me-skin^="ill-"], [data-ta-skin^="ill-"])) .skin-pick-text small::after {
+    content: "系统已减少动态，当前静态显示。";
+    display: block;
+    margin-top: 4px;
+  }
 }
