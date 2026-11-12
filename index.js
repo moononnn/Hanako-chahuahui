@@ -645,7 +645,7 @@ export function apply(ctx) {
   /**
    * 伙伴自己那侧的气泡装扮（2026-10-28 晚）。
    *
-   * 一天只看一次、跟着心情日盘走，规则在 lib/bubble-skin-mood.js。
+   * 跟着心情日盘走，同款适配时保留数天，一天最多实际换一次。
    * 这里只负责把三样东西凑到一起：今天的日盘、脸上的账、他的 id。
    * 算不出来就回 null（界面就不挂这枚属性，退回原来的取色），
    * 不让外观那边把聊天拖垮。
@@ -656,8 +656,8 @@ export function apply(ctx) {
       const mood = store.getTodayMood(agentId, { now, sleepHours: hoursToday(settings?.sleep, now) });
       const book = store.getPartnerSkinBook(agentId);
       const picked = pickPartnerSkin(book, { mood, now, agentId });
-      // 只有钉位真变了才写盘：每天看一次就走，不该每天都落一次盘。
-      if (picked.book.dayKey !== book.dayKey || picked.book.skin !== book.skin) {
+      // 检查日、样式或旧账计时锚点改变才写盘，普通轮询不重复写。
+      if (picked.book.dayKey !== book.dayKey || picked.book.skin !== book.skin || picked.book.pickedAt !== book.pickedAt) {
         store.savePartnerSkinBook(agentId, picked.book);
       }
       return picked.skin;
