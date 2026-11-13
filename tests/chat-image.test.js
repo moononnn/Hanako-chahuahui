@@ -26,6 +26,11 @@ test("伙伴档位区分主动发图意愿，不设发满指标；参考照和�
     const prompt = chatImagePrompt({ enabled: true, hasReference: true, tier });
     assert.ok(prompt.includes(`【发图意愿：${label}】`));
     assert.match(prompt, /不必等对方明确索要/);
+    assert.match(prompt, /生图能力已接通/);
+    assert.match(prompt, /回复前先考虑一下/);
+    assert.match(prompt, /主动把发照片作为一种表达选择/);
+    assert.match(prompt, /决定分享时要实际输出生图标记/);
+    assert.match(prompt, /都不会生成图片/);
     assert.match(prompt, /不要为了用完额度凑图/);
     assert.match(prompt, /不按固定轮数或随机抽签塞图/);
     assert.match(prompt, /避免重复/);
