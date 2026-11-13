@@ -1025,6 +1025,118 @@
   background-repeat: no-repeat;
 }
 
+/* ============================================================
+   三款的局部细节（2026-11-13）：鳄鱼的爪子与叶子、狐狸的耳尖与尾尖、
+   草莓的叶片与奶油心。头角还是原来那张 stem-motion.webp，
+   身体不整体漂移；细节单独一张图，只动那一小块。
+   ============================================================ */
+
+/* ── 每款的细节图：变量挂在气泡自己身上 ──
+   me / ta 各一条、样张各一条，不挂共享容器（同一个容器上两枚属性都在，
+   挂上去就会串到另一侧去）。
+   --ill-detail-w/h 是细节图的原图画布（半分辨率编码，屏幕上的尺寸
+   仍是原图 × --ill-unit）；--ill-detail-anchor 说这张图贴在哪个角。 */
+:is(
+  :is([data-me-skin="ill-croc"]) .row.me .bubble,
+  :is([data-ta-skin="ill-croc"]) .row.ta .bubble,
+  .skin-sample-bubble:is([data-me-skin="ill-croc"]).me,
+  .skin-sample-bubble:is([data-ta-skin="ill-croc"]).ta
+) {
+  --ill-detail-motion: url("illustrated-bubbles/croc-details-motion.webp");
+  --ill-detail-still: url("illustrated-bubbles/croc-details-still.png");
+  --ill-detail-w: 237;
+  --ill-detail-h: 206;
+  --ill-detail-anchor: left bottom;
+}
+:is(
+  :is([data-me-skin="ill-fox"]) .row.me .bubble,
+  :is([data-ta-skin="ill-fox"]) .row.ta .bubble,
+  .skin-sample-bubble:is([data-me-skin="ill-fox"]).me,
+  .skin-sample-bubble:is([data-ta-skin="ill-fox"]).ta
+) {
+  --ill-detail-motion: url("illustrated-bubbles/fox-details-motion.webp");
+  --ill-detail-still: url("illustrated-bubbles/fox-details-still.png");
+  --ill-detail-w: 394;
+  --ill-detail-h: 215;
+  --ill-detail-anchor: right bottom;
+}
+:is(
+  :is([data-me-skin="ill-berry"]) .row.me .bubble,
+  :is([data-ta-skin="ill-berry"]) .row.ta .bubble,
+  .skin-sample-bubble:is([data-me-skin="ill-berry"]).me,
+  .skin-sample-bubble:is([data-ta-skin="ill-berry"]).ta
+) {
+  --ill-detail-motion: url("illustrated-bubbles/berry-details-motion.webp");
+  --ill-detail-still: url("illustrated-bubbles/berry-details-still.png");
+  --ill-detail-w: 209;
+  --ill-detail-h: 200;
+  --ill-detail-anchor: left bottom;
+}
+
+/* ── 三款的 ::after：头角 + 下角细节，两层背景 ──
+   第一层还是右上角的头动图（位置、尺寸一点没动）；
+   第二层是下角细节图，按 --ill-detail-anchor 摆（左下或右下）。
+   盒子是「整个泡泡 + 两边各 24 格」，细节图才贴得到泡泡的下角。 */
+:is(
+  :is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"]) .row.me .bubble,
+  .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"]).me,
+  :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]) .row.ta .bubble,
+  .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]).ta
+):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
+  top: calc(-24 * var(--ill-unit) * 1px);
+  right: calc(-24 * var(--ill-unit) * 1px);
+  left: auto;
+  bottom: auto;
+  width: calc(100% + 48 * var(--ill-unit) * 1px);
+  height: calc(100% + 48 * var(--ill-unit) * 1px);
+  background-image: var(--ill-frame-image), var(--ill-detail-frame, var(--ill-detail-motion));
+  background-size:
+    calc((var(--ill-corner-w) + 48) * var(--ill-unit) * 1px) calc((var(--ill-corner-h) + 48) * var(--ill-unit) * 1px),
+    calc(var(--ill-detail-w) * var(--ill-unit) * 1px) calc(var(--ill-detail-h) * var(--ill-unit) * 1px);
+  background-position: right top, var(--ill-detail-anchor);
+  background-repeat: no-repeat;
+}
+
+/* ── 底壳挖角：细节贴上去的那一角，壳上那块得先挖掉 ──
+   不挖就是重影：壳里已经有一只爪子，再叠一张动图，变成两只爪子。
+   头角那个挖口原样留着（挖口仍只多留 2px 重叠）。 */
+:is(
+  :is([data-me-skin="ill-croc"], [data-me-skin="ill-berry"]) .row.me .bubble,
+  .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-berry"]).me,
+  :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-berry"]) .row.ta .bubble,
+  .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-berry"]).ta
+):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::before {
+  /* 右上照旧挖；左下再挖一块（鳄鱼的叶子、草莓的奶油心在那儿） */
+  clip-path: polygon(
+    0 0,
+    calc(100% - (var(--ill-corner-w) * var(--ill-unit) * 1px - 2px)) 0,
+    calc(100% - (var(--ill-corner-w) * var(--ill-unit) * 1px - 2px)) calc(var(--ill-corner-h) * var(--ill-unit) * 1px - 2px),
+    100% calc(var(--ill-corner-h) * var(--ill-unit) * 1px - 2px),
+    100% 100%,
+    calc(var(--ill-left) * var(--ill-unit) * 1px - 2px) 100%,
+    calc(var(--ill-left) * var(--ill-unit) * 1px - 2px) calc(100% - (var(--ill-bottom) * var(--ill-unit) * 1px - 2px)),
+    0 calc(100% - (var(--ill-bottom) * var(--ill-unit) * 1px - 2px))
+  );
+}
+:is(
+  :is([data-me-skin="ill-fox"]) .row.me .bubble,
+  .skin-sample-bubble:is([data-me-skin="ill-fox"]).me,
+  :is([data-ta-skin="ill-fox"]) .row.ta .bubble,
+  .skin-sample-bubble:is([data-ta-skin="ill-fox"]).ta
+):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::before {
+  /* 右上照旧挖；右下再挖一块（狐狸的尾尖在那儿） */
+  clip-path: polygon(
+    0 0,
+    calc(100% - (var(--ill-corner-w) * var(--ill-unit) * 1px - 2px)) 0,
+    calc(100% - (var(--ill-corner-w) * var(--ill-unit) * 1px - 2px)) calc(var(--ill-corner-h) * var(--ill-unit) * 1px - 2px),
+    100% calc(var(--ill-corner-h) * var(--ill-unit) * 1px - 2px),
+    100% calc(100% - (var(--ill-bottom) * var(--ill-unit) * 1px - 2px)),
+    calc(100% - (var(--ill-right) * var(--ill-unit) * 1px - 2px)) calc(100% - (var(--ill-bottom) * var(--ill-unit) * 1px - 2px)),
+    calc(100% - (var(--ill-right) * var(--ill-unit) * 1px - 2px)) 100%,
+    0 100%
+  );
+}
+
 /* 历史消息也保留图内动画，不按 DOM 排名悄悄替换成静态角。
    系统减少动态时才使用静态资源，并在设置样张旁说明原因。 */
 @media (prefers-reduced-motion: reduce) {
@@ -1048,5 +1160,14 @@
     .skin-sample-bubble:is([data-ta-skin="ill-whale"]).ta
   ):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
     --ill-bubbles-image: url("illustrated-bubbles/whale-bubbles-still.png");
+  }
+  /* 三款的下角细节也换静态版（和头角一起生效；鲸鱼那套小泡规则不动） */
+  :is(
+    :is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"]) .row.me .bubble,
+    :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]) .row.ta .bubble,
+    .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"]).me,
+    .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]).ta
+  ):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
+    --ill-detail-frame: var(--ill-detail-still);
   }
 }

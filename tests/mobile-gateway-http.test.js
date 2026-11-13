@@ -350,16 +350,25 @@ test("插画嵌套资源经网关保留动画字节，其他目录与穿越仍�
       type: name.endsWith(".webp") ? "image/webp" : "image/png",
     }),
   } });
-  for (const stem of ["croc", "fox", "berry", "whale", "whale-bubbles"]) {
-    for (const file of stem === "whale-bubbles" ? [`${stem}-still.png`, `${stem}-motion.webp`] : [`${stem}.png`, `${stem}-still.png`, `${stem}-motion.webp`]) {
+  // 插画资源一共 20 件：12 件原壳与头角 + 2 件鲸鱼小泡 + 6 件三款局部细节
+  const stems = ["croc", "fox", "berry", "whale", "whale-bubbles", "croc-details", "fox-details", "berry-details"];
+  const withShell = ["croc", "fox", "berry", "whale"];
+  let served = 0;
+  for (const stem of stems) {
+    const files = withShell.includes(stem)
+      ? [`${stem}.png`, `${stem}-still.png`, `${stem}-motion.webp`]
+      : [`${stem}-still.png`, `${stem}-motion.webp`];
+    for (const file of files) {
       const name = `illustrated-bubbles/${file}`;
       const response = await fetch(`${base}/assets/${name}`, { headers: { connection: "close" } });
       assert.equal(response.status, 200);
       assert.equal(response.headers.get("content-type"), file.endsWith(".webp") ? "image/webp" : "image/png");
       const bytes = Buffer.from(await response.arrayBuffer());
       assert.deepEqual(bytes, readFileSync(new URL(`../ui/assets/${name}`, import.meta.url)));
+      served += 1;
     }
   }
+  assert.equal(served, 20, "插画资源应当一件不少地都发得出去");
   const before = calls.filter(row => row.op === "mobile.asset").length;
   for (const pathname of ["/assets/other/croc.png", "/assets/illustrated-bubbles/deep/croc.png",
     "/assets/illustrated-bubbles/%2e%2e%2fpanel.css", "/assets/illustrated-bubbles/a%5cb.png",

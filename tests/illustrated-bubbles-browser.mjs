@@ -6,7 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -20,8 +20,9 @@ fs.mkdirSync(profile);
 const browser = process.env.BUBBLE_TEST_BROWSER || path.join(process.env['ProgramFiles(x86)'] || 'C:/Program Files (x86)', 'Microsoft/Edge/Application/msedge.exe');
 if (!fs.existsSync(browser)) throw new Error('Set BUBBLE_TEST_BROWSER to an installed Chromium executable');
 const row = (i) => `<div class="row me"><div class="msg-col"><div class="msg-line"><div class="bubble" id="bubble-${i}">${['喝点水，歇一小会儿。','窗边有一朵小小的云。','把今天的烦恼先放一放。','晚风轻轻吹过窗台。<br>明天一起去看看花，好不好？'][i-1]}</div></div></div></div>`;
-const html = `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/panel.css"><link rel="stylesheet" href="/skins.css"><style>body{display:block;padding:24px;background:#faf6ef;color:#334b36}.chat{display:block;width:min(500px,100%);height:auto;overflow:visible}.stream{height:auto;overflow:visible}.row{margin:8px 0}.sample{position:absolute;left:580px;top:80px}.native{position:absolute;left:580px;top:260px;width:194px}.clock{position:absolute;left:580px;top:450px;width:40px;height:40px;background:green;animation:tick 1s linear infinite}@keyframes tick{50%{background:orange;transform:translateX(30px)}}@media(max-width:600px){.sample{left:24px;top:620px}}</style><div class="chat" data-me-skin="ill-croc"><div class="stream">${[1,2,3,4].map(row).join('')}</div></div><div class="sample skin-sample"><span class="skin-sample-bubble me" data-me-skin="ill-croc" id="sample">来啦</span></div><img class="native" src="/illustrated-bubbles/croc-motion.webp" id="native"><div class="clock"></div>`;
-const allowed = new Set([...['croc', 'fox', 'berry', 'whale'].flatMap(s => [`${s}.png`, `${s}-still.png`, `${s}-motion.webp`]), 'whale-bubbles-still.png', 'whale-bubbles-motion.webp']);
+const html = `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/panel.css"><link rel="stylesheet" href="/skins.css" id="skins"><style>body{display:block;padding:24px;background:#faf6ef;color:#334b36}.chat{display:block;width:min(500px,100%);height:auto;overflow:visible}.stream{height:auto;overflow:visible}.row{margin:8px 0}.sample{position:absolute;left:580px;top:80px}.native{position:absolute;left:580px;top:260px;width:194px}.clock{position:absolute;left:580px;top:450px;width:40px;height:40px;background:green;animation:tick 1s linear infinite}@keyframes tick{50%{background:orange;transform:translateX(30px)}}@media(max-width:600px){.sample{left:24px;top:620px}}</style><div class="chat" data-me-skin="ill-croc"><div class="stream">${[1,2,3,4].map(row).join('')}</div></div><div class="sample skin-sample"><span class="skin-sample-bubble me" data-me-skin="ill-croc" id="sample">来啦</span></div><img class="native" src="/illustrated-bubbles/croc-motion.webp" id="native"><div class="clock"></div>`;
+const detailSpec = { croc:[237,206,'left'], fox:[394,215,'right'], berry:[209,200,'left'], whale:[128,208,'right'] };
+const allowed = new Set([...['croc', 'fox', 'berry', 'whale'].flatMap(s => [`${s}.png`, `${s}-still.png`, `${s}-motion.webp`]), ...['croc','fox','berry'].flatMap(s=>[`${s}-details-still.png`,`${s}-details-motion.webp`]), 'whale-bubbles-still.png', 'whale-bubbles-motion.webp']);
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1');
   let file, type;
@@ -34,7 +35,10 @@ const server = http.createServer((req, res) => {
   }
   if (!file) { res.writeHead(404); return res.end(); }
   res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store' });
-  res.end(fs.readFileSync(path.join(root, 'ui/assets', file)));
+  const content = fs.readFileSync(path.join(root, 'ui/assets', file));
+  // Fresh URL only: the real CSS/bytes/geometry stay the same. This restarts the
+  // decoder clock so intentional long pauses cannot cause false static failures.
+  res.end(file === 'bubble-skins.css' ? content.toString('utf8').replaceAll(/(\.webp)(?=["')])/g, `$1?case=${encodeURIComponent(url.searchParams.get('case') || 'initial')}`) : content);
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const port = server.address().port;
@@ -105,11 +109,22 @@ try {
     }
     return Object.fromEntries(Object.entries(hashes).map(([id,h])=>[id,new Set(h).size]));
   }
-  const report = { viewportWidth, browser:await evaluate('navigator.userAgent'), normal:[], reduced:[] };
+  function pixelDifferences(files) {
+    const python = process.platform === 'win32' ? 'python' : 'python3';
+    const result = spawnSync(python, ['-c', `from PIL import Image,ImageChops\nimport sys,json\na=Image.open(sys.argv[1]).convert('RGB')\nmetrics=[]\nfor filename in sys.argv[2:]:\n d=ImageChops.difference(a,Image.open(filename).convert('RGB'))\n pixels=list(getattr(d,'get_flattened_data',d.getdata)())\n metrics.append({'pixels':sum(max(p)>0 for p in pixels),'visiblePixels':sum(max(p)>3 for p in pixels),'maxDelta':max(max(p) for p in pixels)})\nprint(json.dumps(metrics))`, ...files], {encoding:'utf8',windowsHide:true});
+    assert.equal(result.status, 0, `Pixel comparison failed: ${result.stderr}`);
+    return JSON.parse(result.stdout);
+  }
+  let caseId = 0;
+  async function selectCase(side, stem) {
+    const token = `${side}-${stem}-${++caseId}`;
+    await evaluate(`(async()=>{const sample=document.getElementById('sample');for(const e of [document.querySelector('.chat'),sample]){e.removeAttribute('data-me-skin');e.removeAttribute('data-ta-skin');e.setAttribute('data-${side}-skin','ill-${stem}')}sample.className='skin-sample-bubble ${side}';for(const e of document.querySelectorAll('.row'))e.className='row ${side}';await new Promise((resolve,reject)=>{const link=document.getElementById('skins');link.onload=resolve;link.onerror=reject;link.href='/skins.css?case=${token}'});const img=document.getElementById('native');img.src='/illustrated-bubbles/${stem}-motion.webp?case=${token}';await img.decode();return true})()`);
+  }
+  const report = { viewportWidth, browser:await evaluate('navigator.userAgent'), normal:[], details:{}, detailPixels:{}, reduced:[] };
   // Control the test browser's media feature only; never changes Windows settings.
   await call('Emulation.setEmulatedMedia', {features:[{name:'prefers-reduced-motion',value:'no-preference'}]});
   for (const side of ['me','ta']) for (const stem of ['croc','fox','berry','whale']) {
-    await evaluate(`(async()=>{const sample=document.getElementById('sample');for(const e of [document.querySelector('.chat'),sample]){e.removeAttribute('data-me-skin');e.removeAttribute('data-ta-skin');e.setAttribute('data-${side}-skin','ill-${stem}')}sample.className='skin-sample-bubble ${side}';for(const e of document.querySelectorAll('.row'))e.className='row ${side}';const img=document.getElementById('native');img.src='/illustrated-bubbles/${stem}-motion.webp';await img.decode();return true})()`);
+    await selectCase(side, stem);
     const state = await inspect();
     if (stem === 'whale') {
       for (const e of state.elements) {
@@ -117,34 +132,61 @@ try {
         assert.ok(Math.abs(parseFloat(e.paddingTop) - (e.id === 'sample' ? 14.04 : 27.06)) < .1, `${side}/${e.id}: unexpected whale inset ${e.paddingTop}`);
       }
     }
-    for (const e of state.elements) assert.ok(e.image.includes(`${stem}-motion.webp`), `${side}/${stem}/${e.id}: expected animation source`);
+    for (const e of state.elements) {
+      assert.ok(e.image.includes(`${stem}-motion.webp`), `${side}/${stem}/${e.id}: expected animation source`);
+      assert.ok(e.image.includes(`${stem}-${stem==='whale'?'bubbles':'details'}-motion.webp`), `${side}/${stem}/${e.id}: missing independent detail layer`);
+    }
     const distinctFrames = await capture(`${side}-${stem}`, state);
     report.normal.push({side,stem,...state,distinctFrames});
     for (const [id,count] of Object.entries(distinctFrames)) assert.ok(count > 1, `${side}/${stem}/${id}: screenshots did not change`);
   }
-  // The tail/head and lower-right bubbles must be separate painted regions.
-  // Observe a full cycle so a deliberately quiet phase cannot masquerade as failure.
-  const whale = (await inspect()).elements.find(e => e.id === 'bubble-4');
-  const detailHashes = new Set();
-  for (let i = 0; i < 6; i++) {
-    await delay(1400);
-    const [x,y,width,height] = whale.box;
-    const shot = await call('Page.captureScreenshot', {format:'png',clip:{x:x+width-30,y:y+height-30,width:36,height:36,scale:1}});
-    const bytes = Buffer.from(shot.data, 'base64');
-    fs.writeFileSync(path.join(output, `whale-details-${i}.png`), bytes);
-    detailHashes.add(createHash('sha256').update(bytes).digest('hex'));
+  // Isolate every lower corner from the upper character and text. Observe a full
+  // cycle for independent leaf/tail/cream-light/bubble changes, including pauses.
+  for (const stem of Object.keys(detailSpec)) {
+    await selectCase('ta', stem);
+    const element = (await inspect()).elements.find(e => e.id === 'bubble-4');
+    const [dw,dh,anchor] = detailSpec[stem];
+    const [x,y,width,height] = element.box;
+    const unit = .18, pad = 24 * unit;
+    const clip = {x:(anchor==='left'?x-pad:x+width+pad-dw*unit)-1,y:y+height+pad-dh*unit-1,width:Math.ceil(dw*unit)+2,height:Math.ceil(dh*unit)+2,scale:1};
+    const hashes = new Set();
+    for (let i = 0; i < 6; i++) {
+      await delay(1400);
+      const shot = await call('Page.captureScreenshot', {format:'png',clip});
+      const bytes = Buffer.from(shot.data, 'base64');
+      fs.writeFileSync(path.join(output, `${stem}-details-${i}.png`), bytes);
+      hashes.add(createHash('sha256').update(bytes).digest('hex'));
+    }
+    report.details[stem] = hashes.size;
+    assert.ok(hashes.size > 1, `${stem}: lower detail layer did not visibly paint changing pixels`);
+    const metrics = pixelDifferences([0,1,2,3,4,5].map(i=>path.join(output, `${stem}-details-${i}.png`)));
+    report.detailPixels[stem] = Math.max(...metrics.map(m=>m.visiblePixels));
+    assert.ok(report.detailPixels[stem] >= 8, `${stem}: detail change is too faint at actual CSS size`);
   }
-  report.detailFrames = detailHashes.size;
-  assert.ok(report.detailFrames > 1, 'Whale detail layer did not visibly paint changing pixels');
   await call('Emulation.setEmulatedMedia', {features:[{name:'prefers-reduced-motion',value:'reduce'}]});
-  const state = await inspect();
-  assert.equal(state.reducedMotion, true);
-  for (const e of state.elements) assert.ok(e.image.includes('whale-still.png'), `${e.id}: reduced motion must use still image`);
-  const distinctFrames = await capture('reduced', state);
-  report.reduced.push({...state,distinctFrames});
-  for (const [id,count] of Object.entries(distinctFrames)) assert.equal(count, 1, `${id}: reduced motion must remain static`);
+  for (const stem of Object.keys(detailSpec)) {
+    await selectCase('ta', stem);
+    const state = await inspect();
+    assert.equal(state.reducedMotion, true);
+    for (const e of state.elements) {
+      assert.ok(!e.image.includes('.webp'), `${stem}/${e.id}: reduced motion must not reference any animation`);
+      assert.ok(e.image.includes(`${stem}-still.png`), `${stem}/${e.id}: reduced motion must use still head`);
+      assert.ok(e.image.includes(`${stem}-${stem==='whale'?'bubbles':'details'}-still.png`), `${stem}/${e.id}: reduced motion must use still detail`);
+    }
+    const distinctFrames = await capture(`reduced-${stem}`, state);
+    report.reduced.push({stem,...state,distinctFrames});
+    for (const [id,count] of Object.entries(distinctFrames)) {
+      if (count === 1) continue;
+      // Chromium can round a translucent edge by one RGB level between frames.
+      // Permit at most two such pixels, never actual shape/position changes.
+      const files = [0,1,2].map(i=>path.join(output, `reduced-${stem}-${id}-${i}.png`));
+      const metrics = pixelDifferences(files);
+      assert.ok(metrics.every(m=>m.pixels<=2 && m.maxDelta<=2), `${stem}/${id}: reduced motion changed beyond raster rounding: ${JSON.stringify(metrics)}`);
+      report.reduced.at(-1).rasterRounding = {...report.reduced.at(-1).rasterRounding, [id]:metrics};
+    }
+  }
   fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify(report, null, 2));
-  console.log(JSON.stringify({viewportWidth,browser:report.browser,normal:report.normal.map(({side,stem,distinctFrames})=>({side,stem,distinctFrames})),detailFrames:report.detailFrames,reduced:distinctFrames}, null, 2));
+  console.log(JSON.stringify({viewportWidth,browser:report.browser,normal:report.normal.map(({side,stem,distinctFrames})=>({side,stem,distinctFrames})),details:report.details,detailPixels:report.detailPixels,reduced:report.reduced.map(({stem,distinctFrames})=>({stem,distinctFrames}))}, null, 2));
   console.log(`Screenshots saved under ${path.relative(root, output)}`);
 } finally {
   clearTimeout(readyTimer); watcher?.close();
