@@ -86,9 +86,14 @@ function seedWorld(store, { tier = "often" } = {}) {
 
 const CLARITY_MARKER = "检查一条准备发出的普通私聊主动消息";
 
-/** 主动生成走后台 utility 通道，换成一个可控正文。语义核查固定回 send。 */
+/** 主动生成走聊天流，语义核查仍走 utility 并固定回 send。 */
 function stubUtility(app, text) {
   const calls = [];
+  app.models.answer(request => {
+    const messages = Array.isArray(request.messages) ? request.messages : [];
+    calls.push({ clarity: false, prompt: messages.map(row => String(row?.content ?? "")).join("\n") });
+    return true;
+  }, text);
   app.ctx.models.utility = async (request = {}) => {
     const messages = Array.isArray(request.messages) ? request.messages : [];
     const prompt = messages.map((row) => String(row?.content ?? "")).join("\n");
@@ -112,7 +117,7 @@ async function withRandom(value, run) {
 
 const lastProactive = (messages) => [...messages].reverse().find((row) => row.proactive === true) ?? null;
 const cleanupOn = (t, app) => t.after(() => fs.rmSync(app.dataDir, { recursive: true, force: true }));
-/** 同一条 utility 通道还跑着养护类的后台活，用主动开口那句话认出真正那一次生成。 */
+/** 请求里也有养护类后台活，用主动开口那句话认出真正那一次生成。 */
 const isProactiveGeneration = (row) => !row.clarity && /你要主动去找/.test(String(row.prompt ?? ""));
 
 /** 表情包快照：读得到才有图可发，读不到就是「这次没有表情包」。 */

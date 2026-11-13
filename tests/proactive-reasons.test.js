@@ -339,13 +339,18 @@ const seedQuietPublicEvents = (store) => {
 };
 
 /**
- * 主动开口走后台 utility 通道。把这一路换成可控正文。
+ * 主动开口走聊天流。把这一路换成可控正文。
  * 语义核查那一次固定回 send：那是拿模型桩顶替的判定，只保证这条消息能发出去，
  * 不证明它真的清楚——真判语义是另一回事。
  */
 const CLARITY_MARKER = "检查一条准备发出的普通私聊主动消息";
 function stubUtility(app, text) {
   const calls = [];
+  app.models.answer(request => {
+    const messages = Array.isArray(request.messages) ? request.messages : [];
+    calls.push({ clarity: false, prompt: messages.map(row => String(row?.content ?? "")).join("\n") });
+    return true;
+  }, text);
   app.ctx.models.utility = async (request = {}) => {
     const messages = Array.isArray(request.messages) ? request.messages : [];
     const prompt = messages.map((row) => String(row?.content ?? "")).join("\n");

@@ -59,6 +59,14 @@ test("坏协议、半截、未知字段及多次标记不触发生图", () => {
   const marker = '[生图:{"prompt":"猫","self":false}]';
   assert.equal(parseChatImage(marker + marker).request, null);
 });
+test("解析诊断区分未请求、有效与无效协议，不暴露内容", () => {
+  assert.equal(parseChatImage("今天聊聊天").status, "none");
+  const marker = '[生图:{"prompt":"窗边咖啡","self":false}]';
+  assert.equal(parseChatImage(marker).status, "valid");
+  for (const text of ['[生图:{坏json}]', '[生图:{"prompt":"猫"}]', marker + marker, '[生图:{"prompt":"猫"', '[生图:{坏json}]' + marker]) {
+    assert.equal(parseChatImage(text).status, "invalid");
+  }
+});
 test("两层默认关闭不预占；全局关闭保留伙伴设置", t => {
   const { quota, settings, partners } = setup(t, "off");
   assert.equal(quota.reserve("one"), null);

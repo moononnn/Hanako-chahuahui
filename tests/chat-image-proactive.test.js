@@ -29,6 +29,7 @@ async function boot(t, { enabled = true, answer = PHOTO } = {}) {
     ctx.resources.read = async () => ({ content: PNG.toString("base64") });
   } });
   t.after(() => fs.rmSync(app.dataDir, { recursive: true, force: true }));
+  app.models.answer(req => { prompts.push(req); return true; }, answer);
   app.ctx.models.utility = async req => {
     prompts.push(req);
     return { text: String(req.systemPrompt || "").includes("检查一条准备发出的普通私聊主动消息") ? '{"decision":"send"}' : answer };
@@ -59,8 +60,32 @@ test("真主动调度：纯图沿既有消息通路保存并通知，只生成�
   const prompt = app.prompts.find(req => req.systemPrompt.includes("【聊天照片】"))?.systemPrompt;
   assert.match(prompt, /【发图意愿：适中】/, "主动分享也按伙伴档位，不取全局少一些");
   assert.doesNotMatch(prompt, /【发图意愿：少一些】/);
+  const generation = app.models.calls.find(row => row.request.systemPrompt.includes("【聊天照片】"))?.request;
+  assert.ok(generation, "主动消息使用聊天流式模型");
+  assert.equal(generation.provider, "test-provider");
+  assert.equal(generation.model, "test-model");
+  assert.equal(generation.maxTokens, 1800);
+  const diagnostics = fs.readFileSync(`${app.dataDir}/v2/diagnostics.jsonl`, "utf8").trim().split("\n").map(line => JSON.parse(line));
+  assert.ok(diagnostics.some(row => row.event === "chat.image.offered" && row.source === "proactive" && row.enabled));
+  assert.ok(diagnostics.some(row => row.event === "chat.image.parsed" && row.status === "valid"));
   assert.ok(app.serviceCalls.some(row => row.type === "app:chahuahui/chat-image-generate"));
   assert.ok(app.emittedAppEvents.some(row => row.type === "partner-message-arrived" && row.payload.messageId === message.id));
+});
+test("聊天模型路由仅覆盖普通主动，提醒与回访保留原通道", () => {
+  const source = fs.readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  assert.match(source, /const ordinaryProactive = kind === "proactive" && !exception && !followup && !wakeEcho && !greetingOnly/);
+  assert.match(source, /!String\(todoNudge \?\? ""\)\.trim\(\) && !publicEvent && !shareableVideo && !shareableNews && !videoLoginNotice/);
+  assert.match(source, /if \(ordinaryProactive \|\| shareableVideo \|\| videoLoginNotice\)/);
+});
+test("主动聊天模型空回包不降级到整理模型，也不触发生图", OPTIONS, async t => {
+  const app = await boot(t, { answer: "" });
+  const utilityPrompts = [];
+  app.ctx.models.utility = async req => { utilityPrompts.push(req.systemPrompt); return { text: '{"decision":"send"}' }; };
+  await app.tick();
+  assert.equal(app.models.calls.length, 1);
+  assert.ok(utilityPrompts.every(prompt => !prompt.includes("【聊天照片】")));
+  assert.equal(app.mediaCalls.length, 0);
+  assert.equal(app.photos().length, 0);
 });
 test("主动与普通聊天确实共用伙伴上限，用完后硬输出标记也不再生成", OPTIONS, async t => {
   const app = await boot(t); await app.tick();
@@ -90,6 +115,8 @@ test("静默、坏协议与重复协议不触发主动生图", OPTIONS, async t 
     await t.test(answer.slice(0, 12), async t => {
       const app = await boot(t, { answer }); await app.tick();
       assert.equal(app.mediaCalls.length, 0); assert.equal(app.photos().length, 0);
+      const rows = fs.readFileSync(`${app.dataDir}/v2/diagnostics.jsonl`, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      assert.ok(rows.some(row => row.event === "chat.image.parsed" && row.status === (answer.startsWith("[不回]") ? "valid" : "invalid")));
     });
   }
 });

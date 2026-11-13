@@ -3010,12 +3010,13 @@ export function apply(ctx) {
    */
   async function askVoice(systemPrompt, userText, maxTokens, agentId, event = "voice", options = {}) {
     const pass = options.messages ? { messages: options.messages } : {};
-    let raw = await askCheap(systemPrompt, userText, maxTokens, pass);
+    const ask = options.generate ?? askCheap;
+    let raw = await ask(systemPrompt, userText, maxTokens, pass);
     const risk = inspectVoice(raw);
     if (risk.level !== "retry") return raw;
     diagnostics({ event: `${event}.retry`, agentId, reason: risk.reason, tail: risk.tail });
     const retryPrompt = `${systemPrompt}\n\n刚才的输出末尾疑似混入了无关字符。请只重新输出要说给对方的自然正文，不要解释格式。`;
-    const retried = await askCheap(retryPrompt, userText, maxTokens, pass);
+    const retried = await ask(retryPrompt, userText, maxTokens, pass);
     const retryRisk = inspectVoice(retried);
     diagnostics({ event: `${event}.retry.result`, agentId, level: retryRisk.level, reason: retryRisk.reason });
     return retryRisk.level === "retry" ? raw : retried;
@@ -3400,9 +3401,13 @@ export function apply(ctx) {
           : proactiveSpec({ partnerName, userName: USER_NAME, personaText, hobby: shareableHobby, discovery: shareableDiscovery, seed: shareableSeed, interestHistory, video: shareableVideo, news: shareableNews, videoLoginNotice, memoryText, relationNote, adaptationText, searchContext, currentTimeText, followup, wakeEcho, sceneEcho, contextText, todoNudge, stickerText, userRhythmText: userRhythm, workfeedText, greetingOnly, morningFirst: morningFirstScene, askBudgetSpent: askSpent, reason: sendReason, introducedText, moodText: moodLineFor(agentId) });
 
     // 照片沿用普通聊天的动作与额度；提醒、告别和新闻/视频分享不混入付费生图。
-    const imageEnabled = kind === "proactive" && !exception && !followup && !wakeEcho && !greetingOnly
-      && !String(todoNudge ?? "").trim() && !publicEvent && !shareableVideo && !shareableNews && !videoLoginNotice
-      && chatImageServiceReady && imageQuota?.available(agentId) === true;
+    const ordinaryProactive = kind === "proactive" && !exception && !followup && !wakeEcho && !greetingOnly
+      && !String(todoNudge ?? "").trim() && !publicEvent && !shareableVideo && !shareableNews && !videoLoginNotice;
+    const imageEnabled = ordinaryProactive && chatImageServiceReady && imageQuota?.available(agentId) === true;
+    diagnostics({ event: "chat.image.offered", agentId, source: "proactive", enabled: imageEnabled,
+      reason: imageEnabled ? "available" : kind !== "proactive" ? "message-kind"
+        : exception || followup || wakeEcho || greetingOnly || String(todoNudge ?? "").trim() || publicEvent || shareableVideo || shareableNews || videoLoginNotice ? "scene-excluded"
+        : !chatImageServiceReady ? "service-unavailable" : "quota-or-tier" });
     let photoReferenceId = null;
     if (imageEnabled) {
       try { photoReferenceId = imageReferences.current(agentId)?.id || null; } catch { /* 不能凭坏参考照编脸 */ }
@@ -3412,21 +3417,25 @@ export function apply(ctx) {
     try {
       // 主动来找这一路同样得报出当前佩戴结果：ta 得知道「自己现在是什么状态」才谈得上换。
       const badgeHint = badgeGuide({ current: store.getPartnerSettings(agentId).badge });
-      if (shareableVideo || videoLoginNotice) {
-        // 分享与登录提醒由当前伙伴选定的模型判断，不借全局整理模型替ta开口。
+      if (ordinaryProactive || shareableVideo || videoLoginNotice) {
+        // 普通主动消息与视频分享都由伙伴聊天模型出声，留足照片标记的输出空间。
         const catalog = await ctx.models.list();
         const choice = resolveModelChoice(catalog, { partnerRef: store.getPartnerSettings(agentId).model,
           globalRef: store.getGlobalSettings().model, agentRef: await agentDefaultModel(agentId) });
-        if (!videoPartnerEnabled(agentId) || threadStamp(agentId) !== videoStamp || focusCompanion.active()
-          || (shareableVideo && !videoQuota())) return { ok: false, reason: "video-stale" };
-        const generated = await generateReply(ctx, {
-          systemPrompt: withNamePlate(`${spec.systemPrompt}\n\n${badgeHint}`, partnerName),
-          messages: [...proactiveMessages, { role: "user", content: spec.userText }], diagnostics, maxTokens: 1800,
+        if ((shareableVideo || videoLoginNotice) && (!videoPartnerEnabled(agentId) || threadStamp(agentId) !== videoStamp || focusCompanion.active()
+          || (shareableVideo && !videoQuota()))) return { ok: false, reason: "video-stale" };
+        const systemPrompt = withNamePlate([spec.systemPrompt, badgeHint, imagePromptText].filter(Boolean).join("\n\n"), partnerName);
+        const generate = async (prompt, userText, maxTokens, options = {}) => (await generateReply(ctx, {
+          systemPrompt: prompt,
+          messages: options.messages ?? [...proactiveMessages, { role: "user", content: userText }], diagnostics, maxTokens,
           modelRef: choice ? { provider: choice.provider, model: choice.model } : null, catalog,
           allowUtilityFallback: false,
           usageTag: { agentId, kind: "proactive" },
-        });
-        raw = generated.text;
+        })).text;
+        raw = shareableVideo || videoLoginNotice ? await generate(systemPrompt, spec.userText, 1800)
+          : await askVoice(systemPrompt, spec.userText, 1800, agentId, "proactive", {
+            generate, messages: [...proactiveMessages, { role: "user", content: spec.userText }],
+          });
       } else {
         raw = await askVoice(withNamePlate([spec.systemPrompt, badgeHint, imagePromptText].filter(Boolean).join("\n\n"), partnerName), spec.userText, 300, agentId, "proactive",
           { messages: [...proactiveMessages, { role: "user", content: spec.userText }] });
@@ -3444,6 +3453,7 @@ export function apply(ctx) {
       return { ok: false, reason: "silent" };
     }
     const chatPhoto = parseChatImage(raw);
+    diagnostics({ event: "chat.image.parsed", agentId, source: "proactive", status: chatPhoto.status });
     const badgeMarker = parseBadgeMarker(chatPhoto.text);
     if (badgeMarker.badge) store.setPartnerSettings(agentId, { badge: badgeMarker.badge });
     const badgeLessRaw = badgeMarker.found
@@ -6259,6 +6269,8 @@ export function apply(ctx) {
         sourceHead: videoShelf[0]?.bvid ?? "" });
     }
     const imageEnabled = chatImageServiceReady && imageQuota?.available(agentId) === true;
+    diagnostics({ event: "chat.image.offered", agentId, source: "chat", enabled: imageEnabled,
+      reason: imageEnabled ? "available" : !chatImageServiceReady ? "service-unavailable" : "quota-or-tier" });
     let hasImageReference = false;
     if (imageEnabled) {
       try { hasImageReference = Boolean(imageReferences.current(agentId)); } catch { /* 坏参考照不能变成陌生脸 */ }
@@ -6480,6 +6492,7 @@ export function apply(ctx) {
     // 协议必须先于徽章、表情、正文清洗和语音处理剥离；坏回包不提交判断。
     const rawGeneratedText = String(memoryFeedback.text ?? "");
     const chatPhoto = parseChatImage(rawGeneratedText);
+    diagnostics({ event: "chat.image.parsed", agentId, source: "chat", status: chatPhoto.status });
     const badgeMarker = parseBadgeMarker(chatPhoto.text);
     if (badgeMarker.badge) store.setPartnerSettings(agentId, { badge: badgeMarker.badge });
     const badgeLessRaw = badgeMarker.found

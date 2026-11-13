@@ -113,11 +113,18 @@ function seedWorld(store, { base = new Date(), video = false } = {}) {
 /** 语义核查那一次固定回 send：那是拿模型桩顶替的判定，只保证这条消息能发出去。 */
 const CLARITY_MARKER = "检查一条准备发出的普通私聊主动消息";
 
-/** 主动生成走后台 utility 通道；每次都记下完整请求，好检查历史是不是真的进了模型。 */
+/** 主动生成走聊天流，其他后台活走 utility；都捕获请求以核对历史。 */
 function captureUtility(app, replies) {
   const calls = [];
   const queue = Array.isArray(replies) ? [...replies] : null;
   const fallback = queue ? null : String(replies ?? "");
+  const stream = app.ctx.models.stream.bind(app.ctx.models);
+  app.ctx.models.stream = request => {
+    calls.push(request);
+    const result = stream(request);
+    app.models.release(app.models.calls.length - 1, queue ? (queue.length > 1 ? queue.shift() : queue[0]) : fallback);
+    return result;
+  };
   app.ctx.models.utility = async (request = {}) => {
     calls.push(request);
     if (String(request.systemPrompt ?? "").includes(CLARITY_MARKER)) {
