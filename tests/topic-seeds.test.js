@@ -302,6 +302,6 @@ test("聊透的母题不再被挑去长新种子", () => {
   for (let i = 0; i < SEED_MOTIF_EXHAUST_LIMIT; i += 1) {
     book = markSeedUsed(book, book.seeds[i].id, "文本", NOW);
   }
-  const picked = pickMotifForSeeds([MOTIF, { id: "h_qita", name: "别的方向" }], book, {});
+  const picked = pickMotifForSeeds([MOTIF, { id: "h_qita", name: "别的方向" }], book, { now: NOW });
   assert.equal(picked.id, "h_qita", "聊透的母题让位给别的方向");
 });

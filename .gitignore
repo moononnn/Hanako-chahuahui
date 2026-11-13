@@ -40,6 +40,7 @@ probe-result.json
 
 # 临时与备份
 _tmp*/
+.tmp/
 node_modules/
 _backups/
 *.zip
