@@ -243,7 +243,7 @@ test("新角那套规则只给新款：原来十四套一点没碰", () => {
 test("带图、带语音、带表情的气泡不吃这一套", () => {
   // 气泡本身、最小宽度与六条图层规则都要排除媒体，再加云鲸收紧、云鲸小泡、三款细节与两处底壳挖角。
   const guarded = illustratedSection.match(/:not\(\.voice-bubble, \.voice-transcript, \.is-recalled, \.ch-media, :has\(\.message-image, \.ch-media, \.ch-img, \.sticker, video, audio\)\)/g) ?? [];
-  assert.equal(guarded.length, 15, "插画气泡的规则少了带图护栏");
+  assert.equal(guarded.length, 17, "插画气泡的规则少了带图护栏");
   assert.match(illustratedSection, /\.voice-bubble/);
   assert.match(illustratedSection, /\.voice-transcript/);
   assert.match(illustratedSection, /\.is-recalled/);
@@ -251,7 +251,7 @@ test("带图、带语音、带表情的气泡不吃这一套", () => {
   assert.match(illustratedSection, /padding: var\(--ill-text-top, calc\(var\(--ill-top\) \* var\(--ill-unit\) \* 1px \+ 3px\)\) 12px 14px;/);
 });
 
-test("云鲸正文顶部单独收紧：只有它变，别的款和角的几何都不动", () => {
+test("云鲸正文顶部收紧：它自己那条仍只归云鲸", () => {
   const rule = illustratedSection.match(/[^{}]*\{[^}]*--ill-text-top:[^}]*\}/)?.[0] ?? "";
   assert.ok(rule, "样式表里没有给云鲸收紧顶部的那条规则");
   // 值：普通 217*.18-12 = 27.06px，样张 217*.12-12 = 14.04px，下限 14px
@@ -259,7 +259,7 @@ test("云鲸正文顶部单独收紧：只有它变，别的款和角的几何�
   assert.equal(Math.round((217 * 0.18 - 12) * 100) / 100, 27.06);
   assert.equal(Math.round((217 * 0.12 - 12) * 100) / 100, 14.04);
   assert.ok(Math.max(14, 217 * 0.12 - 12) >= 14, "样张那档也得守住 14px 下限");
-  // 只给云鲸：别的三款一个都不许出现在这条规则里
+  // 云鲸那条仍只归云鲸：别的三款一个都不许出现在这条规则里
   for (const id of ["ill-croc", "ill-fox", "ill-berry"]) {
     assert.doesNotMatch(rule, new RegExp(id), `${id} 混进了云鲸的收紧规则`);
   }
@@ -271,14 +271,67 @@ test("云鲸正文顶部单独收紧：只有它变，别的款和角的几何�
   // 共享容器上不许挂这个变量：挂在上面会串到另一侧
   assert.doesNotMatch(illustratedSection, /(?:^|\})\s*\[data-me-skin="ill-whale"\]\s*\{[^}]*--ill-text-top/);
   assert.doesNotMatch(illustratedSection, /(?:^|\})\s*\[data-ta-skin="ill-whale"\]\s*\{[^}]*--ill-text-top/);
-  // 这个变量只被两处内边距读、只被声明一次：角和尾巴的几何不碰它
+  // 全表三处声明（云鲸 + 鳄鱼 + 狐狸草莓）、两处读取；角和尾巴的几何不碰它
   // （数的是真声明，注释里提到它不算）
   const code = illustratedSection.replace(/\/\*[\s\S]*?\*\//g, "");
-  assert.equal((code.match(/--ill-text-top/g) ?? []).length, 3,
-    "--ill-text-top 只能声明一次、只被两条内边距规则读");
+  assert.equal((code.match(/--ill-text-top/g) ?? []).length, 5,
+    "--ill-text-top 应当是三处声明、两条内边距规则各读一次");
   // 非鲸鱼默认不变：回退算式原样留在两条内边距里
   assert.match(illustratedSection, /var\(--ill-text-top, calc\(var\(--ill-top\) \* var\(--ill-unit\) \* 1px \+ 6px\)\)/);
   assert.match(illustratedSection, /var\(--ill-text-top, calc\(var\(--ill-top\) \* var\(--ill-unit\) \* 1px \+ 3px\)\)/);
+});
+
+test("另外三款也收紧正文顶部：数值、下限、两侧独立、受媒体护栏", () => {
+  const rows = [
+    { id: "ill-croc", cut: 12, chat: 32.64, sample: 17.76 },
+    { id: "ill-fox", cut: 10, chat: 37.16, sample: 21.44 },
+    { id: "ill-berry", cut: 10, chat: 24.38, sample: 14 },
+  ];
+  for (const row of rows) {
+    const skin = ILL.find((x) => x.id === row.id);
+    const top = skin.slice[0];
+    // 数值：原切片顶边乘 unit，再减掉给角色的余量
+    assert.equal(Math.round((top * 0.18 - row.cut) * 100) / 100, row.chat, `${row.id} 的聊天值对不上`);
+    assert.equal(Math.round(Math.max(14, top * 0.12 - row.cut) * 100) / 100, row.sample, `${row.id} 的样张值对不上`);
+    // 减掉的量：18 / 16 / 16px（相对原来的 +6px 顶距）
+    assert.equal(Math.round((top * 0.18 + 6 - (top * 0.18 - row.cut)) * 100) / 100,
+      row.id === "ill-croc" ? 18 : 16, `${row.id} 收紧的量对不上`);
+  }
+  // 鳄鱼的规则：单独一条，减 12px（鲸鱼也是 -12px，所以按内容挑，不按先后）
+  const textTopRules = illustratedSection.match(/[^{}]*\{[^}]*--ill-text-top:[^}]*\}/g) ?? [];
+  const crocRule = textTopRules.find((block) => block.includes("ill-croc") && block.includes("- 12px")) ?? "";
+  assert.ok(crocRule, "缺鳄鱼收紧顶部那一条");
+  assert.match(crocRule, /\[data-me-skin="ill-croc"\]\) \.row\.me \.bubble/);
+  assert.match(crocRule, /\[data-ta-skin="ill-croc"\]\) \.row\.ta \.bubble/);
+  assert.match(crocRule, /\.skin-sample-bubble:is\(\[data-me-skin="ill-croc"\]\)\.me/);
+  assert.match(crocRule, /\.skin-sample-bubble:is\(\[data-ta-skin="ill-croc"\]\)\.ta/);
+  assert.doesNotMatch(crocRule, /ill-fox|ill-berry|ill-whale/, "鳄鱼那条不许混进别的款");
+  // 狐狸与草莓共用一条，减 10px
+  const pairRule = textTopRules.find((block) => block.includes("ill-fox") && block.includes("ill-berry") && block.includes("- 10px")) ?? "";
+  assert.ok(pairRule, "缺狐狸与草莓收紧顶部那一条");
+  for (const id of ["ill-fox", "ill-berry"]) {
+    assert.match(pairRule, new RegExp(`\\[data-me-skin="${id}"\\]`));
+    assert.match(pairRule, new RegExp(`\\[data-ta-skin="${id}"\\]`));
+  }
+  // 样张两侧共用一条（两枚属性在一个 :is() 里）
+  assert.match(pairRule, /\.skin-sample-bubble:is\(\[data-me-skin="ill-fox"\], \[data-me-skin="ill-berry"\]\)\.me/);
+  assert.match(pairRule, /\.skin-sample-bubble:is\(\[data-ta-skin="ill-fox"\], \[data-ta-skin="ill-berry"\]\)\.ta/);
+  assert.doesNotMatch(pairRule, /ill-croc|ill-whale/, "狐狸草莓那条不许混进别的款");
+  // 两条都带完整媒体护栏：带图、带语音、带转写、带撤回的气泡不吃这一套
+  for (const rule of [crocRule, pairRule]) {
+    assert.match(rule, /:not\(\.voice-bubble, \.voice-transcript, \.is-recalled, \.ch-media, :has\(\.message-image, \.ch-media, \.ch-img, \.sticker, video, audio\)\)/);
+  }
+  // 变量挂在气泡自己身上，不挂共享容器
+  for (const id of ["ill-croc", "ill-fox", "ill-berry"]) {
+    assert.doesNotMatch(illustratedSection, new RegExp(`(?:^|\\})\\s*\\[data-me-skin="${id}"\\]\\s*\\{[^}]*--ill-text-top`));
+    assert.doesNotMatch(illustratedSection, new RegExp(`(?:^|\\})\\s*\\[data-ta-skin="${id}"\\]\\s*\\{[^}]*--ill-text-top`));
+  }
+  // 14px 下限：样张那档再小也不许低于 14
+  assert.equal(Math.max(14, 191 * 0.12 - 10), 14, "草莓样张那档应当踩在 14px 下限上");
+  // 默认公式、水平与底部留白、九切片都没动
+  assert.match(illustratedSection, /padding: var\(--ill-text-top, calc\(var\(--ill-top\) \* var\(--ill-unit\) \* 1px \+ 6px\)\) 20px 20px;/);
+  assert.match(illustratedSection, /padding: var\(--ill-text-top, calc\(var\(--ill-top\) \* var\(--ill-unit\) \* 1px \+ 3px\)\) 12px 14px;/);
+  assert.match(illustratedSection, /border-image-slice: var\(--ill-top\) var\(--ill-right\) var\(--ill-bottom\) var\(--ill-left\) fill;/);
 });
 
 test("云鲸右下角的小泡：专属第二层背景，别的款不碰", () => {

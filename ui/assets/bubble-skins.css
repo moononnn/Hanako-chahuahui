@@ -885,6 +885,32 @@
   --ill-text-top: max(14px, calc(var(--ill-top) * var(--ill-unit) * 1px - 12px));
 }
 
+/* ── 另外三款：正文顶部也收紧 ──
+   角色同样趴在上角，壳的上沿留白多，短句看着像掉在壳中间（实机反馈）。
+   这里只动正文的上边距，先给原角色的爪与果实的最低点留出余量：
+     鳄鱼 248*.18-12 = 32.64px（比原来少 18px）
+     狐狸 262*.18-10 = 37.16px（少 16px）
+     草莓 191*.18-10 = 24.38px（少 16px）
+   设置页样张（unit .12）分别是 17.76 / 21.44 / 14px（草莓踩到 14px 下限）。
+   变量同样只挂在气泡自己身上（me / ta 各一条、样张各一条），不挂共享容器；
+   角色角、动作、九切片、水平与底部留白一律没动。 */
+:is(
+  :is([data-me-skin="ill-croc"]) .row.me .bubble,
+  :is([data-ta-skin="ill-croc"]) .row.ta .bubble
+):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio)),
+.skin-sample-bubble:is([data-me-skin="ill-croc"]).me,
+.skin-sample-bubble:is([data-ta-skin="ill-croc"]).ta {
+  --ill-text-top: max(14px, calc(var(--ill-top) * var(--ill-unit) * 1px - 12px));
+}
+:is(
+  :is([data-me-skin="ill-fox"], [data-me-skin="ill-berry"]) .row.me .bubble,
+  :is([data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]) .row.ta .bubble
+):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio)),
+.skin-sample-bubble:is([data-me-skin="ill-fox"], [data-me-skin="ill-berry"]).me,
+.skin-sample-bubble:is([data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]).ta {
+  --ill-text-top: max(14px, calc(var(--ill-top) * var(--ill-unit) * 1px - 10px));
+}
+
 /* ── ::before：原壳铺满（四款共用这一条） ──
    九切片的四边就是原图像素乘 --ill-unit（切片值本身是原图的裸整数）；
    中间那一块用 fill 铺进气泡内圈，所以壳是完整的，不靠拉伸。

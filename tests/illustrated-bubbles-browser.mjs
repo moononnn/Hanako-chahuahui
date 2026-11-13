@@ -19,9 +19,10 @@ const profile = path.join(output, `profile-${Date.now()}`);
 fs.mkdirSync(profile);
 const browser = process.env.BUBBLE_TEST_BROWSER || path.join(process.env['ProgramFiles(x86)'] || 'C:/Program Files (x86)', 'Microsoft/Edge/Application/msedge.exe');
 if (!fs.existsSync(browser)) throw new Error('Set BUBBLE_TEST_BROWSER to an installed Chromium executable');
-const row = (i) => `<div class="row me"><div class="msg-col"><div class="msg-line"><div class="bubble" id="bubble-${i}">${['喝点水，歇一小会儿。','窗边有一朵小小的云。','把今天的烦恼先放一放。','晚风轻轻吹过窗台。<br>明天一起去看看花，好不好？'][i-1]}</div></div></div></div>`;
+const row = (i) => `<div class="row me"><div class="msg-col"><div class="msg-line"><div class="bubble" id="bubble-${i}">${['喝点水，歇一小会儿。','窗边有一朵小小的云。','把今天的烦恼先放一放。','晚风轻轻吹过窗台，先把今天的疲惫放一放。明天再一起出去看看花，慢慢走，不着急。'][i-1]}</div></div></div></div>`;
 const html = `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/panel.css"><link rel="stylesheet" href="/skins.css" id="skins"><style>body{display:block;padding:24px;background:#faf6ef;color:#334b36}.chat{display:block;width:min(500px,100%);height:auto;overflow:visible}.stream{height:auto;overflow:visible}.row{margin:8px 0}.sample{position:absolute;left:580px;top:80px}.native{position:absolute;left:580px;top:260px;width:194px}.clock{position:absolute;left:580px;top:450px;width:40px;height:40px;background:green;animation:tick 1s linear infinite}@keyframes tick{50%{background:orange;transform:translateX(30px)}}@media(max-width:600px){.sample{left:24px;top:620px}}</style><div class="chat" data-me-skin="ill-croc"><div class="stream">${[1,2,3,4].map(row).join('')}</div></div><div class="sample skin-sample"><span class="skin-sample-bubble me" data-me-skin="ill-croc" id="sample">来啦</span></div><img class="native" src="/illustrated-bubbles/croc-motion.webp" id="native"><div class="clock"></div>`;
 const detailSpec = { croc:[237,206,'left'], fox:[394,215,'right'], berry:[209,200,'left'], whale:[128,208,'right'] };
+const textInsets = { croc:[32.64,17.76], fox:[37.16,21.44], berry:[24.38,14], whale:[27.06,14.04] };
 const allowed = new Set([...['croc', 'fox', 'berry', 'whale'].flatMap(s => [`${s}.png`, `${s}-still.png`, `${s}-motion.webp`]), ...['croc','fox','berry'].flatMap(s=>[`${s}-details-still.png`,`${s}-details-motion.webp`]), 'whale-bubbles-still.png', 'whale-bubbles-motion.webp']);
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1');
@@ -111,7 +112,7 @@ try {
   }
   function pixelDifferences(files) {
     const python = process.platform === 'win32' ? 'python' : 'python3';
-    const result = spawnSync(python, ['-c', `from PIL import Image,ImageChops\nimport sys,json\na=Image.open(sys.argv[1]).convert('RGB')\nmetrics=[]\nfor filename in sys.argv[2:]:\n d=ImageChops.difference(a,Image.open(filename).convert('RGB'))\n pixels=list(getattr(d,'get_flattened_data',d.getdata)())\n metrics.append({'pixels':sum(max(p)>0 for p in pixels),'visiblePixels':sum(max(p)>3 for p in pixels),'maxDelta':max(max(p) for p in pixels)})\nprint(json.dumps(metrics))`, ...files], {encoding:'utf8',windowsHide:true});
+    const result = spawnSync(python, ['-c', `from PIL import Image,ImageChops\nimport sys,json\na=Image.open(sys.argv[1]).convert('RGB')\nmetrics=[]\nfor filename in sys.argv[2:]:\n d=ImageChops.difference(a,Image.open(filename).convert('RGB'))\n pixels=list(getattr(d,'get_flattened_data',d.getdata)())\n metrics.append({'pixels':sum(max(p)>0 for p in pixels),'visiblePixels':sum(max(p)>3 for p in pixels),'maxDelta':max(max(p) for p in pixels),'totalPixels':len(pixels)})\nprint(json.dumps(metrics))`, ...files], {encoding:'utf8',windowsHide:true});
     assert.equal(result.status, 0, `Pixel comparison failed: ${result.stderr}`);
     return JSON.parse(result.stdout);
   }
@@ -126,11 +127,12 @@ try {
   for (const side of ['me','ta']) for (const stem of ['croc','fox','berry','whale']) {
     await selectCase(side, stem);
     const state = await inspect();
-    if (stem === 'whale') {
-      for (const e of state.elements) {
-        assert.ok(e.image.includes('whale-bubbles-motion.webp'), `${side}/${e.id}: missing detail layer`);
-        assert.ok(Math.abs(parseFloat(e.paddingTop) - (e.id === 'sample' ? 14.04 : 27.06)) < .1, `${side}/${e.id}: unexpected whale inset ${e.paddingTop}`);
-      }
+    for (const e of state.elements) {
+      const sample = e.id === 'sample';
+      assert.ok(Math.abs(parseFloat(e.paddingTop) - textInsets[stem][sample?1:0]) < .1, `${side}/${stem}/${e.id}: unexpected top inset ${e.paddingTop}`);
+      // Baseline computed value is 20px in both chat and samples: the guarded
+      // shared rule outranks the older 14px sample declaration. Preserve it here.
+      assert.equal(parseFloat(e.paddingBottom), 20, `${side}/${stem}/${e.id}: bottom inset must remain unchanged`);
     }
     for (const e of state.elements) {
       assert.ok(e.image.includes(`${stem}-motion.webp`), `${side}/${stem}/${e.id}: expected animation source`);
@@ -178,10 +180,11 @@ try {
     for (const [id,count] of Object.entries(distinctFrames)) {
       if (count === 1) continue;
       // Chromium can round a translucent edge by one RGB level between frames.
-      // Permit at most two such pixels, never actual shape/position changes.
+      // Bound the affected area to 0.05% so longer text crops have the same noise
+      // budget per area. Tighten amplitude to one level; motion needs >3 levels.
       const files = [0,1,2].map(i=>path.join(output, `reduced-${stem}-${id}-${i}.png`));
       const metrics = pixelDifferences(files);
-      assert.ok(metrics.every(m=>m.pixels<=2 && m.maxDelta<=2), `${stem}/${id}: reduced motion changed beyond raster rounding: ${JSON.stringify(metrics)}`);
+      assert.ok(metrics.every(m=>m.pixels<=Math.max(2,Math.floor(m.totalPixels*.0005)) && m.maxDelta<=1), `${stem}/${id}: reduced motion changed beyond raster rounding: ${JSON.stringify(metrics)}`);
       report.reduced.at(-1).rasterRounding = {...report.reduced.at(-1).rasterRounding, [id]:metrics};
     }
   }
