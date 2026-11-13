@@ -34,9 +34,9 @@ async function boot(t, { enabled = true, answer = PHOTO } = {}) {
     prompts.push(req);
     return { text: String(req.systemPrompt || "").includes("检查一条准备发出的普通私聊主动消息") ? '{"decision":"send"}' : answer };
   };
-  const tick = async () => {
+  const tick = async (randomValue = 0.99) => {
     const random = Math.random;
-    Math.random = () => 0.99; // 稳定落在有聊天凭据的关系由头，不去碰网络素材。
+    Math.random = () => randomValue; // 默认落在有聊天凭据的关系由头；照片候选可单独验证低随机值。
     try { return await app.request("POST", "/proactive/tick", { json: {} }); }
     finally { Math.random = random; }
   };
@@ -70,6 +70,85 @@ test("真主动调度：纯图沿既有消息通路保存并通知，只生成�
   assert.ok(diagnostics.some(row => row.event === "chat.image.parsed" && row.status === "valid"));
   assert.ok(app.serviceCalls.some(row => row.type === "app:chahuahui/chat-image-generate"));
   assert.ok(app.emittedAppEvents.some(row => row.type === "partner-message-arrived" && row.payload.messageId === message.id));
+});
+test("生活照片候选即使有参考也可不出镜，沿原通道落库并保留由头分类", OPTIONS, async t => {
+  const app = await boot(t);
+  const uploaded = await app.request("POST", `/image/reference/${AGENT}`, { json: { image: { data: PNG.toString("base64") } } });
+  await app.request("PUT", `/image/reference/${AGENT}`, { json: { referenceId: uploaded.body.reference.history[0].id } });
+  await app.tick(0.1);
+  const [photo] = app.photos();
+  assert.ok(photo);
+  assert.equal(photo.proactiveExpression, "photo");
+  assert.equal(photo.photoScene.source, "scene");
+  assert.ok(photo.photoScene.key);
+  assert.equal(app.mediaCalls.length, 1);
+  assert.ok(app.prompts.some(req => req.systemPrompt.includes("【生活照片分享】")));
+  const sources = JSON.parse(fs.readFileSync(`${app.dataDir}/v2/state.json`, "utf8")).runtime.partners[AGENT].proactiveSources;
+  assert.equal(sources.length, 1);
+  assert.equal(sources[0].group, "relational");
+  assert.equal(app.mediaCalls[0].input.referenceImages, undefined);
+});
+test("生活照片候选允许放弃或协议写坏，不退回口头承诺，不花生图额度", OPTIONS, async t => {
+  for (const answer of ["[不回]", "给你看看我这杯咖啡。", '[生图:{坏json}]']) {
+    await t.test(answer, async t => {
+      const app = await boot(t, { answer });
+      await app.tick(0.1);
+      assert.ok(app.prompts.some(req => req.systemPrompt.includes("【生活照片分享】")));
+      assert.equal(app.mediaCalls.length, 0);
+      assert.equal(reopenThread(app.dataDir, AGENT).filter(row => row.proactive).length, 0);
+      const usage = (await app.request("GET", `/image/partner/${AGENT}`)).body.usage;
+      assert.equal(usage.partnerUsed, 0);
+      assert.equal(usage.partnerPending, 0);
+    });
+  }
+});
+test("生活照片可自选露脸、背影或手部，出现本人均带当前参考照", OPTIONS, async t => {
+  for (const framing of ["我露脸拿着咖啡", "我的背影站在窗边，不露脸", "只拍我的手拿着咖啡，不露脸"]) {
+    await t.test(framing, async t => {
+      const app = await boot(t, { answer: `[生图:${JSON.stringify({ prompt: framing, self: true })}]` });
+      const uploaded = await app.request("POST", `/image/reference/${AGENT}`, { json: { image: { data: PNG.toString("base64") } } });
+      const referenceId = uploaded.body.reference.history[0].id;
+      await app.request("PUT", `/image/reference/${AGENT}`, { json: { referenceId } });
+      await app.tick(0.1);
+      assert.equal(app.photos()[0]?.proactiveExpression, "photo");
+      assert.equal(app.mediaCalls.length, 1);
+      assert.ok(app.mediaCalls[0].input.referenceImages[0].path.endsWith(`${referenceId}.png`));
+      assert.ok(app.mediaCalls[0].input.prompt.includes(framing));
+      assert.match(app.mediaCalls[0].input.prompt, /不因参考照强制露脸/);
+    });
+  }
+});
+test("生活照片无参考时不能用背影或手部冒充伙伴，不花生图额度", OPTIONS, async t => {
+  const app = await boot(t, { answer: '[生图:{"prompt":"只拍我拿咖啡的手，不露脸","self":true}]' });
+  await app.tick(0.1);
+  assert.ok(app.prompts.some(req => req.systemPrompt.includes("【生活照片分享】")));
+  assert.equal(app.mediaCalls.length, 0);
+  assert.equal(app.photos().length, 0);
+});
+test("生活照片候选不能把近期发过的同一画面重新生成", OPTIONS, async t => {
+  const app = await boot(t);
+  app.store.appendMessage(AGENT, { role: "assistant", text: "[图片]", at: time(-4 * HOUR), attachment: { id: "old_photo", description: "窗边一杯咖啡，歪歪的小土豆拉花，不出现人物" } });
+  for (let i = 0; i < 3; i++) {
+    app.store.appendMessage(AGENT, { role: "user", text: "咖啡喝完了吗", at: time(-2 * HOUR + i * 2000) });
+    app.store.appendMessage(AGENT, { role: "assistant", text: "我打算换个杯子", at: time(-2 * HOUR + i * 2000 + 1000) });
+  }
+  await app.tick(0.1);
+  assert.ok(app.prompts.some(req => req.systemPrompt.includes("【生活照片分享】")));
+  assert.equal(app.mediaCalls.length, 0);
+  assert.equal(app.photos().length, 0);
+});
+test("生活照片选中后生成期间有新消息，图和配文一起作废，成功仍计次", OPTIONS, async t => {
+  const app = await boot(t, { answer: `窗边这杯给你看一眼。${PHOTO}` });
+  let finish;
+  app.ctx.media.getTask = () => new Promise(resolve => { finish = resolve; });
+  const pending = app.tick(0.1);
+  await waitUntil(() => finish);
+  app.store.appendMessage(AGENT, { role: "user", text: "我又想到一件事", at: time(0) });
+  finish({ status: "completed" });
+  await pending;
+  assert.equal(app.photos().length, 0);
+  assert.equal(reopenThread(app.dataDir, AGENT).filter(row => row.proactive).length, 0);
+  assert.equal((await app.request("GET", `/image/partner/${AGENT}`)).body.usage.partnerUsed, 1);
 });
 test("聊天模型路由仅覆盖普通主动，提醒与回访保留原通道", () => {
   const source = fs.readFileSync(new URL("../index.js", import.meta.url), "utf8");

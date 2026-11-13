@@ -475,7 +475,7 @@ import {
   listHostImageProviders,
   mimeOfImageBytes,
 } from "./lib/host-image.js";
-import { normalizeImageTier, chatImagePrompt, parseChatImage } from "./lib/chat-image.js";
+import { normalizeImageTier, chatImagePrompt, parseChatImage, pickPhotoShare, photoSharePrompt } from "./lib/chat-image.js";
 import { createImageQuota } from "./lib/image-quota.js";
 import { createImageReferences } from "./lib/image-reference.js";
 import { registerImageReferenceRoutes } from "./lib/image-reference-routes.js";
@@ -2001,7 +2001,7 @@ export function apply(ctx) {
     try {
       const choice = normalizeImageModelPatch(store.getGlobalSettings().imageModel);
       const result = await generateChatImage(ctx, {
-        prompt: [request.self ? "画面人物必须保持参考照中的同一角色、外貌特征和画风；按场景自然构图，不加文字水印。" : "只呈现下面的物件、食物或风景，不出现人物或陌生人的自拍。", request.prompt].join("\n"),
+        prompt: [request.self ? "画面人物必须保持参考照中的同一角色、外貌特征和画风；按场景自然构图，可露脸、背影或局部，遵循画面描述，不因参考照强制露脸，不加文字水印。" : "只呈现下面的物件、食物或风景，不出现人物或陌生人的自拍。", request.prompt].join("\n"),
         referencePaths: reference ? [reference.path] : [], provider: choice.provider || undefined, model: choice.model || undefined,
       }, reservation, () => stillCurrent() && !signal?.aborted && store.getGlobalSettings().imageTier !== "off" && store.getPartnerSettings(agentId).imageTier !== "off" && (!reference || imageReferences.view(agentId).currentId === reference.id));
       // 成功就算一次，即便等待期间旧稿作废或附件写入失败。
@@ -3193,7 +3193,7 @@ export function apply(ctx) {
   }
 
   /** 把一条主动消息送进她那个窗（她不在也照发，显示未读）。 */
-  async function deliverProactive(agentId, { partnerName, topic, hobby, discovery, seed, video = null, news = null, videoLoginNotice = null, reason = null, reasonCandidates = [], exception, followup, wakeEcho, sceneEcho, kind = "proactive", activity = null, sleepStart = "", greetingOnly = false, morningFirst = false, todoNudge = "", publicEvent = null }) {
+  async function deliverProactive(agentId, { partnerName, topic, hobby, discovery, seed, video = null, news = null, videoLoginNotice = null, photoShare = null, reason = null, reasonCandidates = [], exception, followup, wakeEcho, sceneEcho, kind = "proactive", activity = null, sleepStart = "", greetingOnly = false, morningFirst = false, todoNudge = "", publicEvent = null }) {
     const photoStamp = threadStamp(agentId);
     const videoStamp = video || videoLoginNotice ? photoStamp : null;
     await loadUserName();
@@ -3412,7 +3412,9 @@ export function apply(ctx) {
     if (imageEnabled) {
       try { photoReferenceId = imageReferences.current(agentId)?.id || null; } catch { /* 不能凭坏参考照编脸 */ }
     }
-    const imagePromptText = chatImagePrompt({ enabled: imageEnabled, hasReference: Boolean(photoReferenceId), tier: store.getPartnerSettings(agentId).imageTier });
+    const imagePromptText = chatImagePrompt({ enabled: imageEnabled, hasReference: Boolean(photoReferenceId), tier: store.getPartnerSettings(agentId).imageTier, shareOnly: Boolean(photoShare) });
+    if (photoShare && !imageEnabled) return { ok: false, reason: "image-disabled" };
+    const photoShareText = photoShare ? photoSharePrompt({ hasReference: Boolean(photoReferenceId) }) : "";
     let raw = "";
     try {
       // 主动来找这一路同样得报出当前佩戴结果：ta 得知道「自己现在是什么状态」才谈得上换。
@@ -3424,7 +3426,7 @@ export function apply(ctx) {
           globalRef: store.getGlobalSettings().model, agentRef: await agentDefaultModel(agentId) });
         if ((shareableVideo || videoLoginNotice) && (!videoPartnerEnabled(agentId) || threadStamp(agentId) !== videoStamp || focusCompanion.active()
           || (shareableVideo && !videoQuota()))) return { ok: false, reason: "video-stale" };
-        const systemPrompt = withNamePlate([spec.systemPrompt, badgeHint, imagePromptText].filter(Boolean).join("\n\n"), partnerName);
+        const systemPrompt = withNamePlate([spec.systemPrompt, badgeHint, imagePromptText, photoShareText].filter(Boolean).join("\n\n"), partnerName);
         const generate = async (prompt, userText, maxTokens, options = {}) => (await generateReply(ctx, {
           systemPrompt: prompt,
           messages: options.messages ?? [...proactiveMessages, { role: "user", content: userText }], diagnostics, maxTokens,
@@ -3488,6 +3490,15 @@ export function apply(ctx) {
       return { ok: false, reason: "nighttime-sleep-check" };
     }
     if (chatPhoto.request && !imageEnabled) return { ok: false, reason: "image-disabled" };
+    if (photoShare && (!chatPhoto.request || chatPhoto.status !== "valid")) return { ok: false, reason: "photo-declined" };
+    if (photoShare && chatPhoto.request) {
+      const previousPhotos = threadRows.filter(row => row.role === "assistant" && !row.recalled && row.attachment?.description)
+        .slice(-6).map(row => ({ ...row, text: row.attachment.description }));
+      if (isRepeatedPhrasing(previousPhotos, chatPhoto.request.prompt, { now: Date.now() }).repeated) {
+        diagnostics({ event: "proactive.photo.skipped", agentId, reason: "repeat-image" });
+        return { ok: false, reason: "repeat-image" };
+      }
+    }
     const imageOnlyReply = Boolean(chatPhoto.request) && !text && !marker.keyword;
     if (!isUsableVoice(text) && !marker.keyword && !imageOnlyReply) {
       diagnostics({ event: "proactive.empty", agentId, rawHead: String(raw ?? "").slice(0, 160) });
@@ -3633,6 +3644,7 @@ export function apply(ctx) {
       proactive: true,
       form: "word",
       proactiveKind: kind,
+      ...(photoShare ? { proactiveExpression: "photo", photoScene: photoShare } : {}),
       proactiveContext,
       exception: Boolean(exception),
       topicId: topic?.id ?? null,
@@ -4781,7 +4793,18 @@ export function apply(ctx) {
         && morningOpening({ tier: settings.tier, workActive: workActivity.active });
       // 纯招呼已经占住这一轮时就不叠关系式由头：两条由头一起给反而互相削弱。
       const reasonForSend = greetingOnly ? null : reason;
-      const form = publicEvent || todoHere || videoLoginNotice
+      // 照片是表达候选，不另造联系动机；只占普通关系式落点，不抢素材或机动消息。
+      const photoShare = pickPhotoShare({
+        enabled: chatImageServiceReady && imageQuota?.available(agentId) === true,
+        tier: settings.imageTier,
+        hasContext: Boolean(sceneEcho),
+        blocked: !reasonEligible || greetingOnly || Boolean(seed || discovery),
+        recentPhoto: thread.messages.filter(row => row.role === "assistant" && !row.recalled && isSpeechMessage(row))
+          .slice(-3).some(row => row.attachment?.description)
+          || thread.messages.some(row => !row.recalled && row.photoScene?.key === sceneEcho?.at && row.photoScene?.source === "scene"),
+      }) ? { key: sceneEcho.at, source: "scene" } : null;
+      if (photoShare) diagnostics({ event: "proactive.photo.selected", agentId, tier: settings.imageTier });
+      const form = photoShare || publicEvent || todoHere || videoLoginNotice
         ? "word"
         : wakeEcho || followup?.read || farewellSend
         ? "word"
@@ -4855,6 +4878,7 @@ export function apply(ctx) {
           news,
           videoLoginNotice,
           reason: reasonForSend,
+          photoShare,
           reasonCandidates: reasonPick.candidates,
           exception: Boolean(finalGate.exception),
           followup,
@@ -4931,6 +4955,7 @@ export function apply(ctx) {
         seed,
         discovery,
         reason: reasonForSend,
+        photo: Boolean(photoShare),
       });
       if (sentGroup) {
         store.setProactiveState(agentId, {

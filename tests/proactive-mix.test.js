@@ -102,6 +102,13 @@ test("来源归类：素材、种子、关系式分得清，机动不记账", ()
   assert.equal(sourceGroupOf({}), null);
 });
 
+test("生活照片沿用原来源分组，无由头照片也能从聊天账恢复，不增第四类", () => {
+  assert.equal(MIX_GROUPS.length, 3);
+  assert.equal(sourceGroupOf({ photo: true }), "relational");
+  assert.equal(sourceGroupOf({ photo: true, reason: { kind: "interest" } }), "interest");
+  assert.equal(sourceGroupOf({ photo: true, routine: true }), null);
+  assert.deepEqual(groupsFromMessages([{ role: "assistant", proactive: true, proactiveKind: "proactive", proactiveExpression: "photo" }]), ["relational"]);
+});
 test("来源归类：认不出的类目一律当没有", () => {
   assert.equal(normalizeMixGroup("material"), "material");
   assert.equal(normalizeMixGroup("Material"), null);

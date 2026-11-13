@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseChatImage, normalizeImageTier, chatImagePrompt } from "../lib/chat-image.js";
+import { parseChatImage, normalizeImageTier, chatImagePrompt, pickPhotoShare, photoSharePrompt } from "../lib/chat-image.js";
 import { createImageQuota } from "../lib/image-quota.js";
 function setup(t, global = "more", partner = "less") {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chahuahui-image-quota-"));
@@ -45,6 +45,41 @@ test("伙伴档位区分主动发图意愿，不设发满指标；参考照和�
   for (const tier of ["off", "bad", null, 5, {}]) assert.equal(chatImagePrompt({ enabled: true, tier }), "");
   for (const tier of Object.keys(labels)) assert.equal(chatImagePrompt({ enabled: false, tier }), "");
   assert.match(chatImagePrompt({ enabled: true, hasReference: false, tier: "more" }), /只能self=false/);
+});
+test("生活照片候选按伙伴档位增加机会，关门、无依据或刚发图时不选", () => {
+  const base = { enabled: true, hasContext: true, tier: "more", random: () => 0 };
+  assert.equal(pickPhotoShare(base), true);
+  for (const patch of [{ enabled: false }, { hasContext: false }, { blocked: true }, { recentPhoto: true }, { tier: "off" }]) {
+    assert.equal(pickPhotoShare({ ...base, ...patch }), false);
+  }
+  assert.equal(pickPhotoShare({ ...base, tier: "less", random: () => 0.3 }), false);
+  assert.equal(pickPhotoShare({ ...base, tier: "normal", random: () => 0.3 }), true);
+  assert.equal(pickPhotoShare({ ...base, tier: "normal", random: () => 0.5 }), false);
+  assert.equal(pickPhotoShare({ ...base, tier: "more", random: () => 0.5 }), true);
+  for (const tier of ["less", "normal", "more"]) assert.equal(pickPhotoShare({ ...base, tier, random: () => 0.99 }), false);
+  assert.match(photoSharePrompt(), /这一轮专门考虑/);
+  assert.match(photoSharePrompt(), /最近真实聊天和已有角色状态/);
+  assert.match(photoSharePrompt(), /只输出\[不回\]/);
+});
+test("专门照片候选的提示不再要求回退文字，出镜邀请取决于参考照", () => {
+  const prompt = chatImagePrompt({ enabled: true, tier: "less", shareOnly: true });
+  assert.match(prompt, /只输出\[不回\]/);
+  assert.doesNotMatch(prompt, /只聊文字|没有合适画面就继续聊天|普通闲聊优先文字/);
+  assert.match(prompt, /\[生图:/);
+  assert.match(photoSharePrompt({ hasReference: true }), /可以自己出镜/);
+  assert.doesNotMatch(photoSharePrompt({ hasReference: false }), /可以自己出镜/);
+  assert.match(photoSharePrompt({ hasReference: false }), /只能self=false/);
+});
+test("伙伴可选择露脸、背影或局部，也可以不出镜；self取决于是否本人出现", () => {
+  const withReference = chatImagePrompt({ enabled: true, hasReference: true, tier: "more" });
+  assert.match(withReference, /出镜与否由你选择/);
+  assert.match(withReference, /露脸、拍背影、侧影或只拍自己的手部/);
+  assert.match(withReference, /包括不露脸的背影和局部/);
+  assert.match(withReference, /参考照不代表必须露脸/);
+  assert.match(withReference, /不出镜时用self=false/);
+  const withoutReference = chatImagePrompt({ enabled: true, hasReference: false });
+  assert.match(withoutReference, /只能self=false/);
+  assert.match(withoutReference, /不用陌生人的脸、背影或手部冒充自己/);
 });
 test("照片协议带括号与转义仍正确，正文不含内部JSON", () => {
   const request = { prompt: '窗外的雨[夜色]和一张写着"晴"的纸', self: false };
