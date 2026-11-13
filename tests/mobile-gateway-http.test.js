@@ -350,8 +350,8 @@ test("插画嵌套资源经网关保留动画字节，其他目录与穿越仍�
       type: name.endsWith(".webp") ? "image/webp" : "image/png",
     }),
   } });
-  for (const stem of ["croc", "fox", "berry", "whale"]) {
-    for (const file of [`${stem}.png`, `${stem}-still.png`, `${stem}-motion.webp`]) {
+  for (const stem of ["croc", "fox", "berry", "whale", "whale-bubbles"]) {
+    for (const file of stem === "whale-bubbles" ? [`${stem}-still.png`, `${stem}-motion.webp`] : [`${stem}.png`, `${stem}-still.png`, `${stem}-motion.webp`]) {
       const name = `illustrated-bubbles/${file}`;
       const response = await fetch(`${base}/assets/${name}`, { headers: { connection: "close" } });
       assert.equal(response.status, 200);

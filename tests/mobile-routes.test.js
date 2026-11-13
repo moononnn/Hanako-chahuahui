@@ -587,7 +587,7 @@ test("手机页与脚本：模块引用带固定 build 戳，脚本按 JS 类型
 
 test("手机插画资源：只开放固定目录，字节与 MIME 原样返回", async () => {
   const { access } = await boot();
-  for (const name of ["illustrated-bubbles/croc-motion.webp", "illustrated-bubbles/whale-still.png"]) {
+  for (const name of ["illustrated-bubbles/croc-motion.webp", "illustrated-bubbles/whale-still.png", "illustrated-bubbles/whale-bubbles-motion.webp", "illustrated-bubbles/whale-bubbles-still.png"]) {
     const result = await access.dispatch("mobile.asset", { name });
     const expected = fs.readFileSync(new URL(`../ui/assets/${name}`, import.meta.url));
     assert.deepEqual(Buffer.from(result.base64, "base64"), expected);

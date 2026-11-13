@@ -853,8 +853,9 @@
   overflow: visible;
   isolation: isolate;
   position: relative;
-  /* Keep text below the character, not inside the wide image-slice gutters. */
-  padding: calc(var(--ill-top) * var(--ill-unit) * 1px + 6px) 20px 20px;
+  /* Keep text below the character, not inside the wide image-slice gutters.
+     顶部留白走 --ill-text-top：默认就是这条算式，云鲸另有一条收紧的（见下）。 */
+  padding: var(--ill-text-top, calc(var(--ill-top) * var(--ill-unit) * 1px + 6px)) 20px 20px;
 }
 /* 聊天里的插画气泡：最小宽度给一点，壳的内圈才放得下字 */
 :is(
@@ -865,7 +866,23 @@
 .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]).me,
 .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]).ta {
   min-inline-size: min(104px, 100%);
-  padding: calc(var(--ill-top) * var(--ill-unit) * 1px + 3px) 12px 14px;
+  padding: var(--ill-text-top, calc(var(--ill-top) * var(--ill-unit) * 1px + 3px)) 12px 14px;
+}
+
+/* ── 云鲸：正文顶部单独收紧 ──
+   鲸鱼趴在左上角，壳的上沿本来就空，短句看着像掉在壳中间（实机反馈）。
+   这里只动正文的上边距：普通气泡 217*.18-12 = 27.06px，
+   设置页样张（unit .12）取 max(14px, 26.04-12) = 14.04px。
+   变量只挂在气泡自己身上（me / ta 各一条、样张各一条），
+   不挂共享容器，免得一个容器上两枚属性互相串；
+   角色角和尾巴的几何一点没动（那边根本不读这个变量）。 */
+:is(
+  :is([data-me-skin="ill-whale"]) .row.me .bubble,
+  :is([data-ta-skin="ill-whale"]) .row.ta .bubble
+):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio)),
+.skin-sample-bubble:is([data-me-skin="ill-whale"]).me,
+.skin-sample-bubble:is([data-ta-skin="ill-whale"]).ta {
+  --ill-text-top: max(14px, calc(var(--ill-top) * var(--ill-unit) * 1px - 12px));
 }
 
 /* ── ::before：原壳铺满（四款共用这一条） ──
@@ -985,14 +1002,31 @@
   left: calc(-24 * var(--ill-unit) * 1px);
 }
 
-/* ── 什么时候用静态角 ──
-   一、老消息：只让末尾三条动，一屏几十条一起动就成了动图墙；
-   二、开了「减少动态」：换静态角。
-   设置页那枚样张不在 .stream 里，不吃历史那条规则，一眼能看见四款在动。 */
+/* ── 云鲸专属：右下角那几颗小泡 ──
+   鲸鱼除了左上角的头，底下还会飘出几颗小泡（从原画上裁下来的一小块，
+   画布 128×208）。这里给云鲸的 ::after 加第二层背景：
+   第一层还是左上角的头动图，第二层是那张小泡图。
+   位置一点没动（left/top 还是 -24 格），盒子改成「整个泡泡 + 两边各 24 格」，
+   小泡贴在盒子的右下角，其余三款还是原来那个角的大小。
+   底图和 clip 都没碰，泡泡也不转。 */
 :is(
-  :is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]),
-  :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"])
-) :is(.stream, .ch-stream) .row:nth-last-child(n+4) .bubble::after { --ill-frame-image: var(--ill-still); }
+  :is([data-me-skin="ill-whale"]) .row.me .bubble,
+  :is([data-ta-skin="ill-whale"]) .row.ta .bubble,
+  .skin-sample-bubble:is([data-me-skin="ill-whale"]).me,
+  .skin-sample-bubble:is([data-ta-skin="ill-whale"]).ta
+):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
+  width: calc(100% + 48 * var(--ill-unit) * 1px);
+  height: calc(100% + 48 * var(--ill-unit) * 1px);
+  background-image: var(--ill-frame-image), var(--ill-bubbles-image, url("illustrated-bubbles/whale-bubbles-motion.webp"));
+  background-size:
+    calc((var(--ill-corner-w) + 48) * var(--ill-unit) * 1px) calc((var(--ill-corner-h) + 48) * var(--ill-unit) * 1px),
+    calc(128 * var(--ill-unit) * 1px) calc(208 * var(--ill-unit) * 1px);
+  background-position: left top, right bottom;
+  background-repeat: no-repeat;
+}
+
+/* 历史消息也保留图内动画，不按 DOM 排名悄悄替换成静态角。
+   系统减少动态时才使用静态资源，并在设置样张旁说明原因。 */
 @media (prefers-reduced-motion: reduce) {
   :is(
     :is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]),
@@ -1005,5 +1039,14 @@
     content: "系统已减少动态，当前静态显示。";
     display: block;
     margin-top: 4px;
+  }
+  /* 云鲸右下角的小泡也换静态版（那张静态图是全透明的：减少动态时就不冒泡） */
+  :is(
+    :is([data-me-skin="ill-whale"]) .row.me .bubble,
+    :is([data-ta-skin="ill-whale"]) .row.ta .bubble,
+    .skin-sample-bubble:is([data-me-skin="ill-whale"]).me,
+    .skin-sample-bubble:is([data-ta-skin="ill-whale"]).ta
+  ):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
+    --ill-bubbles-image: url("illustrated-bubbles/whale-bubbles-still.png");
   }
 }
