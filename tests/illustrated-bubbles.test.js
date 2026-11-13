@@ -154,6 +154,14 @@ test("动图是真的动画：WebP 头、ANIM 块、ANMF 逐帧都在", () => {
   }
 });
 
+test("闭眼鲸鱼不再挤眼线，构建时逐帧保护真实眼部像素", () => {
+  const builder = fs.readFileSync(new URL('../scripts/build-illustrated-bubbles.py', import.meta.url), 'utf8');
+  const field = builder.slice(builder.indexOf('def whale_displacement'), builder.indexOf('def build_whale_bubbles'));
+  assert.doesNotMatch(field, /blink|eye\s*=|gently squeezes/);
+  assert.match(builder, /Closed eye must remain static in every encoded frame/);
+  assert.doesNotMatch(bubbleSkinById('ill-whale').hint, /眯眼|眨眼/);
+});
+
 test("鲸鱼细节层有独立静态和动态资源，尺寸与 CSS 原生画布一致", () => {
   const still = fs.readFileSync(new URL('whale-bubbles-still.png', assetsDir));
   assert.deepEqual(pngSize(still, 'whale-bubbles-still.png'), [64, 104]);

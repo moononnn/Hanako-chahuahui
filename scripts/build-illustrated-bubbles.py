@@ -35,7 +35,7 @@ def whale_displacement(u, v, t):
     """Independent, feathered part masks in the approved artwork's coordinates.
 
     This deforms existing pixels only: no new eyes/illustration are painted.
-    The original sleepy eye gently squeezes; the head and body stay pinned.
+    The original closed eye, head and body stay pinned; only tail/fin move.
     """
     def ellipse(cx, cy, rx, ry):
         return smooth((1 - math.hypot((u - cx) / rx, (v - cy) / ry)) / .28)
@@ -53,9 +53,6 @@ def whale_displacement(u, v, t):
     fw = ellipse(119, 134, 48, 35)
     dx += -fin * (v - 115) * fw
     dy += fin * (u - 151) * fw
-    blink = max(pulse(t, 4.3, 4.62), .72 * pulse(t, 4.84, 5.08))
-    eye = ellipse(176, 87, 27, 19)
-    dy += (v - 95) * (.7 * blink) * eye
     return dx, dy
 
 
@@ -160,7 +157,7 @@ def build(name, spec, source, target):
             # Even an identity RGBA bicubic transform can change transparent RGB.
             moving = Image.new('L', still.size)
             draw = ImageDraw.Draw(moving)
-            for box in [(0, 0, 130, 112), (65, 92, 179, 178), (141, 60, 213, 113)]:
+            for box in [(0, 0, 130, 112), (65, 92, 179, 178)]:
                 draw.rectangle(tuple(c + PAD for c in box), fill=255)
             result = Image.composite(result, still, moving)
         # The edge meeting the fixed frame must remain pixel-identical.
@@ -168,7 +165,10 @@ def build(name, spec, source, target):
         edge = (PAD + tw - 8, 0, sw, sh) if left else (0, 0, PAD + 8, sh)
         result.paste(still.crop(edge), edge[:2])
         if name == 'whale':
-            for box in [(200, 24, 260, 54), (220, 120, 270, 140)]:
+            # Keep the approved closed-eye expression exact, even beside the fin mask.
+            eye_box = tuple(c + PAD for c in (148, 68, 206, 105))
+            result.paste(still.crop(eye_box), eye_box[:2])
+            for box in [(200, 24, 260, 54), (220, 120, 270, 140), (148, 68, 206, 105)]:
                 pinned = tuple(c + PAD for c in box)
                 assert result.crop(pinned).tobytes() == still.crop(pinned).tobytes(), 'Whale body must not bob'
         return result
@@ -192,6 +192,10 @@ def build(name, spec, source, target):
         changed = 0
         for i in range(1, check.n_frames):
             check.seek(i)
+            if name == 'whale':
+                # Verify the actual decoded animation, after downsampling/encoding.
+                eye_box = (89, 48, 113, 63)
+                assert ImageChops.difference(visible(check).crop(eye_box), visible(exported_still).crop(eye_box)).getbbox() is None, 'Closed eye must remain static in every encoded frame'
             delta = ImageChops.difference(visible(check), visible(exported_still))
             pixels = getattr(delta, 'get_flattened_data', delta.getdata)()
             changed = max(changed, sum(max(pixel) > 3 for pixel in pixels))
