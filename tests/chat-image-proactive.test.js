@@ -156,6 +156,12 @@ test("聊天模型路由仅覆盖普通主动，提醒与回访保留原通道",
   assert.match(source, /!String\(todoNudge \?\? ""\)\.trim\(\) && !publicEvent && !shareableVideo && !shareableNews && !videoLoginNotice/);
   assert.match(source, /if \(ordinaryProactive \|\| shareableVideo \|\| videoLoginNotice\)/);
 });
+test("生活照抽中但生图不可用时退回普通文字，不整条丢掉", () => {
+  const source = fs.readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  assert.match(source, /if \(shouldDegradePhotoShare\(\{ photoShare: Boolean\(photoShare\), imageEnabled \}\)\) \{/);
+  assert.match(source, /diagnostics\(\{ event: "proactive\.photo\.skipped", agentId, reason: "image-disabled" \}\);/);
+  assert.doesNotMatch(source, /if \(photoShare && !imageEnabled\) return \{ ok: false, reason: "image-disabled" \}/);
+});
 test("主动聊天模型空回包不降级到整理模型，也不触发生图", OPTIONS, async t => {
   const app = await boot(t, { answer: "" });
   const utilityPrompts = [];

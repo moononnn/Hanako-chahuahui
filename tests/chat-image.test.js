@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseChatImage, normalizeImageTier, chatImagePrompt, pickPhotoShare, photoSharePrompt } from "../lib/chat-image.js";
+import { parseChatImage, normalizeImageTier, chatImagePrompt, pickPhotoShare, photoSharePrompt, shouldDegradePhotoShare } from "../lib/chat-image.js";
 import { createImageQuota } from "../lib/image-quota.js";
 function setup(t, global = "more", partner = "less") {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "chahuahui-image-quota-"));
@@ -61,6 +61,14 @@ test("生活照片候选按伙伴档位增加机会，关门、无依据或刚�
   assert.match(photoSharePrompt(), /最近真实聊天和已有角色状态/);
   assert.match(photoSharePrompt(), /只输出\[不回\]/);
 });
+test("抽中生活照但这轮生图不可用时退回文字，不把整条主动消息丢掉", () => {
+  assert.equal(shouldDegradePhotoShare({ photoShare: true, imageEnabled: false }), true);
+  assert.equal(shouldDegradePhotoShare({ photoShare: true }), true);
+  assert.equal(shouldDegradePhotoShare({ photoShare: true, imageEnabled: true }), false);
+  assert.equal(shouldDegradePhotoShare({ photoShare: false, imageEnabled: false }), false);
+  assert.equal(shouldDegradePhotoShare(), false);
+});
+
 test("专门照片候选的提示不再要求回退文字，出镜邀请取决于参考照", () => {
   const prompt = chatImagePrompt({ enabled: true, tier: "less", shareOnly: true });
   assert.match(prompt, /只输出\[不回\]/);

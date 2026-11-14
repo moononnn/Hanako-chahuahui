@@ -1,7 +1,8 @@
 # 云端构建最终官方 App 包（模板，由 cloud/install-workflow.mjs 装进目标仓库）
 #
 # 三条硬规矩，改之前先读完：
-#  1. 只有 workflow_dispatch。没有 push 触发，也不建 Release、不推 tag、不碰市场。
+#  1. 两种触发：workflow_dispatch（发布时手动指定 ref）与 push 到 main 且改了会进包的文件。
+#     两种都不建 Release、不推 tag、不碰市场。
 #     产物只作为 workflow artifact 落下来，发布仍由本地主引擎按发布契约执行。
 #  2. 缓存只缓存「官方工具链分发包的下载」，key 就是 pin 住的 sha256；
 #     恢复后照样重算 sha256 校验 —— 缓存命中不等于门禁通过。
@@ -26,6 +27,20 @@ on:
         required: false
         default: ''
         type: string
+  # push 到 main 且动了会进包的东西就自动构一份候选，省得发版时忘了手动 dispatch。
+  # 文档改动（README/CHANGELOG/PENDING_CHANGES/PROJECT_LOG/DESIGN 之类）不触发。
+  push:
+    branches: [main]
+    paths:
+      - 'index.js'
+      - 'manifest.json'
+      - 'lib/**'
+      - 'ui/**'
+      - 'runtime/**'
+      - 'scripts/**'
+      - 'assets/**'
+      - '.cloud-build/**'
+      - '.github/workflows/cloud-build-app-package.yml'
 
 permissions:
   contents: read
@@ -50,7 +65,7 @@ jobs:
       - name: 检出干净 checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
           fetch-depth: 1
 

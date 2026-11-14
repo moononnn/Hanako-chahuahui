@@ -475,7 +475,7 @@ import {
   listHostImageProviders,
   mimeOfImageBytes,
 } from "./lib/host-image.js";
-import { normalizeImageTier, chatImagePrompt, parseChatImage, pickPhotoShare, photoSharePrompt } from "./lib/chat-image.js";
+import { normalizeImageTier, chatImagePrompt, parseChatImage, pickPhotoShare, photoSharePrompt, shouldDegradePhotoShare } from "./lib/chat-image.js";
 import { createImageQuota } from "./lib/image-quota.js";
 import { createImageReferences } from "./lib/image-reference.js";
 import { registerImageReferenceRoutes } from "./lib/image-reference-routes.js";
@@ -3412,8 +3412,12 @@ export function apply(ctx) {
     if (imageEnabled) {
       try { photoReferenceId = imageReferences.current(agentId)?.id || null; } catch { /* 不能凭坏参考照编脸 */ }
     }
+    // 抽中生活照、但这轮生图不可用时退回普通文字主动（不能整条丢掉，那等于这一轮白等）。
+    if (shouldDegradePhotoShare({ photoShare: Boolean(photoShare), imageEnabled })) {
+      diagnostics({ event: "proactive.photo.skipped", agentId, reason: "image-disabled" });
+      photoShare = null;
+    }
     const imagePromptText = chatImagePrompt({ enabled: imageEnabled, hasReference: Boolean(photoReferenceId), tier: store.getPartnerSettings(agentId).imageTier, shareOnly: Boolean(photoShare) });
-    if (photoShare && !imageEnabled) return { ok: false, reason: "image-disabled" };
     const photoShareText = photoShare ? photoSharePrompt({ hasReference: Boolean(photoReferenceId) }) : "";
     let raw = "";
     try {
