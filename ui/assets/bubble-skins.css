@@ -840,13 +840,15 @@
 
 /* ── 泡泡本身：透明、无描边、无影、不裁切 ──
    顶部为角色留空，左右文字留白独立于图像切片，避免长文被挤成细柱。
-   带图、带语音、带表情的气泡不吃这套：照片保持原来的尺寸和浅色回退。 */
+   带图、带表情、撤回的气泡不吃这套：照片保持原来的尺寸和浅色回退。
+   语音气泡跟普通气泡一样沿用这套插画外壳（下面每条图层规则的护栏里
+   都不再排语音气泡）；转写那条仍单独排除，它不是气泡，是文字块。 */
 :is(
   :is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]) .row.me .bubble,
   .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]).me,
   :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]).ta
-):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio)) {
+):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio)) {
   background: transparent;
   border: 0;
   box-shadow: none;
@@ -861,7 +863,7 @@
 :is(
   :is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]) .row.me .bubble,
   :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]) .row.ta .bubble
-):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio)) { min-inline-size: min(168px, 100%); }
+):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio)) { min-inline-size: min(168px, 100%); }
 /* 设置页那枚小样张：壳小一号，文字留够地方，别把两列卡撑破 */
 .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]).me,
 .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]).ta {
@@ -879,7 +881,7 @@
 :is(
   :is([data-me-skin="ill-whale"]) .row.me .bubble,
   :is([data-ta-skin="ill-whale"]) .row.ta .bubble
-):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio)),
+):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio)),
 .skin-sample-bubble:is([data-me-skin="ill-whale"]).me,
 .skin-sample-bubble:is([data-ta-skin="ill-whale"]).ta {
   --ill-text-top: max(14px, calc(var(--ill-top) * var(--ill-unit) * 1px - 12px));
@@ -897,7 +899,7 @@
 :is(
   :is([data-me-skin="ill-croc"]) .row.me .bubble,
   :is([data-ta-skin="ill-croc"]) .row.ta .bubble
-):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio)),
+):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio)),
 .skin-sample-bubble:is([data-me-skin="ill-croc"]).me,
 .skin-sample-bubble:is([data-ta-skin="ill-croc"]).ta {
   --ill-text-top: max(14px, calc(var(--ill-top) * var(--ill-unit) * 1px - 12px));
@@ -905,7 +907,7 @@
 :is(
   :is([data-me-skin="ill-fox"], [data-me-skin="ill-berry"]) .row.me .bubble,
   :is([data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]) .row.ta .bubble
-):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio)),
+):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio)),
 .skin-sample-bubble:is([data-me-skin="ill-fox"], [data-me-skin="ill-berry"]).me,
 .skin-sample-bubble:is([data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]).ta {
   --ill-text-top: max(14px, calc(var(--ill-top) * var(--ill-unit) * 1px - 10px));
@@ -920,7 +922,7 @@
   .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]).me,
   :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]).ta
-):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::before {
+):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -951,7 +953,7 @@
   .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"]).me,
   :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]).ta
-):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::before {
+):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::before {
   /* 角在右上：挖掉右上那一块 */
   clip-path: polygon(
     0 0,
@@ -968,7 +970,7 @@
   .skin-sample-bubble:is([data-me-skin="ill-whale"]).me,
   :is([data-ta-skin="ill-whale"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-ta-skin="ill-whale"]).ta
-):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::before {
+):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::before {
   clip-path: polygon(
     calc(var(--ill-corner-w) * var(--ill-unit) * 1px - 2px) 0,
     100% 0,
@@ -990,7 +992,7 @@
   .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]).me,
   :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]).ta
-):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
+):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
   content: "";
   position: absolute;
   top: calc(-24 * var(--ill-unit) * 1px);
@@ -1015,7 +1017,7 @@
   .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"]).me,
   :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]).ta
-):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
+):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
   right: calc(-24 * var(--ill-unit) * 1px);
 }
 /* 云鲸的角在左上：动图往左上摆 24 格 */
@@ -1024,7 +1026,7 @@
   .skin-sample-bubble:is([data-me-skin="ill-whale"]).me,
   :is([data-ta-skin="ill-whale"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-ta-skin="ill-whale"]).ta
-):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
+):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
   left: calc(-24 * var(--ill-unit) * 1px);
 }
 
@@ -1040,7 +1042,7 @@
   :is([data-ta-skin="ill-whale"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-me-skin="ill-whale"]).me,
   .skin-sample-bubble:is([data-ta-skin="ill-whale"]).ta
-):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
+):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
   width: calc(100% + 48 * var(--ill-unit) * 1px);
   height: calc(100% + 48 * var(--ill-unit) * 1px);
   background-image: var(--ill-frame-image), var(--ill-bubbles-image, url("illustrated-bubbles/whale-bubbles-motion.webp"));
@@ -1108,7 +1110,7 @@
   .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"]).me,
   :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]).ta
-):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
+):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
   top: calc(-24 * var(--ill-unit) * 1px);
   right: calc(-24 * var(--ill-unit) * 1px);
   left: auto;
@@ -1131,7 +1133,7 @@
   .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-berry"]).me,
   :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-berry"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-berry"]).ta
-):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::before {
+):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::before {
   /* 右上照旧挖；左下再挖一块（鳄鱼的叶子、草莓的奶油心在那儿） */
   clip-path: polygon(
     0 0,
@@ -1149,7 +1151,7 @@
   .skin-sample-bubble:is([data-me-skin="ill-fox"]).me,
   :is([data-ta-skin="ill-fox"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-ta-skin="ill-fox"]).ta
-):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::before {
+):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::before {
   /* 右上照旧挖；右下再挖一块（狐狸的尾尖在那儿） */
   clip-path: polygon(
     0 0,
@@ -1184,7 +1186,7 @@
     :is([data-ta-skin="ill-whale"]) .row.ta .bubble,
     .skin-sample-bubble:is([data-me-skin="ill-whale"]).me,
     .skin-sample-bubble:is([data-ta-skin="ill-whale"]).ta
-  ):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
+  ):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
     --ill-bubbles-image: url("illustrated-bubbles/whale-bubbles-still.png");
   }
   /* 三款的下角细节也换静态版（和头角一起生效；鲸鱼那套小泡规则不动） */
@@ -1193,7 +1195,7 @@
     :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]) .row.ta .bubble,
     .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"]).me,
     .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]).ta
-  ):not(.voice-bubble, .voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
+  ):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
     --ill-detail-frame: var(--ill-detail-still);
   }
 }

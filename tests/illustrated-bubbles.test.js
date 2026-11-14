@@ -5,8 +5,9 @@
  * 这里盯三件事：
  *   一、清单与账：四款在白名单里、能存能读、伙伴能按心情挑中；
  *   二、素材：十二件文件都在，签名、尺寸、动画帧都是真的；
- *   三、样式：me / ta 两套变量都在，新角只给新款，带图的气泡不吃这一套，
- *      减动态用静态角，历史行不再被排名规则强制静态。
+ *   三、样式：me / ta 两套变量都在，新角只给新款，带图与转写的气泡不吃这一套
+ *      （语音气泡跟普通气泡一样沿用插画外壳），减动态用静态角，
+ *      历史行不再被排名规则强制静态。
  *
  * 素材是原图像素：九切片 [上 右 下 左]、角宽角高（右上角取右切片，左上角取左切片）。
  * 角图是半分辨率编码：像素尺寸 = （角宽 + 48）/ 2 × （角高 + 48）/ 2。
@@ -55,6 +56,8 @@ function cornerBox(skin) {
 
 /** 样式表里「插画气泡」那一节。 */
 const illustratedSection = skinsCss.slice(skinsCss.indexOf("插画气泡：四款带角色角的气泡"));
+/** 同一节去掉注释：样式契约只认代码，注释里提到什么不算。 */
+const illustratedCode = illustratedSection.replace(/\/\*[\s\S]*?\*\//g, "");
 
 function pngSize(buf, name) {
   assert.equal(buf.subarray(0, 8).toString("hex"), "89504e470d0a1a0a", `${name} 不是 PNG（签名不对）`);
@@ -240,15 +243,38 @@ test("新角那套规则只给新款：原来十四套一点没碰", () => {
   assert.doesNotMatch(illustratedSection, /[\s;]color:\s*transparent/);
 });
 
-test("带图、带语音、带表情的气泡不吃这一套", () => {
+test("带图、带表情的气泡不吃这一套；语音气泡改吃插画外壳", () => {
   // 气泡本身、最小宽度与六条图层规则都要排除媒体，再加云鲸收紧、云鲸小泡、三款细节与两处底壳挖角。
-  const guarded = illustratedSection.match(/:not\(\.voice-bubble, \.voice-transcript, \.is-recalled, \.ch-media, :has\(\.message-image, \.ch-media, \.ch-img, \.sticker, video, audio\)\)/g) ?? [];
+  const guardRe = /:not\(\.voice-transcript, \.is-recalled, \.ch-media, :has\(\.message-image, \.ch-media, \.ch-img, \.sticker, video, audio\)\)/g;
+  const guarded = illustratedSection.match(guardRe) ?? [];
   assert.equal(guarded.length, 17, "插画气泡的规则少了带图护栏");
-  assert.match(illustratedSection, /\.voice-bubble/);
+  // 语音气泡跟普通气泡一样沿用插画外壳：十七条护栏里一条都不许再排语音气泡
+  assert.doesNotMatch(illustratedCode, /\.voice-bubble/, "语音气泡应当跟普通气泡一样沿用插画外壳");
+  // 转写那块仍单独排除：它不是气泡，是文字块
   assert.match(illustratedSection, /\.voice-transcript/);
   assert.match(illustratedSection, /\.is-recalled/);
   assert.match(illustratedSection, /padding: var\(--ill-text-top, calc\(var\(--ill-top\) \* var\(--ill-unit\) \* 1px \+ 6px\)\) 20px 20px;/);
   assert.match(illustratedSection, /padding: var\(--ill-text-top, calc\(var\(--ill-top\) \* var\(--ill-unit\) \* 1px \+ 3px\)\) 12px 14px;/);
+});
+
+test("十七条图层规则逐条都给语音留位", () => {
+  // 语音气泡要跟文字气泡长得一样，壳、角、挖角、细节一样都不能少。
+  // 所以这十七条护栏（气泡本身、最小宽度、三条正文顶部收紧、
+  // 五条 ::before、七条 ::after）里一条都不许再排语音气泡。
+  const chunks = illustratedCode.split("}").filter((chunk) => chunk.includes(":not(.voice-transcript, .is-recalled, .ch-media, :has("));
+  assert.equal(chunks.length, 17, "带媒体护栏的插画规则应当是十七条");
+  for (const chunk of chunks) {
+    assert.doesNotMatch(chunk, /\.voice-bubble/, "还有规则把语音气泡排在插画外壳之外");
+    assert.match(chunk, /\.voice-transcript/, "转写那块仍要排除");
+    assert.match(chunk, /\.is-recalled/, "撤回的气泡仍要排除");
+    assert.match(chunk, /:has\(\.message-image, \.ch-media, \.ch-img, \.sticker, video, audio\)/, "带图、视频、音频的气泡仍要排除");
+  }
+  // 分层看：五条给气泡本身/宽度/顶部收紧，五条挖角，七条角与细节
+  const before = chunks.filter((c) => c.includes("::before")).length;
+  const after = chunks.filter((c) => c.includes("::after")).length;
+  assert.equal(before, 5, "底壳挖角的规则数不对");
+  assert.equal(after, 7, "角色角与细节的规则数不对");
+  assert.equal(chunks.length - before - after, 5, "气泡本身、最小宽度与正文顶部收紧的规则数不对");
 });
 
 test("云鲸正文顶部收紧：它自己那条仍只归云鲸", () => {
@@ -317,9 +343,10 @@ test("另外三款也收紧正文顶部：数值、下限、两侧独立、受�
   assert.match(pairRule, /\.skin-sample-bubble:is\(\[data-me-skin="ill-fox"\], \[data-me-skin="ill-berry"\]\)\.me/);
   assert.match(pairRule, /\.skin-sample-bubble:is\(\[data-ta-skin="ill-fox"\], \[data-ta-skin="ill-berry"\]\)\.ta/);
   assert.doesNotMatch(pairRule, /ill-croc|ill-whale/, "狐狸草莓那条不许混进别的款");
-  // 两条都带完整媒体护栏：带图、带语音、带转写、带撤回的气泡不吃这一套
+  // 两条都带完整媒体护栏：带图、带转写、带撤回的气泡不吃这一套（语音气泡改吃插画外壳）
   for (const rule of [crocRule, pairRule]) {
-    assert.match(rule, /:not\(\.voice-bubble, \.voice-transcript, \.is-recalled, \.ch-media, :has\(\.message-image, \.ch-media, \.ch-img, \.sticker, video, audio\)\)/);
+    assert.match(rule, /:not\(\.voice-transcript, \.is-recalled, \.ch-media, :has\(\.message-image, \.ch-media, \.ch-img, \.sticker, video, audio\)\)/);
+    assert.doesNotMatch(rule, /\.voice-bubble/, "语音气泡应当跟普通气泡一样沿用插画外壳");
   }
   // 变量挂在气泡自己身上，不挂共享容器
   for (const id of ["ill-croc", "ill-fox", "ill-berry"]) {
@@ -491,7 +518,8 @@ test("系统减少动态时，云鲸的小泡换静态版（透明，不冒泡�
   assert.match(whaleRule, /\.skin-sample-bubble:is\(\[data-me-skin="ill-whale"\]\)\.me/);
   assert.match(whaleRule, /\.skin-sample-bubble:is\(\[data-ta-skin="ill-whale"\]\)\.ta/);
   // 护栏保持
-  assert.match(whaleRule, /:not\(\.voice-bubble, \.voice-transcript, \.is-recalled, \.ch-media, :has\(\.message-image, \.ch-media, \.ch-img, \.sticker, video, audio\)\)/);
+  assert.match(whaleRule, /:not\(\.voice-transcript, \.is-recalled, \.ch-media, :has\(\.message-image, \.ch-media, \.ch-img, \.sticker, video, audio\)\)/);
+  assert.doesNotMatch(whaleRule, /\.voice-bubble/, "语音气泡应当跟普通气泡一样沿用插画外壳");
   // 小熊跨侧的动效仍被挡着
   assert.equal((illustratedSection.match(/animation: none !important;/g) ?? []).length, 2,
     "animation: none !important 必须留两处（::before 与 ::after）");

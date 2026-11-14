@@ -1,6 +1,7 @@
 // Manual pixel diagnostic: node tests/illustrated-bubbles-browser.mjs
 // Uses an isolated HEADLESS browser/profile; never attaches to a user's browser.
 // Set BUBBLE_TEST_BROWSER to a Chromium executable outside Windows.
+// Set BUBBLE_TEST_VOICE_ONLY=1 to run the voice layout/hit-target matrix only.
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
@@ -20,7 +21,7 @@ fs.mkdirSync(profile);
 const browser = process.env.BUBBLE_TEST_BROWSER || path.join(process.env['ProgramFiles(x86)'] || 'C:/Program Files (x86)', 'Microsoft/Edge/Application/msedge.exe');
 if (!fs.existsSync(browser)) throw new Error('Set BUBBLE_TEST_BROWSER to an installed Chromium executable');
 const row = (i) => `<div class="row me"><div class="msg-col"><div class="msg-line"><div class="bubble" id="bubble-${i}">${['喝点水，歇一小会儿。','窗边有一朵小小的云。','把今天的烦恼先放一放。','晚风轻轻吹过窗台，先把今天的疲惫放一放。明天再一起出去看看花，慢慢走，不着急。'][i-1]}</div></div></div></div>`;
-const html = `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/panel.css"><link rel="stylesheet" href="/skins.css" id="skins"><style>body{display:block;padding:24px;background:#faf6ef;color:#334b36}.chat{display:block;width:min(500px,100%);height:auto;overflow:visible}.stream{height:auto;overflow:visible}.row{margin:8px 0}.sample{position:absolute;left:580px;top:80px}.native{position:absolute;left:580px;top:260px;width:194px}.clock{position:absolute;left:580px;top:450px;width:40px;height:40px;background:green;animation:tick 1s linear infinite}@keyframes tick{50%{background:orange;transform:translateX(30px)}}@media(max-width:600px){.sample{left:24px;top:620px}}</style><div class="chat" data-me-skin="ill-croc"><div class="stream">${[1,2,3,4].map(row).join('')}</div></div><div class="sample skin-sample"><span class="skin-sample-bubble me" data-me-skin="ill-croc" id="sample">来啦</span></div><img class="native" src="/illustrated-bubbles/croc-motion.webp" id="native"><div class="clock"></div>`;
+const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/panel.css"><link rel="stylesheet" href="/skins.css" id="skins"><style>body{display:block;padding:24px;background:#faf6ef;color:#334b36}.chat{display:block;width:min(500px,100%);height:auto;overflow:visible}.stream{height:auto;overflow:visible}.row{margin:8px 0}.sample{position:absolute;left:580px;top:80px}.native{position:absolute;left:580px;top:260px;width:194px}.clock{position:absolute;left:580px;top:450px;width:40px;height:40px;background:green;animation:tick 1s linear infinite}@keyframes tick{50%{background:orange;transform:translateX(30px)}}@media(max-width:600px){.sample{left:24px;top:620px}}</style><div class="chat" data-me-skin="ill-croc"><div class="stream">${[1,2,3,4].map(row).join('')}</div></div><div class="sample skin-sample"><span class="skin-sample-bubble me" data-me-skin="ill-croc" id="sample">来啦</span></div><img class="native" src="/illustrated-bubbles/croc-motion.webp" id="native"><div class="clock"></div>`;
 const detailSpec = { croc:[237,206,'left'], fox:[394,215,'right'], berry:[209,200,'left'], whale:[128,208,'right'] };
 const textInsets = { croc:[32.64,17.76], fox:[37.16,21.44], berry:[24.38,14], whale:[27.06,14.04] };
 const allowed = new Set([...['croc', 'fox', 'berry', 'whale'].flatMap(s => [`${s}.png`, `${s}-still.png`, `${s}-motion.webp`]), ...['croc','fox','berry'].flatMap(s=>[`${s}-details-still.png`,`${s}-details-motion.webp`]), 'whale-bubbles-still.png', 'whale-bubbles-motion.webp']);
@@ -28,6 +29,11 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1');
   let file, type;
   if (url.pathname === '/') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(html); }
+  if (url.pathname === '/mobile.css') {
+    const mobile = fs.readFileSync(path.join(root, 'ui/mobile.html'), 'utf8');
+    res.writeHead(200, { 'content-type': 'text/css' });
+    return res.end([...mobile.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map(m => m[1]).join('\n'));
+  }
   if (url.pathname === '/panel.css') { file = 'panel.css'; type = 'text/css'; }
   if (url.pathname === '/skins.css') { file = 'bubble-skins.css'; type = 'text/css'; }
   if (url.pathname.startsWith('/illustrated-bubbles/')) {
@@ -94,7 +100,11 @@ try {
   const loaded = event('Page.loadEventFired');
   await call('Page.navigate', { url: `http://127.0.0.1:${port}/` });
   await loaded;
-  const evaluate = async expression => (await call('Runtime.evaluate', { returnByValue: true, awaitPromise: true, expression })).result.value;
+  const evaluate = async expression => {
+    const result = await call('Runtime.evaluate', {returnByValue:true,awaitPromise:true,expression});
+    if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
+    return result.result.value;
+  }
   const inspect = async () => JSON.parse(await evaluate(`JSON.stringify({reducedMotion:matchMedia('(prefers-reduced-motion: reduce)').matches,hidden:document.hidden,elements:['bubble-1','bubble-4','sample'].map(id=>{const e=document.getElementById(id),s=getComputedStyle(e,'::after'),b=e.getBoundingClientRect();return{id,image:s.backgroundImage,paddingTop:getComputedStyle(e).paddingTop,paddingBottom:getComputedStyle(e).paddingBottom,box:[b.x,b.y,b.width,b.height]}})})`));
   async function capture(prefix, state) {
     const hashes = Object.fromEntries(state.elements.map(e => [e.id, []]));
@@ -119,11 +129,12 @@ try {
   let caseId = 0;
   async function selectCase(side, stem) {
     const token = `${side}-${stem}-${++caseId}`;
-    await evaluate(`(async()=>{const sample=document.getElementById('sample');for(const e of [document.querySelector('.chat'),sample]){e.removeAttribute('data-me-skin');e.removeAttribute('data-ta-skin');e.setAttribute('data-${side}-skin','ill-${stem}')}sample.className='skin-sample-bubble ${side}';for(const e of document.querySelectorAll('.row'))e.className='row ${side}';await new Promise((resolve,reject)=>{const link=document.getElementById('skins');link.onload=resolve;link.onerror=reject;link.href='/skins.css?case=${token}'});const img=document.getElementById('native');img.src='/illustrated-bubbles/${stem}-motion.webp?case=${token}';await img.decode();return true})()`);
+    await evaluate(`(async()=>{const sample=document.getElementById('sample');for(const e of [document.querySelector('.chat'),sample]){e.removeAttribute('data-me-skin');e.removeAttribute('data-ta-skin');e.setAttribute('data-${side}-skin','ill-${stem}')}sample.className='skin-sample-bubble ${side}';for(const e of document.querySelectorAll('.row')){e.classList.remove('me','ta');e.classList.add('${side}')}await new Promise((resolve,reject)=>{const link=document.getElementById('skins');link.onload=resolve;link.onerror=reject;link.href='/skins.css?case=${token}'});const img=document.getElementById('native');img.src='/illustrated-bubbles/${stem}-motion.webp?case=${token}';await img.decode();return true})()`);
   }
   const report = { viewportWidth, browser:await evaluate('navigator.userAgent'), normal:[], details:{}, detailPixels:{}, reduced:[] };
   // Control the test browser's media feature only; never changes Windows settings.
   await call('Emulation.setEmulatedMedia', {features:[{name:'prefers-reduced-motion',value:'no-preference'}]});
+  if (!process.env.BUBBLE_TEST_VOICE_ONLY) {
   for (const side of ['me','ta']) for (const stem of ['croc','fox','berry','whale']) {
     await selectCase(side, stem);
     const state = await inspect();
@@ -188,8 +199,49 @@ try {
       report.reduced.at(-1).rasterRounding = {...report.reduced.at(-1).rasterRounding, [id]:metrics};
     }
   }
+  }
+  // Same controls/row structure as desktop and mobile, without audio or live data.
+  const voiceFixture = `<div class="row ta voice-row"><div class="msg-col voice-col"><div class="msg-line voice-controls-line"><div class="bubble voice-bubble" id="voice"><div class="voice-main"><button type="button" class="voice-play"><span class="voice-play-icon">▶</span></button><span class="voice-wave">${'<i></i>'.repeat(11)}</span><span class="voice-duration">12:34</span><span class="voice-unplayed-dot"></span></div></div><button type="button" class="voice-transcript-toggle">转文字</button><span class="msg-time">12:34</span></div><div class="msg-line voice-transcript-line"><div class="bubble voice-transcript" id="transcript">一段语音转写</div></div></div></div>`;
+  await evaluate(`document.querySelector('.stream').innerHTML=${JSON.stringify(voiceFixture)};document.querySelector('.chat').id='chat';document.querySelectorAll('.sample,.native,.clock').forEach(e=>e.hidden=true)`);
+  report.voice = [];
+  for (const surface of ['desktop', 'mobile']) {
+    await evaluate(`(async()=>{const old=document.getElementById('mobile-css');if(old)old.remove();if(${JSON.stringify(surface)}==='mobile'){await new Promise((resolve,reject)=>{const link=document.createElement('link');link.id='mobile-css';link.rel='stylesheet';link.href='/mobile.css';link.onload=resolve;link.onerror=reject;document.head.append(link)})}document.querySelector('.stream').classList.toggle('ch-stream',${JSON.stringify(surface)}==='mobile');document.querySelector('.msg-col').classList.toggle('voice-col',${JSON.stringify(surface)}==='mobile');document.querySelector('.msg-line').classList.toggle('voice-controls-line',${JSON.stringify(surface)}==='mobile');Object.assign(document.querySelector('.chat').style,{height:'auto',overflow:'visible',display:'block'});document.querySelector('.stream').style.overflow='visible';return true})()`);
+    for (const width of (surface === 'desktop' ? [240, 360, 500] : [360, 390])) {
+      await call('Emulation.setDeviceMetricsOverride', {width:surface==='mobile'?width:Math.max(width+48,viewportWidth),height:800,deviceScaleFactor:1,mobile:surface==='mobile'});
+      await evaluate(`document.querySelector('.chat').style.width='${surface==='mobile'?width-48:width}px'`);
+      for (const side of ['me','ta']) for (const stem of Object.keys(detailSpec)) {
+        await selectCase(side, stem);
+        // Both attributes are present in production; the other side must not leak.
+        await evaluate(`document.querySelector('.chat').setAttribute('data-${side==='me'?'ta':'me'}-skin','ill-${stem==='whale'?'fox':'whale'}')`);
+        for (const reduced of [false,true]) {
+          await call('Emulation.setEmulatedMedia', {features:[{name:'prefers-reduced-motion',value:reduced?'reduce':'no-preference'}]});
+          await evaluate(`document.getElementById('voice').className='bubble voice-bubble ${reduced?'is-paused':'is-playing'}'`);
+          const geometry = await evaluate(`(()=>{const voice=document.getElementById('voice'),play=voice.querySelector('.voice-play'),toggle=document.querySelector('.voice-transcript-toggle'),transcript=document.getElementById('transcript'),b=voice.getBoundingClientRect(),t=toggle.getBoundingClientRect(),s=getComputedStyle(voice);const rect=e=>{const r=e.getBoundingClientRect();return{x:r.x,y:r.y,right:r.right,bottom:r.bottom,width:r.width,height:r.height}};const hit=e=>{const r=e.getBoundingClientRect(),target=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return target===e||e.contains(target)};return{box:rect(voice),row:rect(voice.closest('.row')),chat:rect(document.querySelector('.chat')),controls:[...voice.querySelectorAll('.voice-play,.voice-wave,.voice-duration,.voice-unplayed-dot')].map(rect),playHit:hit(play),toggleHit:hit(toggle),toggleOverlaps:b.left<t.right&&b.right>t.left&&b.top<t.bottom&&b.bottom>t.top,paddingTop:parseFloat(s.paddingTop),background:s.backgroundColor,shell:getComputedStyle(voice,'::before').borderImageSource,corner:getComputedStyle(voice,'::after').backgroundImage,transcriptShell:getComputedStyle(transcript,'::before').borderImageSource,transcriptCorner:getComputedStyle(transcript,'::after').backgroundImage}})()`);
+          const label = `${surface}/${width}/${side}/${stem}/${reduced?'reduced':'motion'}`;
+          assert.ok(geometry.shell.includes(`${stem}.png`), `${label}: missing matching voice shell`);
+          assert.ok(geometry.corner.includes(`${stem}-${reduced?'still.png':'motion.webp'}`), `${label}: wrong character source`);
+          assert.ok(geometry.corner.includes(`${stem}-${stem==='whale'?'bubbles':'details'}-${reduced?'still.png':'motion.webp'}`), `${label}: wrong detail source`);
+          assert.equal(geometry.background, 'rgba(0, 0, 0, 0)', `${label}: default capsule still painted`);
+          assert.ok(Math.abs(geometry.paddingTop-textInsets[stem][0])<.1, `${label}: control inset must match text skin`);
+          assert.ok(geometry.box.width<= (surface==='mobile'?Math.min(260,width*.7):330)+1, `${label}: voice width exceeds cap`);
+          assert.ok(geometry.box.x>=geometry.chat.x-1 && geometry.box.right<=geometry.chat.right+1, `${label}: voice escaped chat`);
+          for (const c of geometry.controls) assert.ok(c.x>=geometry.box.x && c.right<=geometry.box.right+1 && c.y>=geometry.box.y && c.bottom<=geometry.box.bottom, `${label}: control outside skin`);
+          assert.ok(geometry.playHit && geometry.toggleHit, `${label}: control center is not clickable`);
+          assert.equal(geometry.toggleOverlaps, false, `${label}: transcript button overlaps skin`);
+          assert.equal(geometry.transcriptShell, 'none', `${label}: transcript acquired duplicate shell`);
+          assert.equal(geometry.transcriptCorner, 'none', `${label}: transcript acquired duplicate character`);
+          report.voice.push({surface,width,side,stem,reduced,...geometry});
+          if (!reduced && side==='ta' && stem==='whale' && (width===240||width===390)) {
+            const shot=await call('Page.captureScreenshot',{format:'png'});
+            fs.writeFileSync(path.join(output,`voice-${surface}-${width}.png`),Buffer.from(shot.data,'base64'));
+          }
+        }
+      }
+    }
+  }
   fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify({viewportWidth,browser:report.browser,normal:report.normal.map(({side,stem,distinctFrames})=>({side,stem,distinctFrames})),details:report.details,detailPixels:report.detailPixels,reduced:report.reduced.map(({stem,distinctFrames})=>({stem,distinctFrames}))}, null, 2));
+  console.log(`Voice skin geometry/hit-target cases passed: ${report.voice.length}`);
   console.log(`Screenshots saved under ${path.relative(root, output)}`);
 } finally {
   clearTimeout(readyTimer); watcher?.close();
