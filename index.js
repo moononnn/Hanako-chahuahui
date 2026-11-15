@@ -410,6 +410,7 @@ import {
   WORK_ACTIVE_WINDOW_MS,
   wakeEchoFor,
   recentSceneFor,
+  PHOTO_SCENE_MAX_AGE_MS,
   quietNow,
   resolveProactivePolicy,
   scheduleNext,
@@ -477,7 +478,7 @@ import {
   listHostImageProviders,
   mimeOfImageBytes,
 } from "./lib/host-image.js";
-import { normalizeImageTier, chatImagePrompt, parseChatImage, pickPhotoShare, photoSharePrompt, shouldDegradePhotoShare } from "./lib/chat-image.js";
+import { normalizeImageTier, chatImagePrompt, parseChatImage, pickPhotoShare, photoSharePrompt, shouldDegradePhotoShare, photoShareBlockers, imageSceneExclusions } from "./lib/chat-image.js";
 import { createImageQuota } from "./lib/image-quota.js";
 import { createImageReferences } from "./lib/image-reference.js";
 import { registerImageReferenceRoutes } from "./lib/image-reference-routes.js";
@@ -3262,7 +3263,7 @@ export function apply(ctx) {
   }
 
   /** 把一条主动消息送进她那个窗（她不在也照发，显示未读）。 */
-  async function deliverProactive(agentId, { partnerName, topic, hobby, discovery, seed, video = null, news = null, videoLoginNotice = null, photoShare = null, reason = null, reasonCandidates = [], exception, followup, wakeEcho, sceneEcho, kind = "proactive", activity = null, sleepStart = "", greetingOnly = false, morningFirst = false, todoNudge = "", publicEvent = null }) {
+  async function deliverProactive(agentId, { partnerName, topic, hobby, discovery, seed, video = null, news = null, videoLoginNotice = null, photoShare = null, photoContext = null, reason = null, reasonCandidates = [], exception, followup, wakeEcho, sceneEcho, kind = "proactive", activity = null, sleepStart = "", greetingOnly = false, morningFirst = false, todoNudge = "", publicEvent = null }) {
     const photoStamp = threadStamp(agentId);
     const videoStamp = video || videoLoginNotice ? photoStamp : null;
     await loadUserName();
@@ -3399,6 +3400,11 @@ export function apply(ctx) {
     // 2026-11-02：attachNativeImage 改成返回副本、不再就地改写数组，这里必须接住返回值——
     // 丢掉它的话记号会原样当字面文进提示词，ta 主动开口时看不见那张图（也0.16.0 是就地改，才没露）。
     const proactiveMessages = attachNativeImage(historyMessages, agentId);
+    // 照片这一轮的依据是不是已经在模型手上（2026-11-15）：上下文里已经有那两行就不重复塞进提示词；
+    // 缺了才补进去——照片不能只有一个「有依据」的开关，模型得真拿得到那段对话。
+    const photoContextKnown = Boolean(photoContext)
+      && historyWindow.some(row => Boolean(photoContext.userId) && row?.id === photoContext.userId)
+      && historyWindow.some(row => Boolean(photoContext.assistantId) && row?.id === photoContext.assistantId);
     const recentAsks = threadRows
       .filter((row) => row.proactive && row.text)
       .slice(-3)
@@ -3473,10 +3479,23 @@ export function apply(ctx) {
     const ordinaryProactive = kind === "proactive" && !exception && !followup && !wakeEcho && !greetingOnly
       && !String(todoNudge ?? "").trim() && !publicEvent && !shareableVideo && !shareableNews && !videoLoginNotice;
     const imageEnabled = ordinaryProactive && chatImageServiceReady && imageQuota?.available(agentId) === true;
+    // 这一轮为什么轮不到照片：只报标识（哪个门槛挡的），不带任何聊天正文。
+    const sceneExcludedBy = imageSceneExclusions({
+      exception: Boolean(exception),
+      followup: Boolean(followup),
+      wakeEcho: Boolean(wakeEcho),
+      greetingOnly: Boolean(greetingOnly),
+      todoNudge,
+      publicEvent: Boolean(publicEvent),
+      video: Boolean(shareableVideo),
+      news: Boolean(shareableNews),
+      videoLoginNotice: Boolean(videoLoginNotice),
+    });
     diagnostics({ event: "chat.image.offered", agentId, source: "proactive", enabled: imageEnabled,
       reason: imageEnabled ? "available" : kind !== "proactive" ? "message-kind"
-        : exception || followup || wakeEcho || greetingOnly || String(todoNudge ?? "").trim() || publicEvent || shareableVideo || shareableNews || videoLoginNotice ? "scene-excluded"
-        : !chatImageServiceReady ? "service-unavailable" : "quota-or-tier" });
+        : sceneExcludedBy.length ? "scene-excluded"
+        : !chatImageServiceReady ? "service-unavailable" : "quota-or-tier",
+      excludedBy: sceneExcludedBy });
     let photoReferenceId = null;
     if (imageEnabled) {
       try { photoReferenceId = imageReferences.current(agentId)?.id || null; } catch { /* 不能凭坏参考照编脸 */ }
@@ -3487,7 +3506,9 @@ export function apply(ctx) {
       photoShare = null;
     }
     const imagePromptText = chatImagePrompt({ enabled: imageEnabled, hasReference: Boolean(photoReferenceId), tier: store.getPartnerSettings(agentId).imageTier, shareOnly: Boolean(photoShare) });
-    const photoShareText = photoShare ? photoSharePrompt({ hasReference: Boolean(photoReferenceId) }) : "";
+    // 照片依据真的到模型手上：上下文里没有那两行，就把这段最近聊天明写进照片提示词。
+    const photoShareText = photoShare ? photoSharePrompt({ hasReference: Boolean(photoReferenceId), context: photoContextKnown ? null : photoContext }) : "";
+    if (photoShare) diagnostics({ event: "proactive.photo.context", agentId, inHistory: photoContextKnown, age: photoContext ? Date.now() - Date.parse(photoContext.at ?? "") : null });
     let raw = "";
     try {
       // 主动来找这一路同样得报出当前佩戴结果：ta 得知道「自己现在是什么状态」才谈得上换。
@@ -3563,7 +3584,13 @@ export function apply(ctx) {
       return { ok: false, reason: "nighttime-sleep-check" };
     }
     if (chatPhoto.request && !imageEnabled) return { ok: false, reason: "image-disabled" };
-    if (photoShare && (!chatPhoto.request || chatPhoto.status !== "valid")) return { ok: false, reason: "photo-declined" };
+    // 照片候选不是硬性出图（2026-11-15）：模型给了普通文字就按普通主动发出去，
+    // 别因为“这一轮本来想拍照”把整轮丢掉——那是白等一场。只有协议写坏才当这一轮不成：
+    // 坏标记不能当正文发，也不能触发生图。
+    if (photoShare && chatPhoto.status === "invalid") {
+      diagnostics({ event: "proactive.photo.skipped", agentId, reason: "invalid-marker" });
+      return { ok: false, reason: "photo-declined" };
+    }
     if (photoShare && chatPhoto.request) {
       const previousPhotos = threadRows.filter(row => row.role === "assistant" && !row.recalled && row.attachment?.description)
         .slice(-6).map(row => ({ ...row, text: row.attachment.description }));
@@ -3717,7 +3744,7 @@ export function apply(ctx) {
       proactive: true,
       form: "word",
       proactiveKind: kind,
-      ...(photoShare ? { proactiveExpression: "photo", photoScene: photoShare } : {}),
+      ...(photoShare && chatPhoto.request ? { proactiveExpression: "photo", photoScene: photoShare } : {}),
       proactiveContext,
       exception: Boolean(exception),
       topicId: topic?.id ?? null,
@@ -3788,6 +3815,8 @@ export function apply(ctx) {
       ok: true,
       bubbles,
       messageId: stored.id,
+      // 这一轮真的出图了吗：来源交错按真实结果记，不能因为“本来是照片候选”就当成出过分。
+      photo: Boolean(photoShare && chatPhoto.request),
       interest: shareableHobby ? { id: shareableHobby.id ?? null, name: shareableHobby.name ?? null, object: shareableHobby.object ?? null } : null,
     };
   }
@@ -4677,6 +4706,12 @@ export function apply(ctx) {
       const sceneEcho = gate.ok && !gate.exception && !followup?.read && !wakeEcho
         ? recentSceneFor(thread.messages, { now: now.getTime() })
         : null;
+      // 照片专用的那一轮面对面聊天（2026-11-15）：中间发过主动消息不该把这轮凭据抹掉，
+      // 照片正是靠它挑画面。普通 sceneEcho 的边界与口径一个字没动，这里另取一份。
+      // 酒馆初见仍是边界：换了开场就是新场景，不反着捡旧对话。依据最多放 24 小时。
+      const photoContext = gate.ok && !gate.exception && !followup?.read && !wakeEcho
+        ? recentSceneFor(thread.messages, { now: now.getTime(), maxAgeMs: PHOTO_SCENE_MAX_AGE_MS, ignoreProactive: true })
+        : null;
       const videoLoginNotice = gate.ok && !gate.exception && !todoHere && !followup && !wakeEcho && !farewellSend
         && videoPartnerEnabled(agentId) && videoNoticeDue(videoLoginState, now) ? videoLoginState : null;
 
@@ -4867,15 +4902,40 @@ export function apply(ctx) {
       // 纯招呼已经占住这一轮时就不叠关系式由头：两条由头一起给反而互相削弱。
       const reasonForSend = greetingOnly ? null : reason;
       // 照片是表达候选，不另造联系动机；只占普通关系式落点，不抢素材或机动消息。
+      // 依据看照片专用那份 photoContext：ta 中间主动说过几句，不该把最近那轮面对面聊天抹掉。
+      const photoRecent = thread.messages.filter(row => row.role === "assistant" && !row.recalled && isSpeechMessage(row))
+        .slice(-3).some(row => row.attachment?.description)
+        || thread.messages.some(row => !row.recalled && row.photoScene?.key === photoContext?.at && row.photoScene?.source === "scene");
+      const photoEnabled = chatImageServiceReady && imageQuota?.available(agentId) === true;
+      const photoBlocked = !reasonEligible || greetingOnly || Boolean(seed || discovery);
+      const photoExcludedBy = [
+        ...imageSceneExclusions({
+          exception: Boolean(gate.exception),
+          followup: Boolean(followup),
+          wakeEcho: Boolean(wakeEcho),
+          greetingOnly: Boolean(greetingOnly),
+          todoNudge: todoHere ? todoNudge.text : "",
+          publicEvent: Boolean(publicEvent),
+          video: Boolean(video),
+          news: Boolean(news),
+          videoLoginNotice: Boolean(videoLoginNotice),
+        }),
+        ...photoShareBlockers({
+          enabled: photoEnabled,
+          tier: settings.imageTier,
+          hasContext: Boolean(photoContext),
+          blocked: photoBlocked,
+          recentPhoto: photoRecent,
+        }),
+      ];
       const photoShare = pickPhotoShare({
-        enabled: chatImageServiceReady && imageQuota?.available(agentId) === true,
+        enabled: photoEnabled,
         tier: settings.imageTier,
-        hasContext: Boolean(sceneEcho),
-        blocked: !reasonEligible || greetingOnly || Boolean(seed || discovery),
-        recentPhoto: thread.messages.filter(row => row.role === "assistant" && !row.recalled && isSpeechMessage(row))
-          .slice(-3).some(row => row.attachment?.description)
-          || thread.messages.some(row => !row.recalled && row.photoScene?.key === sceneEcho?.at && row.photoScene?.source === "scene"),
-      }) ? { key: sceneEcho.at, source: "scene" } : null;
+        hasContext: Boolean(photoContext),
+        blocked: photoBlocked,
+        recentPhoto: photoRecent,
+      }) ? { key: photoContext.at, source: "scene" } : null;
+      diagnostics({ event: "proactive.photo.considered", agentId, tier: settings.imageTier, selected: Boolean(photoShare), excludedBy: photoExcludedBy });
       if (photoShare) diagnostics({ event: "proactive.photo.selected", agentId, tier: settings.imageTier });
       const form = photoShare || publicEvent || todoHere || videoLoginNotice
         ? "word"
@@ -4952,6 +5012,7 @@ export function apply(ctx) {
           videoLoginNotice,
           reason: reasonForSend,
           photoShare,
+          photoContext,
           reasonCandidates: reasonPick.candidates,
           exception: Boolean(finalGate.exception),
           followup,
@@ -5028,7 +5089,7 @@ export function apply(ctx) {
         seed,
         discovery,
         reason: reasonForSend,
-        photo: Boolean(photoShare),
+        photo: Boolean(sent.photo),
       });
       if (sentGroup) {
         store.setProactiveState(agentId, {

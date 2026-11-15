@@ -1,5 +1,17 @@
 # TESTING · 茶话会
 
+## 主动生活照片最小优化（2026-11-15，0.18.2-dev.2）
+
+- 照片依据不再被主动消息抹掉：`recentSceneFor` 新增可选参数（默认行为一字未改），照片专用模式忽略主动消息边界、但酒馆初见仍是边界，依据可回溯 24 小时；主动消息本身不当 user/reply，连续几条助手消息算同一轮回复。index 另取 `photoContext`（`lib/proactive.js` PHOTO_SCENE_MAX_AGE_MS / ignoreProactive），只供照片挑选与 scene 去重键，普通 `sceneEcho` 与关系逻辑未动。
+- 依据真到模型手上：上下文里已有那两行就不重复注入，缺了才把最近这段聊天明写进照片提示词（`proactive.photo.context` 诊断记 inHistory）。不是只有 hasContext 这个开关。
+- 概率改为直接取值：少一些 0.25 / 适中 0.5 / 多一些 0.8（原 more 约 0.545）；hasContext/blocked/recentPhoto 三个护栏保留（recentPhoto 的最近三条与 photoScene key/source 协议原样保留）。
+- 照片候选不再整轮白等：模型给普通文字就按普通主动发出去（不生图、不记 photoScene/proactiveExpression），只有协议写坏才判这一轮不成；[不回] 仍静默，坏协议不付费，生成失败仍不重试也不发空头配文。来源交错的 photo 标记改按真实出图结果记账（`sent.photo`）。
+- 诊断补门槛标识：`chat.image.offered` 的 scene-excluded 补 `excludedBy` 数组，新增 `proactive.photo.considered`（含 excludedBy），只报标识（no-context / recent-photo / tier-off / followup 等），不记聊天正文。
+- 提示词：明确按聊天与已有角色状态挑画面；对话提过的事不要求此刻正在发生，但不许说成刚发生的新经历；无合适画面可以改写普通文字，真没话说才 [不回]。
+- 最终回归：照片模式遇到撤回消息停止回溯，补充文本两侧各限600字；新增撤回与长度测试。跨主动集成使用消息回应（feed）确认，不伪造尚未回复的新用户消息；同场景去重使用低随机值，并将旧图移出最近三条，单独验证 scene 键确实阻止候选。
+- 最终命令：`node --test tests/chat-image*.test.js tests/image*.test.js tests/host-image.test.js tests/*proactive*.test.js tests/compose.test.js tests/load.test.js` → **392/392通过，0跳过**；`node --check` 通过 index.js、lib/chat-image.js、lib/proactive.js，`git diff --check` 通过。此为主会话补正后的相关验证，未跑全量。
+- 边界：普通主动的频率、额度、静默、待办、节日天气、睡前收尾、醒来回声、已读不回跟进等护栏一处未动；**主动消息没人接住的那一轮仍是跟进轮，照片不插队**（photoContext 只在非跟进轮生效）。未跑全量、未重载宿主、未调真实模型、未实机验「ta 会不会更爱发照片」；不发布。
+
 ## 三款文字顶部留白（2026-11-13，0.16.4-dev.13）
 
 - 仅普通文字与设置样张增加 bubble 级 `--ill-text-top`：小鳄聊天32.64px（减少18），小狐37.16px（减少16），草莓24.38px（减少16）；样张分别17.76/21.44/14px，保留14px下限。减量按角色爪/果实最低点留余量；鲸鱼仍27.06/14.04px。

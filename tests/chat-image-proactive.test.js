@@ -88,19 +88,76 @@ test("生活照片候选即使有参考也可不出镜，沿原通道落库并�
   assert.equal(sources[0].group, "relational");
   assert.equal(app.mediaCalls[0].input.referenceImages, undefined);
 });
-test("生活照片候选允许放弃或协议写坏，不退回口头承诺，不花生图额度", OPTIONS, async t => {
-  for (const answer of ["[不回]", "给你看看我这杯咖啡。", '[生图:{坏json}]']) {
+test("生活照片候选可以放弃、协议写坏或改用普通文字，都不花生图额度", OPTIONS, async t => {
+  for (const answer of ["[不回]", "咖啡我还是喜欢不加糖的。", '[生图:{坏json}]']) {
     await t.test(answer, async t => {
       const app = await boot(t, { answer });
       await app.tick(0.1);
       assert.ok(app.prompts.some(req => req.systemPrompt.includes("【生活照片分享】")));
       assert.equal(app.mediaCalls.length, 0);
-      assert.equal(reopenThread(app.dataDir, AGENT).filter(row => row.proactive).length, 0);
+      const rows = reopenThread(app.dataDir, AGENT).filter(row => row.proactive);
+      if (answer === "咖啡我还是喜欢不加糖的。") {
+        // 候选不是硬性出图：模型给了普通文字就照常发出去，但不能把它记成一张照片。
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0].attachment, undefined);
+        assert.equal(rows[0].proactiveExpression, undefined);
+        assert.equal(rows[0].photoScene, undefined);
+      } else {
+        assert.equal(rows.length, 0, "不回仍静默，坏协议不当正文发");
+      }
       const usage = (await app.request("GET", `/image/partner/${AGENT}`)).body.usage;
       assert.equal(usage.partnerUsed, 0);
       assert.equal(usage.partnerPending, 0);
     });
   }
+});
+test("中间发过主动消息，最近那轮面对面聊天仍作照片依据", OPTIONS, async t => {
+  const app = await boot(t);
+  const replyAt = app.store.getThread(AGENT).messages[1].at;
+  // 用消息上的回应确认接住主动，不另造一轮未完成的面对面聊天。
+  app.store.appendMessage(AGENT, { role: "assistant", text: "今天风挺大", at: time(-HOUR), proactive: true,
+    feed: { items: [{ emoji: "☕", count: 1, at: time(-HOUR + 1000) }] } });
+  await app.tick(0.1);
+  const photos = app.photos();
+  assert.equal(photos.length, 1, "跨主动消息后照片候选仍成立");
+  assert.equal(photos[0].photoScene.source, "scene");
+  assert.equal(photos[0].photoScene.key, replyAt, "去重键仍是那轮面对面聊天的回复时间");
+  const generation = app.models.calls.find(row => row.request.systemPrompt.includes("【生活照片分享】"))?.request;
+  assert.ok(generation, "照片这一轮真的调了聊天模型");
+  assert.match(JSON.stringify(generation.messages), /今天想喝热咖啡/, "模型手上真的有那轮面对面对话");
+});
+test("同一场景已经真出过图，这一轮不再挑照片", OPTIONS, async t => {
+  const app = await boot(t, { answer: "今天风真大，出门记得穿外套。" });
+  const replyAt = app.store.getThread(AGENT).messages[1].at;
+  app.store.appendMessage(AGENT, {
+    role: "assistant", text: "[图片]", at: time(-1 * HOUR), proactive: true,
+    attachment: { id: "old_photo", description: "窗边一杯咖啡" },
+    photoScene: { key: replyAt, source: "scene" },
+    feed: { items: [{ emoji: "☕", count: 1, at: time(-HOUR + 1000) }] },
+  });
+  // 把旧图移出最近三条，单独验证场景键去重，低随机值原本会抽中照片。
+  for (let i = 0; i < 3; i++) app.store.appendMessage(AGENT, {
+    role: "assistant", text: `补充近况${i}`, at: time(-HOUR + 2000 + i), proactive: true,
+    feed: { items: [{ emoji: "☕", count: 1, at: time(-HOUR + 3000 + i) }] },
+  });
+  await app.tick(0.1);
+  assert.equal(app.mediaCalls.length, 0, "同一场景不重复出图");
+  const rows = fs.readFileSync(`${app.dataDir}/v2/diagnostics.jsonl`, "utf8").trim().split("\n").map(line => JSON.parse(line));
+  const considered = rows.find(row => row.event === "proactive.photo.considered");
+  assert.ok(considered, "照片候选要看得到");
+  assert.ok(considered.excludedBy.includes("recent-photo"), JSON.stringify(considered));
+});
+test("照片这一轮的排除理由只报标识，不带聊天正文", OPTIONS, async t => {
+  const app = await boot(t);
+  await app.tick(0.99);
+  const rows = fs.readFileSync(`${app.dataDir}/v2/diagnostics.jsonl`, "utf8").trim().split("\n").map(line => JSON.parse(line));
+  const considered = rows.find(row => row.event === "proactive.photo.considered");
+  assert.ok(considered);
+  assert.ok(Array.isArray(considered.excludedBy));
+  assert.equal(JSON.stringify(considered).includes("今天想喝热咖啡"), false, "诊断里不能出现聊天正文");
+  const offered = rows.find(row => row.event === "chat.image.offered");
+  assert.ok(offered);
+  assert.ok(Array.isArray(offered.excludedBy));
 });
 test("生活照片可自选露脸、背影或手部，出现本人均带当前参考照", OPTIONS, async t => {
   for (const framing of ["我露脸拿着咖啡", "我的背影站在窗边，不露脸", "只拍我的手拿着咖啡，不露脸"]) {
