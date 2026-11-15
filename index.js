@@ -32,6 +32,8 @@ import { hasPalette, isPaletteDone, normalizePalette, paletteToText } from "./li
 import { createAvatarReader, looksLikeImage, toBytes } from "./lib/avatar.js";
 import { registerTavernImportService, renderImportedPersona } from "./lib/character-import.js";
 import { buildSystemPrompt, buildTeaseText, identityBlock, replyChoiceBlock, searchToolText, shouldQuietClose, threadToMessages, VOICE_REQUEST_TEXT } from "./lib/prompt.js";
+import { detectMemeMention, detectMemeExplanation, pickMemeSource } from "./lib/meme-capture.js";
+import { addUserMeme, selectMemesForAgent, markMemeUsed, formatMemePrompt } from "./lib/meme-pool.js";
 import { buildAmbientContextText, buildDaybookText, buildFestivalResponseText, daybookAvailable, daybookEntry, daybookHash, daybookQueryTopics, periodNoteDecision, previousAssistantBeforeUser, readDaybook, readDaybookVerbose, shouldUseDaybook } from "./lib/daybook.js";
 // 茶话会自己的一天（2026-10-31）：天气与节日不借拾光记，自己查自己记。
 import {
@@ -881,7 +883,8 @@ export function apply(ctx) {
       voiceModel: maskVoice(activeModel),
       voiceProfiles: Object.fromEntries(Object.entries(global.voiceProfiles || {}).map(([id, profile]) => [id, { ...profile, config: maskVoice(profile.config) }])),
       // 少一个必填项就等于一条也合成不出来；设置页直接把这件事说清楚。
-      voiceReady: Boolean(activeModel.baseUrl && activeModel.model && activeModel.apiKey),
+      // 原生 TTS 协议本来就没有模型名，不能拿它当缺项，否则一存就报「合成不出来」。
+      voiceReady: Boolean(activeModel.baseUrl && activeModel.apiKey && (activeModel.model || activeModel.protocol === "tts")),
       // 系统加密用不上时 Key 就是明文躺着，界面得如实说，不能让她以为已经加密。
       voiceKeyEncrypted: isProtectedKey(activeModel.apiKey),
       // 生图：只回两格选择，没有密钥可言；能不能用看宿主那扇门开没开。
@@ -1503,6 +1506,72 @@ export function apply(ctx) {
       if (partnerMessageEventWarningLogged) return;
       partnerMessageEventWarningLogged = true;
       diagnostics({ event: "message.arrival.event.failed", code: String(error?.code ?? "unknown") });
+    }
+  }
+
+  /**
+   * 梗：只在她自己说破的那一刻记。
+   *
+   * 为什么只认这个时机（2026-11-14 验证）：这是世界上唯一免费且准的标注。
+   * 去外面抓抓不到——B 站弹幕是现场反应、热评是观后感，上万个样本里没有一条能搬走；
+   * 群里复读出来的是黑话（大怨种、斩杀），不是梗。她自己说“我在玩梗”的那一下，
+   * 后面跟她要指的东西就在前三句里。详见 DESIGN-meme-pool.md。
+   *
+   * 只存不判：原句取不到就不存，绝不塞一句看似相关的进去凑数。
+   */
+  function captureMemeFromUserMessage(agentId, stored, messageText) {
+    try {
+      const rows = store.getThread(agentId).messages;
+      const said = detectMemeMention(messageText);
+      if (said.said) {
+        const at = rows.findIndex((row) => row.id === stored.id);
+        const src = pickMemeSource(rows, at);
+        if (!src) {
+          diagnostics({ event: "meme.capture.skipped", agentId, reason: "no-source" });
+          return;
+        }
+        const { pool } = addUserMeme(store.getMemes(), { text: src.text, meaning: src.meaning, messageId: src.messageId, at: Date.now() });
+        store.saveMemes(pool);
+        diagnostics({ event: "meme.capture", agentId, kind: "said", chars: src.text.length, hasMeaning: Boolean(src.meaning) });
+        return;
+      }
+      // 她紧接着给的那句释义（“就是模仿猫咪生气叫声哇”），补给刚记下的那一条。
+      // 只认“上一条是我在说破”这一种场合，离远了就不当解释。
+      const meaning = detectMemeExplanation(messageText);
+      if (!meaning) return;
+      const prevUser = rows.slice(0, -1).reverse().find((row) => row.role === "user");
+      if (!prevUser || !detectMemeMention(prevUser.text ?? "").said) return;
+      const pool = store.getMemes();
+      const target = pool.slice().reverse().find((row) => row.status === "confirmed" && !row.meaning);
+      if (!target) return;
+      target.meaning = meaning;
+      store.saveMemes(pool);
+      diagnostics({ event: "meme.capture", agentId, kind: "explained", chars: meaning.length });
+    } catch (error) {
+      // 记梗失败不能挡聊天
+      diagnostics({ event: "meme.capture.failed", code: String(error?.code ?? "unknown") });
+    }
+  }
+
+  /**
+   * 这一轮把哪些梗摆到 ta 眼前。
+   *
+   * 默认三条，而且给过就算用过、三天内不再给——她要的是“活用”，不是“每次都说同一个”。
+   * 不替 ta 判断合适不合适：合不合性子在提示词里，跟放肆纪律同一个路子。
+   */
+  function memeTextFor(agentId) {
+    try {
+      const pool = store.getMemes();
+      if (!pool.length) return "";
+      const picked = selectMemesForAgent(pool, { agentId, limit: 3 });
+      if (!picked.length) return "";
+      const ids = new Set(picked.map((row) => row.id));
+      for (const id of ids) markMemeUsed(pool, { id, agentId });
+      store.saveMemes(pool);
+      return formatMemePrompt(picked, { userName: USER_NAME });
+    } catch (error) {
+      diagnostics({ event: "meme.prompt.failed", code: String(error?.code ?? "unknown") });
+      return "";
     }
   }
 
@@ -6347,6 +6416,8 @@ export function apply(ctx) {
       note: relationshipNote(effectiveRelationship(knowing), knowing.relationSeed),
       // 能损到什么份上：只跟关系档位有关，跟她说没说什么无关
       teaseText: teaseTextFor(agentId, knowing),
+      // 她玩过的那几手：给样本不给台词。空池就不给，不占字数。
+      memeText: memeTextFor(agentId),
       userName: USER_NAME,
     });
     // 只记体积和档位，不记私聊原文；字符数不是实际 token 用量。
@@ -9279,6 +9350,7 @@ export function apply(ctx) {
           diagnostics({ event: "adaptation.candidate", agentId, sourceMessageId: stored.id, signals: adaptationHint.signals });
           await reconcileAdaptationFromUserMessage(agentId, stored);
         }
+        captureMemeFromUserMessage(agentId, stored, messageText);
         // 弱观察只看用户真实发过的多日行为；explicit 刚落账时会先把同目标观察挡住。
         observeAdaptationFromHistory(agentId);
         const responseInFlight = [...turns.values()].some((turn) => turn.agentId === agentId && ["pending", "generating"].includes(turn.status))

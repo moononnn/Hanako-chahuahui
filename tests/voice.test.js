@@ -18,11 +18,13 @@ import {
   activeVoiceModel,
   activeVoiceProfileId,
   nextVoiceProfileId,
+  resolveVoiceId,
   voiceRequestHeaders,
   VOICE_PRESETS,
   migratedVoiceProfileId,
   synthesizeVoice,
   audioDurationMs,
+  buildTtsUrl,
   applyVoiceDelivery,
   stripUnknownVoiceTags,
   speakableChunks,
@@ -55,6 +57,18 @@ test("朗读模型配置只认自定义字段，并限制长度", () => {
   });
   assert.equal(normalizeVoiceModelConfig(null).protocol, "chat");
   assert.equal(normalizeVoiceModelConfig({ protocol: "wrong" }).protocol, "chat");
+  assert.equal(normalizeVoiceModelConfig({ protocol: "tts" }).protocol, "tts");
+});
+
+test("原生 TTS 协议只认两把嗓子，不需要模型名", () => {
+  const config = { protocol: "tts", providerId: "deepseek", baseUrl: "https://api.deepseek.com" };
+  assert.deepEqual(voiceChoicesForModel(config).map((item) => item.id), ["stella", "tide"]);
+  assert.equal(defaultVoiceIdForModel(config), "stella");
+  assert.equal(voiceGroupsForModel(config).length, 1);
+  const preset = VOICE_PRESETS.find((item) => item.id === "deepseek");
+  assert.equal(preset?.protocol, "tts");
+  assert.equal(preset?.baseUrl, "https://api.deepseek.com");
+  assert.equal(buildTtsUrl("https://api.deepseek.com/"), "https://api.deepseek.com/v1/tools/tts");
 });
 
 test("旧版固定档位带着 Key 的迁成普通条目，空壳丢掉", () => {
@@ -109,7 +123,7 @@ test("更早版本的单条全局朗读配置还能救回来一次", () => {
 });
 
 test("新建朗读模型的开箱模板带好协议和默认地址", () => {
-  assert.deepEqual(VOICE_PRESETS.map((item) => item.id), ["minimax", "minimax-turbo", "mimo", "openai"]);
+  assert.deepEqual(VOICE_PRESETS.map((item) => item.id), ["minimax", "minimax-turbo", "mimo", "openai", "deepseek"]);
   assert.equal(VOICE_PRESETS[0].protocol, "t2a");
   assert.equal(VOICE_PRESETS[0].baseUrl, "https://api.minimaxi.com");
   assert.equal(VOICE_PRESETS[2].baseUrl, "https://api.xiaomimimo.com/v1");
@@ -143,6 +157,73 @@ function captureVoiceRequest(payload) {
   };
   return { ctx, calls };
 }
+
+test("原生 TTS 会把干净文字和音色直接递给 /v1/tools/tts", async () => {
+  // 真实返回是一整段 WAV，不是 JSON，所以这里造一段 1 秒的 24kHz 单声道圈。
+  const wav = Buffer.alloc(44 + 48000);
+  wav.write("RIFF", 0, "ascii");
+  wav.write("WAVE", 8, "ascii");
+  wav.write("fmt ", 12, "ascii");
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(24000, 24);
+  wav.writeUInt32LE(48000, 28);
+  wav.write("data", 36, "ascii");
+  wav.writeUInt32LE(48000, 40);
+  const calls = [];
+  const ctx = {
+    network: {
+      fetch: async (url, init) => {
+        calls.push({ url, body: JSON.parse(init.body), headers: init.headers });
+        return { ok: true, status: 200, arrayBuffer: async () => wav }; 
+      },
+    },
+  };
+  const result = await synthesizeVoice(ctx, {
+    text: "哈哈哈你终于肯理我了",
+    voiceId: "tide",
+    modelConfig: { protocol: "tts", providerId: "deepseek", baseUrl: "https://api.deepseek.com", apiKey: "plain-key" },
+  });
+  assert.equal(calls[0].url, "https://api.deepseek.com/v1/tools/tts");
+  assert.equal(calls[0].headers.Authorization, "Bearer plain-key");
+  assert.equal(calls[0].body.voice_id, "tide");
+  assert.equal(calls[0].body.format, "wav");
+  // 它不认 (laughs) 那套记号，一个字也不能多插
+  assert.equal(calls[0].body.text, "哈哈哈你终于肯理我了");
+  assert.equal(result.format, "wav");
+  assert.equal(result.durationMs, 1000);
+});
+
+test("换成原生 TTS 后，旧模型存下的音色 id 不会原样递过去", () => {
+  const config = { protocol: "tts", providerId: "deepseek", baseUrl: "https://api.deepseek.com" };
+  // MiniMax 的系统音色名长得很像合法 id，以前会被当自定义音色放行；
+  // DeepSeek 只认 stella / tide，别的都得回落。
+  assert.equal(resolveVoiceId(config, "Chinese (Mandarin)_Warm_Girl"), "stella");
+  assert.equal(resolveVoiceId(config, "ttv-voice-2025060717322425-abc123"), "stella");
+  assert.equal(resolveVoiceId(config, "tide"), "tide");
+});
+
+test("原生 TTS 没给音色时用默认嗓子，失败时把接口原话带回来", async () => {
+  const calls = [];
+  const ctx = {
+    network: {
+      fetch: async (url, init) => {
+        calls.push({ url, body: JSON.parse(init.body) });
+        return { ok: false, status: 400, text: async () => JSON.stringify({ error: { message: "Content Exists Risk" } }) };
+      },
+    },
+  };
+  await assert.rejects(
+    () => synthesizeVoice(ctx, {
+      text: "你好呀。",
+      voiceId: "",
+      modelConfig: { protocol: "tts", providerId: "deepseek", baseUrl: "https://api.deepseek.com", apiKey: "plain-key" },
+    }),
+    /Content Exists Risk/,
+  );
+  assert.equal(calls[0].body.voice_id, "stella");
+});
 
 test("指定音色不会被配置归一化吞掉（MiniMax t2a）", async () => {
   const { ctx, calls } = captureVoiceRequest({ data: { audio: "68656c6c6f" } });

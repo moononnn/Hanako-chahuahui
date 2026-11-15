@@ -1526,6 +1526,16 @@
       return wrap;
     }
 
+    /**
+     * 朗读模型一换，音色目录就跟着换一家；详情卡里那块音色是上次渲染的，
+     * 不重画还摆着上一家那批嗓子，看着就像「没自动拉取」。
+     * 只在她正看着音色那一页时重画，不把人从别的页拽走。
+     */
+    async function refreshPartnerVoiceCard() {
+      if (!currentId || currentDetailTab !== "contact") return;
+      await openPartner(currentId, "contact");
+    }
+
     function paintGlobalVoiceModel() {
       const host = document.getElementById("voice-model-host");
       const note = document.getElementById("voice-model-note");
@@ -1578,12 +1588,15 @@
       host.appendChild(fields);
       const protocol = document.createElement("select");
       protocol.setAttribute("aria-label", "朗读协议");
-      [["chat", "OpenAI 兼容"], ["t2a", "MiniMax t2a_v2"]].forEach(([value, label]) => {
+      [["chat", "OpenAI 兼容"], ["t2a", "MiniMax t2a_v2"], ["tts", "原生 TTS（DeepSeek 等）"]].forEach(([value, label]) => {
         const option = document.createElement("option"); option.value = value; option.textContent = label; protocol.appendChild(option);
       });
-      protocol.value = stored.protocol === "t2a" ? "t2a" : "chat";
+      protocol.value = ["chat", "t2a", "tts"].includes(stored.protocol) ? stored.protocol : "chat";
       const groupField = voiceModelInput("GroupId", "groupId", stored.groupId || "");
       groupField.hidden = protocol.value !== "t2a";
+      // 原生 TTS 没有模型名这个概念，摆了也是白摆，跟着协议一起藏掉。
+      const modelField = voiceModelInput("模型名", "model", stored.model || "");
+      modelField.hidden = protocol.value === "tts";
       // API Key 看不到内容，就用一枚状态小胶囊告诉她到底填没填
       const keyField = voiceModelInput("API Key", "apiKey", "", "password");
       const keyInput = keyField.querySelector("input");
@@ -1611,11 +1624,14 @@
         voiceModelInput("名称", "label", stored.label || ""),
         protocol,
         voiceModelInput("接口地址", "baseUrl", stored.baseUrl || ""),
-        voiceModelInput("模型名", "model", stored.model || ""),
+        modelField,
         keyField,
         groupField,
       );
-      protocol.addEventListener("change", () => { groupField.hidden = protocol.value !== "t2a"; });
+      protocol.addEventListener("change", () => {
+        groupField.hidden = protocol.value !== "t2a";
+        modelField.hidden = protocol.value === "tts";
+      });
 
       const readConfig = () => {
         const read = (key) => (fields.querySelector(`[data-voice-key="${key}"]`)?.value ?? "").trim();
@@ -1652,6 +1668,7 @@
         voiceDraft = null;
         host.dataset.editing = id;
         paintGlobalVoiceModel();
+        await refreshPartnerVoiceCard();
       });
       const remove = document.createElement("button");
       remove.type = "button";
@@ -1667,6 +1684,7 @@
         voiceDraft = null;
         host.dataset.editing = "";
         paintGlobalVoiceModel();
+        await refreshPartnerVoiceCard();
       });
       actions.append(save, remove);
       host.appendChild(actions);
@@ -1679,11 +1697,12 @@
           if (!await saveGlobal({ voiceProfile: value }, "已切换到这条朗读模型")) return;
         }
         paintGlobalVoiceModel();
+        await refreshPartnerVoiceCard();
       });
 
       dressSelects(host);
       note.textContent = isNew
-        ? "填好接口地址、模型名和 API Key，保存后就能随时切换。"
+        ? "填好接口地址和 API Key（OpenAI 兼容那类还要模型名），保存后就能随时切换。"
         : "留空的 API Key 会沿用已保存的 Key；换个供应商就新建一条。";
     }
 
@@ -3480,7 +3499,9 @@
       // 于是听着像「选哪个都一样」。
       let savedVoiceId = s.voice?.voiceByProfile?.[profileId] || s.voice?.voiceId || "";
       const pickedVoice = voiceChoices.some((item) => item.id === savedVoiceId);
-      const voiceId = savedVoiceId || voiceChoices[0]?.id || "";
+      // 存下来的 id 可能是上一个朗读模型的（比如 MiniMax 的音色名），换模型后它不在目录里；
+      // 这种时候高亮第一把暄子，跟后端回落的那个一致，不至于一个都没选中。
+      const voiceId = pickedVoice ? savedVoiceId : (voiceChoices[0]?.id || "");
       if (!globalSettings.voiceReady) {
         const warn = document.createElement("p");
         warn.className = "detail-field-note warn";
@@ -3530,6 +3551,12 @@
         }
       };
       if (voiceChoices.length) {
+        // 音色是按当前朗读模型拉出来的，把来源写清楚，免得她以为该有全世界的嗓子。
+        const voiceSource = document.createElement("p");
+        voiceSource.className = "detail-field-note";
+        const activeVoiceLabel = globalSettings.voiceProfiles?.[profileId]?.label || "未命名的朗读模型";
+        voiceSource.textContent = `音色来自「${activeVoiceLabel}」，换朗读模型这里会跟着换（当前 ${voiceChoices.length} 个）。`;
+        voiceCard.appendChild(voiceSource);
         const picker = document.createElement("div");
         picker.className = "voice-picker";
         const groups = voiceGroups.length ? voiceGroups : [{ id: "default", label: "音色", voices: voiceChoices }];
