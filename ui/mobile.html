@@ -8,6 +8,7 @@
 <title>茶话会</title>
 <link rel="stylesheet" href="/assets/panel.css">
 <link rel="stylesheet" href="/assets/bubble-skins.css">
+<link rel="stylesheet" href="/assets/bubble-gallery.css">
 <link rel="stylesheet" href="/assets/mobile-tools.css">
 <style>
   /* 手机壳：只负责铺满屏幕和排布，聊天区里的每一块（行、气泡、戳一戳、头像）
@@ -309,6 +310,14 @@
       calc(var(--ill-right) * var(--ill-unit) * 1px)
       calc(var(--ill-bottom) * var(--ill-unit) * 1px)
       calc(var(--ill-left) * var(--ill-unit) * 1px);
+  }
+  /* 新画廊同样覆盖 #chat 的 6px 默认值；镜像后的两侧护栏随壳交换。 */
+  #chat[data-me-skin^="art-"] .row.me .bubble.ch-media,
+  #chat[data-ta-skin^="art-"] .row.ta .bubble.ch-media {
+    padding-top: var(--art-text-top);
+    padding-right: max(16px, calc(var(--art-photo-right) * var(--art-unit) * 1px));
+    padding-bottom: max(var(--art-text-bottom), calc(var(--art-b) * var(--art-unit) * 1px));
+    padding-left: max(16px, calc(var(--art-photo-left) * var(--art-unit) * 1px));
   }
   /* 引用块：最多三行，点开看全文（不在字符串里硬截 80） */
   #chat .ch-quote-strip { max-height: 4.6em; overflow: hidden; white-space: normal; }

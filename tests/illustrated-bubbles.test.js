@@ -106,7 +106,7 @@ test("四款插画气泡在白名单里：分组、名字、说明都在", () =>
     assert.ok(Array.isArray(skin.moods) && skin.moods.length, `${row.id} 没写心情，伙伴挑不到它`);
   }
   // 清单里仍然是「原来那十四套 + 新四套」，顺序别乱
-  assert.equal(BUBBLE_SKINS.length, OLD_IDS.length + ILL.length);
+  assert.equal(BUBBLE_SKINS.length, OLD_IDS.length + ILL.length + 8);
 });
 
 test("四款能存进设置、读出来还是它；不认得的照旧回原味", () => {

@@ -1,0 +1,242 @@
+[
+  {
+    "name": "rabbit",
+    "id": "art-rabbit",
+    "size": [
+      768,
+      436
+    ],
+    "slices": [
+      218,
+      340,
+      110,
+      130
+    ],
+    "anchor": "tr",
+    "corner": [
+      340,
+      218
+    ],
+    "raster": [
+      194,
+      133
+    ],
+    "frames": 33,
+    "changedByUnit": {
+      "0.11": 177,
+      "0.15": 305
+    },
+    "changedPixels": 305,
+    "sourceSha256": "f6a0a2f70cee28c0b8c1f12e914ebc6f21965d5605bd416079ed6a84c42c4aed"
+  },
+  {
+    "name": "capybara",
+    "id": "art-capybara",
+    "size": [
+      768,
+      434
+    ],
+    "slices": [
+      205,
+      320,
+      100,
+      130
+    ],
+    "anchor": "tr",
+    "corner": [
+      320,
+      205
+    ],
+    "raster": [
+      184,
+      127
+    ],
+    "frames": 33,
+    "changedByUnit": {
+      "0.11": 52,
+      "0.15": 82
+    },
+    "changedPixels": 82,
+    "sourceSha256": "d6cccb2063dcfe865421a6c6502ad57595e1385402f9c2a888a5e9d988f3f42c"
+  },
+  {
+    "name": "jellyfish",
+    "id": "art-jellyfish",
+    "size": [
+      768,
+      440
+    ],
+    "slices": [
+      270,
+      310,
+      105,
+      130
+    ],
+    "anchor": "tr",
+    "corner": [
+      310,
+      270
+    ],
+    "raster": [
+      179,
+      159
+    ],
+    "frames": 33,
+    "changedByUnit": {
+      "0.11": 111,
+      "0.15": 198
+    },
+    "changedPixels": 198,
+    "sourceSha256": "92c883c1916dc04888497bd0d21965909321da62999507bb594f813bef73b97f"
+  },
+  {
+    "name": "chick",
+    "id": "art-chick",
+    "size": [
+      768,
+      443
+    ],
+    "slices": [
+      205,
+      320,
+      105,
+      130
+    ],
+    "anchor": "tr",
+    "corner": [
+      320,
+      205
+    ],
+    "raster": [
+      184,
+      127
+    ],
+    "frames": 33,
+    "changedByUnit": {
+      "0.11": 91,
+      "0.15": 150
+    },
+    "changedPixels": 150,
+    "sourceSha256": "0a2438aac119d052407c95a747499a9c834bc5f69e2730ab056fee03e9a13e39"
+  },
+  {
+    "name": "cloud",
+    "id": "art-cloud",
+    "size": [
+      768,
+      312
+    ],
+    "slices": [
+      96,
+      205,
+      115,
+      175
+    ],
+    "anchor": "br",
+    "corner": [
+      205,
+      115
+    ],
+    "raster": [
+      127,
+      82
+    ],
+    "frames": 33,
+    "changedByUnit": {
+      "0.11": 38,
+      "0.15": 68
+    },
+    "changedPixels": 68,
+    "sourceSha256": "08b32fd048beea7504018fe658ccbd7affc5b2413fc537614d6c83f9c7389749"
+  },
+  {
+    "name": "letter",
+    "id": "art-letter",
+    "size": [
+      768,
+      239
+    ],
+    "slices": [
+      90,
+      150,
+      68,
+      155
+    ],
+    "anchor": "tl",
+    "corner": [
+      155,
+      90
+    ],
+    "raster": [
+      102,
+      69
+    ],
+    "frames": 33,
+    "changedByUnit": {
+      "0.11": 38,
+      "0.15": 72
+    },
+    "changedPixels": 72,
+    "sourceSha256": "079616c8353fb8a8fe0ae8ad3c1566a3b0395dfd926f7375697f503eae64f62b"
+  },
+  {
+    "name": "pixel",
+    "id": "art-pixel",
+    "size": [
+      768,
+      189
+    ],
+    "slices": [
+      52,
+      175,
+      67,
+      105
+    ],
+    "anchor": "br",
+    "corner": [
+      175,
+      67
+    ],
+    "raster": [
+      112,
+      58
+    ],
+    "frames": 31,
+    "changedByUnit": {
+      "0.11": 42,
+      "0.15": 62
+    },
+    "changedPixels": 62,
+    "sourceSha256": "d9c00093169eaebe70ee104065c136c6165d1e5e61c0201514cb66db0049cfb0"
+  },
+  {
+    "name": "aquarium",
+    "id": "art-aquarium",
+    "size": [
+      768,
+      189
+    ],
+    "slices": [
+      52,
+      180,
+      69,
+      135
+    ],
+    "anchor": "br",
+    "corner": [
+      180,
+      69
+    ],
+    "raster": [
+      114,
+      59
+    ],
+    "frames": 33,
+    "changedByUnit": {
+      "0.11": 29,
+      "0.15": 53
+    },
+    "changedPixels": 53,
+    "sourceSha256": "1272958d231cee298535666260ec555c38af109f16552b10be96fa1d666673a4"
+  }
+]

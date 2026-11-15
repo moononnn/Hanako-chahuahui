@@ -594,7 +594,13 @@ test("手机插画资源：只开放固定目录，字节与 MIME 原样返回",
   for (const stem of ["whale-bubbles", "croc-details", "fox-details", "berry-details"]) {
     names.push(`illustrated-bubbles/${stem}-still.png`, `illustrated-bubbles/${stem}-motion.webp`);
   }
-  assert.equal(names.length, 20, "插画资源一共 20 件（12 原壳与头角 + 2 鲸鱼小泡 + 6 三款局部细节）");
+  for (const stem of ["rabbit", "capybara", "jellyfish", "chick", "cloud", "letter", "pixel", "aquarium"]) {
+    for (const suffix of [".png", "-base.png", "-still.png", "-motion.webp"]) names.push(`illustrated-bubbles/art-${stem}${suffix}`);
+  }
+  assert.equal(names.length, 52, "旧插画20件，新画廊32件");
+  const css = await access.dispatch("mobile.asset", { name: "bubble-gallery.css" });
+  assert.match(css.type, /text\/css/);
+  assert.equal(Buffer.from(css.base64, "base64").toString("utf8"), fs.readFileSync(new URL("../ui/assets/bubble-gallery.css", import.meta.url), "utf8"));
   for (const name of names) {
     const result = await access.dispatch("mobile.asset", { name });
     const expected = fs.readFileSync(new URL(`../ui/assets/${name}`, import.meta.url));

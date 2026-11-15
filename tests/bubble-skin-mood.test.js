@@ -52,8 +52,10 @@ test("当天实际换过后，反复读取和不同种子都不会再换", () =>
     assert.equal(next.skin, first.skin); assert.equal(next.changed, false);
   }
 });
-test("没有心情或没有对应皮肤时不凑变化，仍保留长期旧款", () => {
-  for (const day of [null, { moodId: "calm" }, mood("hurt"), mood("angry")]) {
+test("没有心情账时不凑变化，仍保留长期旧款", () => {
+  // 十三格心情现在都有能穿上的款（委屈、生气由新画廊那两款认领），
+  // 「心情落不到任何一套」这条分支只剩没结算出心情时才会走到。
+  for (const day of [null, { moodId: "calm" }, { moodId: "calm", date: "2026-11-12" }]) {
     const result = pickPartnerSkin(book(), { mood: day, now: NOW, agentId: "fixture" });
     assert.equal(result.skin, "polka"); assert.equal(result.changed, false);
   }

@@ -347,16 +347,22 @@ test("插画嵌套资源经网关保留动画字节，其他目录与穿越仍�
   const { port, base, calls } = await boot(t, { overrides: {
     "mobile.asset": ({ name }) => ({
       base64: readFileSync(new URL(`../ui/assets/${name}`, import.meta.url)).toString("base64"),
-      type: name.endsWith(".webp") ? "image/webp" : "image/png",
+      type: name.endsWith(".css") ? "text/css; charset=utf-8" : name.endsWith(".webp") ? "image/webp" : "image/png",
     }),
   } });
-  // 插画资源一共 20 件：12 件原壳与头角 + 2 件鲸鱼小泡 + 6 件三款局部细节
-  const stems = ["croc", "fox", "berry", "whale", "whale-bubbles", "croc-details", "fox-details", "berry-details"];
+  const css = await fetch(`${base}/assets/bubble-gallery.css`);
+  assert.equal(css.status, 200);
+  assert.match(css.headers.get("content-type"), /text\/css/);
+  assert.equal(await css.text(), readFileSync(new URL("../ui/assets/bubble-gallery.css", import.meta.url), "utf8"));
+  // 旧插画20件，新画廊每款原画/底壳/静态角/动态角共32件。
+  const art = ["rabbit", "capybara", "jellyfish", "chick", "cloud", "letter", "pixel", "aquarium"].map(n => `art-${n}`);
+  const stems = ["croc", "fox", "berry", "whale", "whale-bubbles", "croc-details", "fox-details", "berry-details", ...art];
   const withShell = ["croc", "fox", "berry", "whale"];
   let served = 0;
   for (const stem of stems) {
-    const files = withShell.includes(stem)
-      ? [`${stem}.png`, `${stem}-still.png`, `${stem}-motion.webp`]
+    const files = art.includes(stem)
+      ? [`${stem}.png`, `${stem}-base.png`, `${stem}-still.png`, `${stem}-motion.webp`]
+      : withShell.includes(stem) ? [`${stem}.png`, `${stem}-still.png`, `${stem}-motion.webp`]
       : [`${stem}-still.png`, `${stem}-motion.webp`];
     for (const file of files) {
       const name = `illustrated-bubbles/${file}`;
@@ -368,7 +374,7 @@ test("插画嵌套资源经网关保留动画字节，其他目录与穿越仍�
       served += 1;
     }
   }
-  assert.equal(served, 20, "插画资源应当一件不少地都发得出去");
+  assert.equal(served, 52, "旧款和新画廊52件资源应当一件不少地都发得出去");
   const before = calls.filter(row => row.op === "mobile.asset").length;
   for (const pathname of ["/assets/other/croc.png", "/assets/illustrated-bubbles/deep/croc.png",
     "/assets/illustrated-bubbles/%2e%2e%2fpanel.css", "/assets/illustrated-bubbles/a%5cb.png",

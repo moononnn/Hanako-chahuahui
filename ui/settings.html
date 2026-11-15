@@ -8,7 +8,7 @@
   <title>茶话会 · 设置</title>
   <script>
     // 样式表得现拉，不能等缓存（同 panel.html：宿主给静态文件挂了长缓存）
-    for (const href of ["assets/settings.css", "assets/beautify-select.css", "assets/bubble-skins.css", "assets/image-settings.css"]) {
+    for (const href of ["assets/settings.css", "assets/beautify-select.css", "assets/bubble-skins.css", "assets/bubble-gallery.css", "assets/image-settings.css"]) {
       const link = document.createElement("link");
       link.rel = "stylesheet";
       link.href = `${href}?t=${Date.now()}`;

@@ -1,5 +1,16 @@
 # TESTING · 茶话会
 
+## 八款生图动态气泡（2026-11-15，0.18.2-dev.3）
+
+- 新增桃桃垂耳兔、奶茶水豚、月光水母、黄油小鸡、晴空云糖、折角情书、像素心跳、海盐水族箱。后四款采用云形、折角纸、阶梯像素、胶囊水族箱的不同轮廓。八张透明原画来自本轮生图，没有复用 QQ 商业气泡素材。
+- 新样式独立放在 `ui/assets/bubble-gallery.css`；旧四款图片与 `bubble-skins.css` 未改。原画九切片、独立挖角底壳、半尺寸静态角与原生 WebP 动态角；局部动作约8秒一轮，含停顿，正文不参与变换。实际编码逐帧检查四个角色表情不动、首帧与静态一致；.11/.15实际尺度每款至少8个明显变化像素。
+- 新画廊单独设正文与短句 padding，避免角色切片高度直接变成文字留白。减少动态时只加载静态角；贴图、影音、语音转写、撤回不套插画。转写保留不透明主题底色。照片两侧留白按镜像交换；手机使用带 `#chat` 的规则覆盖默认6px。设置样张使用足够权重的规则，并限制在96px样张盒内。
+- 新清单进入现有三组与心情自选池；旧设置与当前选中值不迁移、不重写。新八款我侧将壳与补角一起镜像，旧四款规则不变。
+- 最终相关回归：`node --test --test-concurrency=1 --test-timeout=60000 tests/bubble-gallery.test.js tests/bubble-skins.test.js tests/bubble-skin-mood.test.js tests/illustrated-bubbles.test.js tests/ui.test.js tests/ui-loading.test.js tests/mobile-ui.test.js tests/mobile-routes.test.js tests/mobile-gateway-http.test.js tests/chat-image-photo-context.test.js tests/chat-image-proactive.test.js tests/chat-image.test.js tests/proactive.test.js` → **580/580通过，0跳过**；JS/Python语法及 `git diff --check` 通过。
+- 浏览器：分别以 `BUBBLE_TEST_WIDTH=390/1000` 运行 `node tests/bubble-gallery-browser.mjs`，每宽40区覆盖双侧长短文和设置样张、48个媒体/转写/撤回用例；手机媒体规则直接从真实 `mobile.html` 提取并挂 `#chat` 实测。八款动态差各≥52像素（>3级），reduce均无WebP；设置窄盒、文字范围与上下留白通过。额外两条实际 HTTP/资源路由验证全部52件新旧插画字节、MIME与路径穿越拒绝。
+- 构建：`python scripts/build-bubble-gallery.py` 可从已保存原画重建；首次来源可通过 `--sources <本地JSON>` 提供，来源绝对路径不进仓库。Pillow仅为构建依赖，运行时无新增依赖。浏览器测试用独立headless配置，不接管桌面浏览器，不读生产聊天。
+- 验证范围为隔离浏览器与相关回归，未跑全量，未人工操控宿主界面；本轮不发布、不改当前选中气泡。
+
 ## 主动生活照片最小优化（2026-11-15，0.18.2-dev.2）
 
 - 照片依据不再被主动消息抹掉：`recentSceneFor` 新增可选参数（默认行为一字未改），照片专用模式忽略主动消息边界、但酒馆初见仍是边界，依据可回溯 24 小时；主动消息本身不当 user/reply，连续几条助手消息算同一轮回复。index 另取 `photoContext`（`lib/proactive.js` PHOTO_SCENE_MAX_AGE_MS / ignoreProactive），只供照片挑选与 scene 去重键，普通 `sceneEcho` 与关系逻辑未动。

@@ -10,7 +10,7 @@
     // 宿主给静态文件挂了长缓存，于是出过这样的事：代码改了、重启了，界面还是老样子
     // （背景铺不上、选图预览还是裁的）。给地址挂一个本次加载的时间戳，每次都对一次。
     // 脚本同步跑在 head 里，body 还没开始画，不会闪。
-    for (const href of ["assets/panel.css", "assets/bubble-skins.css"]) {
+    for (const href of ["assets/panel.css", "assets/bubble-skins.css", "assets/bubble-gallery.css"]) {
       const link = document.createElement("link");
       link.rel = "stylesheet";
       link.href = `${href}?t=${Date.now()}`;
@@ -2372,8 +2372,9 @@
         illFitPending = new Set();
         for (const box of batch) {
           if (!box.isConnected || box.classList.contains("ill-tight")) continue;
-          // 不是插画皮肤时没有 --ill-unit，跳过去
-          if (!getComputedStyle(box).getPropertyValue("--ill-unit").trim()) continue;
+          // 不是插画皮肤时没有 --ill-unit，跳过去；新画廊（art-*）按 id 前缀认。
+          const gallery = box.closest('[data-me-skin^="art-"], [data-ta-skin^="art-"]');
+          if (!gallery && !getComputedStyle(box).getPropertyValue("--ill-unit").trim()) continue;
           if (box.getBoundingClientRect().width < ILL_TIGHT_MAX_WIDTH) box.classList.add("ill-tight");
         }
       });

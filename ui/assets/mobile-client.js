@@ -2569,7 +2569,9 @@ export function startMobileClient(doc = document, { analyzeBackground = analyzeB
       illFitPending = new Set();
       for (const box of batch) {
         if (!box.isConnected || box.classList.contains("ill-tight")) continue;
-        if (!getComputedStyle(box).getPropertyValue("--ill-unit").trim()) continue;
+        // 旧插画皮肤靠 --ill-unit 认；新画廊（art-*）按 id 前缀认。
+        const gallery = box.closest('[data-me-skin^="art-"], [data-ta-skin^="art-"]');
+        if (!gallery && !getComputedStyle(box).getPropertyValue("--ill-unit").trim()) continue;
         const width = box.getBoundingClientRect().width;
         // 没布局的环境（jsdom）量出来是 0，不当成短句
         if (width > 0 && width < ILL_TIGHT_MAX_WIDTH) box.classList.add("ill-tight");
