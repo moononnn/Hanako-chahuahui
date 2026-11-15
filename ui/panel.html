@@ -3691,10 +3691,6 @@
             imageNode.alt = m.attachment.name || "发送的图片";
             imageNode.loading = "lazy";
             imageNode.dataset.visionNote = String(m.visionNote ?? "");
-            // 表情包本来就不穿插画壳（实时那条路把图贴在 msg-line 上、不进气泡）。
-            // 刷新后走的是这条历史渲染，图被塞进气泡里，只靠 :has(.message-image) 分不出是照片还是表情，
-            // 于是同一张图发出去时无壳、重开有壳。这里补一个标记，让护栏能把它认出来。
-            lastBubble.classList.add("is-sticker");
             appendImageToBubble(lastBubble, imageNode);
             mountAttachmentImage(imageNode, m.attachment.id, current, Boolean(opts.keepBottom));
           }
