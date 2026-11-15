@@ -253,7 +253,7 @@ test("表情包、视频、音频不吃这一套；带图的消息和语音气�
   // 气泡本身、最小宽度、带图内边距与六条图层规则都要排除表情/视频/音频，
   // 再加云鲸收紧、云鲸小泡、三款细节与两处底壳挖角，
   // 再加上我这一侧的镜像五条（正文顶距、狐狸左让位、壳、两角的头图定位）。
-  const guardRe = /:not\(\.voice-transcript, \.is-recalled, :has\(\.sticker, video, audio\)\)/g;
+  const guardRe = /:not\(\.voice-transcript, \.is-recalled, :has\(\.sticker, \.is-sticker, video, audio\)\)/g;
   const guarded = illustratedSection.match(guardRe) ?? [];
   assert.equal(guarded.length, 23, "插画气泡的规则少了媒体护栏");
   // 语音气泡跟普通气泡一样沿用插画外壳：二十三条护栏里一条都不许再排语音气泡
@@ -267,6 +267,17 @@ test("表情包、视频、音频不吃这一套；带图的消息和语音气�
   assert.match(illustratedSection, /padding: var\(--ill-text-top, calc\(var\(--ill-top\) \* var\(--ill-unit\) \* 1px \+ 3px\)\) 12px 14px;/);
 });
 
+test("表情包刷新后也不穿壳：历史渲染与手机端都给气泡打 is-sticker", () => {
+  // 实时那条路把表情贴在 msg-line 上、不进气泡；重开聊天走的是历史渲染，图被塞进气泡里。
+  // 只靠 :has(.message-image) 分不出照片还是表情，同一张图就成了「发出去无壳、重开有壳」。
+  const panel = fs.readFileSync(new URL("../ui/panel.html", import.meta.url), "utf8");
+  const mobile = fs.readFileSync(new URL("../ui/assets/mobile-client.js", import.meta.url), "utf8");
+  assert.match(panel, /lastBubble\.classList\.add\("is-sticker"\)/);
+  assert.match(mobile, /message\.kind === "sticker" \? " is-sticker" : ""/);
+  // 护栏得认得这个标记，否则打了也没用
+  assert.match(illustratedSection, /:has\(\.sticker, \.is-sticker, video, audio\)/);
+});
+
 test("二十三条图层规则逐条都给语音留位", () => {
   // 语音气泡要跟文字气泡长得一样，壳、角、挖角、细节一样都不能少。
   // 所以这二十三条护栏（气泡本身、最小宽度、带图内边距、三条正文顶部收紧、我这一侧的五条镜像、
@@ -277,7 +288,7 @@ test("二十三条图层规则逐条都给语音留位", () => {
     assert.doesNotMatch(chunk, /\.voice-bubble/, "还有规则把语音气泡排在插画外壳之外");
     assert.match(chunk, /\.voice-transcript/, "转写那块仍要排除");
     assert.match(chunk, /\.is-recalled/, "撤回的气泡仍要排除");
-    assert.match(chunk, /:has\(\.sticker, video, audio\)/, "表情包、视频、音频仍要排除");
+    assert.match(chunk, /:has\(\.sticker, \.is-sticker, video, audio\)/, "表情包、视频、音频仍要排除");
   }
   // 分层看：八条给气泡本身/宽度/带图内边距/顶部收紧/镜像让位，六条挖角，九条角与细节
   const before = chunks.filter((c) => c.includes("::before")).length;
@@ -355,7 +366,7 @@ test("另外三款也收紧正文顶部：数值、下限、两侧独立、受�
   assert.doesNotMatch(pairRule, /ill-croc|ill-whale/, "狐狸草莓那条不许混进别的款");
   // 两条都带完整媒体护栏：带图、带转写、带撤回的气泡不吃这一套（语音气泡改吃插画外壳）
   for (const rule of [crocRule, pairRule]) {
-    assert.match(rule, /:not\(\.voice-transcript, \.is-recalled, :has\(\.sticker, video, audio\)\)/);
+    assert.match(rule, /:not\(\.voice-transcript, \.is-recalled, :has\(\.sticker, \.is-sticker, video, audio\)\)/);
     assert.doesNotMatch(rule, /\.voice-bubble/, "语音气泡应当跟普通气泡一样沿用插画外壳");
   }
   // 变量挂在气泡自己身上，不挂共享容器
@@ -528,7 +539,7 @@ test("系统减少动态时，云鲸的小泡换静态版（透明，不冒泡�
   assert.match(whaleRule, /\.skin-sample-bubble:is\(\[data-me-skin="ill-whale"\]\)\.me/);
   assert.match(whaleRule, /\.skin-sample-bubble:is\(\[data-ta-skin="ill-whale"\]\)\.ta/);
   // 护栏保持
-  assert.match(whaleRule, /:not\(\.voice-transcript, \.is-recalled, :has\(\.sticker, video, audio\)\)/);
+  assert.match(whaleRule, /:not\(\.voice-transcript, \.is-recalled, :has\(\.sticker, \.is-sticker, video, audio\)\)/);
   assert.doesNotMatch(whaleRule, /\.voice-bubble/, "语音气泡应当跟普通气泡一样沿用插画外壳");
   // 小熊跨侧的动效仍被挡着
   assert.equal((illustratedSection.match(/animation: none !important;/g) ?? []).length, 2,

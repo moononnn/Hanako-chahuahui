@@ -2615,7 +2615,7 @@ export function startMobileClient(doc = document, { analyzeBackground = analyzeB
       const line = doc.createElement("div");
       line.className = "msg-line ch-media-line";
       const bubble = doc.createElement("div");
-      bubble.className = "bubble ch-media";
+      bubble.className = "bubble ch-media" + (message.kind === "sticker" ? " is-sticker" : "");
       bubble.__pieceText = pieces.join("\n");
       bubble.append(attachmentNode(message));
       for (const piece of pieces) {
