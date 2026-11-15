@@ -2549,6 +2549,34 @@ export function startMobileClient(doc = document, { analyzeBackground = analyzeB
     return "";
   }
 
+  /**
+   * 插画气泡窄到快散架时整套缩一档（.18 → .13，样式见 bubble-skins.css 的 .ill-tight）。
+   * 与桌面 panel.html 那份判定同一条规矩：壳的左右两片合起来就要 90px，
+   * 光拉最小宽度救不了短句，得整套同比例小一号。
+   */
+  const ILL_TIGHT_MAX_WIDTH = 130;
+  // 没有 rAF 的环境（jsdom、极旧壳）直接不做这件事：那里没有真布局，量了也白量。
+  const illFitSchedule = typeof requestAnimationFrame === "function" ? requestAnimationFrame : null;
+  let illFitPending = new Set();
+  let illFitFrame = 0;
+  function queueIllustratedFit(node) {
+    if (!illFitSchedule || !node || !node.getBoundingClientRect) return;
+    illFitPending.add(node);
+    if (illFitFrame) return;
+    illFitFrame = illFitSchedule(() => {
+      illFitFrame = 0;
+      const batch = illFitPending;
+      illFitPending = new Set();
+      for (const box of batch) {
+        if (!box.isConnected || box.classList.contains("ill-tight")) continue;
+        if (!getComputedStyle(box).getPropertyValue("--ill-unit").trim()) continue;
+        const width = box.getBoundingClientRect().width;
+        // 没布局的环境（jsdom）量出来是 0，不当成短句
+        if (width > 0 && width < ILL_TIGHT_MAX_WIDTH) box.classList.add("ill-tight");
+      }
+    });
+  }
+
   function appendMessage(container, message, partnerName) {
     const mine = message.role === "user";
     if (message.recalled) {
@@ -2608,6 +2636,7 @@ export function startMobileClient(doc = document, { analyzeBackground = analyzeB
           bubble.__pieceText = String(piece);
         }
         line.append(bubble);
+        queueIllustratedFit(bubble);
         col.append(line);
       }
     }

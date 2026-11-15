@@ -2350,6 +2350,35 @@
       if (last < body.length) node.appendChild(document.createTextNode(body.slice(last)));
     }
 
+    /**
+     * 插画气泡窄到快散架时整套缩一档（.18 → .13，样式见 bubble-skins.css 的 .ill-tight）。
+     * 壳是位图九切片，左右两片合起来就要 90px，光拉最小宽度救不了短句：
+     * 气泡被撑到 120 宽仍然一大片空，图还比字大。缩的是整套（角、切片、顶距、最小宽），
+     * 比例不变、只是小一号。
+     *
+     * 判定用「还没缩时的宽度」：120 宽说明正文没占满，减一档；真正长的句子本来就比 156 宽，
+     * 不会被误伤。一批渲染只量一次，量完再改 class，缩完只会更窄，不会来回抖。
+     */
+    const ILL_TIGHT_MAX_WIDTH = 130;
+    let illFitPending = new Set();
+    let illFitFrame = 0;
+    function queueIllustratedFit(node) {
+      if (!node) return;
+      illFitPending.add(node);
+      if (illFitFrame) return;
+      illFitFrame = requestAnimationFrame(() => {
+        illFitFrame = 0;
+        const batch = illFitPending;
+        illFitPending = new Set();
+        for (const box of batch) {
+          if (!box.isConnected || box.classList.contains("ill-tight")) continue;
+          // 不是插画皮肤时没有 --ill-unit，跳过去
+          if (!getComputedStyle(box).getPropertyValue("--ill-unit").trim()) continue;
+          if (box.getBoundingClientRect().width < ILL_TIGHT_MAX_WIDTH) box.classList.add("ill-tight");
+        }
+      });
+    }
+
     function bubble(role, text, anchor = null, at = null) {
       el.emptyTip?.remove();
       const parsedAt = Date.parse(at ?? "");
@@ -2381,6 +2410,8 @@
       const b = document.createElement("div");
       b.className = "bubble";
       fillBubbleText(b, text);
+      // 短句缩档是纯观感微调；截取单函数跑的单测里没有它，也不能让它把渲染带倒
+      if (typeof queueIllustratedFit === "function") queueIllustratedFit(b);
       line.append(b, time);
       col.appendChild(line);
       row.appendChild(col);

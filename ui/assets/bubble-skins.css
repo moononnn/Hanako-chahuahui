@@ -803,8 +803,11 @@
 }
 
 /* ── 尺度：屏幕上一格等于原图的几个像素 ──
-   聊天 .18；设置页那枚小样张 .12（小一号，别把两列卡撑破）。 */
-[data-me-skin^="ill-"], [data-ta-skin^="ill-"] { --ill-unit: .18; }
+   聊天 .15；设置页那枚小样张 .12（小一号，别把两列卡撑破）。
+   2026-11-15：聊天档从 .18 收到 .15。角色角高 262px 时，.18 会让正文顶部
+   空出 45px，整只气泡比别的款高出一截（量过角图，角色下沿就在 46.8px，
+   已经贴着边、没法再往下压）。收到 .15 后顶部留白 37px，和伙伴那侧的观感对得上。 */
+[data-me-skin^="ill-"], [data-ta-skin^="ill-"] { --ill-unit: .15; }
 .skin-sample-bubble[data-me-skin^="ill-"],
 .skin-sample-bubble[data-ta-skin^="ill-"] { --ill-unit: .12; }
 
@@ -840,7 +843,8 @@
 
 /* ── 泡泡本身：透明、无描边、无影、不裁切 ──
    顶部为角色留空，左右文字留白独立于图像切片，避免长文被挤成细柱。
-   带图、带表情、撤回的气泡不吃这套：照片保持原来的尺寸和浅色回退。
+   表情包、视频、音频不吃这套（它们自己就是主体）；
+   带图的气泡倒是穿壳，只是内边距换成壳的切片厚度（见下）。
    语音气泡跟普通气泡一样沿用这套插画外壳（下面每条图层规则的护栏里
    都不再排语音气泡）；转写那条仍单独排除，它不是气泡，是文字块。 */
 :is(
@@ -848,7 +852,7 @@
   .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]).me,
   :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]).ta
-):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio)) {
+):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio)) {
   background: transparent;
   border: 0;
   box-shadow: none;
@@ -856,14 +860,45 @@
   isolation: isolate;
   position: relative;
   /* Keep text below the character, not inside the wide image-slice gutters.
-     顶部留白走 --ill-text-top：默认就是这条算式，云鲸另有一条收紧的（见下）。 */
-  padding: var(--ill-text-top, calc(var(--ill-top) * var(--ill-unit) * 1px + 6px)) 20px 20px;
+     顶部留白走 --ill-text-top；左右与底部也按 --ill-unit 同比例缩（.15 时就是 20px），
+     否则短句缩档后壳小了、内边距还是 20，文字四周就空出一圈（2026-11-15 实机反馈）。 */
+  padding: var(--ill-text-top, calc(var(--ill-top) * var(--ill-unit) * 1px + 6px)) calc(var(--ill-unit) * 133px) calc(var(--ill-unit) * 133px);
 }
-/* 聊天里的插画气泡：最小宽度给一点，壳的内圈才放得下字 */
+/* ── 带图的气泡：内边距换成壳的切片厚度，让图落在壳的内圈里 ──
+   2026-11-15 之前带图气泡被整条护栏排在外面，一律退回普通圆角（实机反馈：
+   同一段对话里一半有壳一半没有）。现在放开，用图片当内容、壳当相框：
+   左右及底部留出对应切片的厚度，图片就不会被尾巴、叶子这些装饰压住。
+   顶部仍然走 --ill-text-top（要给角色角让位）。
+   四边分开写而不是 padding 简写：狐狸自己那边还有一条 padding-left，
+   简写会把那条盖掉，分开写就能让它继续生效。 */
 :is(
   :is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]) .row.me .bubble,
   :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]) .row.ta .bubble
-):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio)) { min-inline-size: min(168px, 100%); }
+):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio)):has(.message-image, .ch-img) {
+  padding-top: var(--ill-text-top, calc(var(--ill-top) * var(--ill-unit) * 1px + 6px));
+  padding-right: calc(var(--ill-right) * var(--ill-unit) * 1px);
+  padding-bottom: calc(var(--ill-bottom) * var(--ill-unit) * 1px);
+  padding-left: calc(var(--ill-left) * var(--ill-unit) * 1px);
+}
+/* 图片顶到壳上沿时下面那圈留白显得偏多，图往下锹一点点 */
+
+/* 聊天里的插画气泡：最小宽度 = （角色角宽 + 322）× --ill-unit，
+   即 unit .15 时小鳄 99、小狐 100、草莓 87、云鲸 98；缩档到 .11 时跟着变小
+   （小鳄 73、小狐 74、草莓 64、云鲸 72）。
+   2026-11-14 试过三稿：原先的 min(168px, 100%) 因百分比在 fit-content 父级里
+   解析不出确定值、从未生效；写死下限 204～235px 又把短句拉成一大条白；
+   现在是「角宽 + 322 格」，只保证角色不溢出、文字有地方站。 */
+:is(
+  :is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]) .row.me .bubble,
+  :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]) .row.ta .bubble
+):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio)) {
+  min-inline-size: calc((var(--ill-corner-w) + 322) * var(--ill-unit) * 1px);
+}
+/* 短句子另缩一档：壳是位图九切片，左右两片合起来就要 75px，
+   光拉最小宽度救不了，气泡被撑到 100 仍然一大片空。
+   这一档把 --ill-unit 从 .15 降到 .11，壳、角色角、顶距、最小宽度整套同比例缩，
+   比例不变、只是小一号。class 由渲染那一步按宽度判定（见 panel.html 的 queueIllustratedFit）。 */
+.bubble.ill-tight { --ill-unit: .11; }
 /* 设置页那枚小样张：壳小一号，文字留够地方，别把两列卡撑破 */
 .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]).me,
 .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]).ta {
@@ -873,7 +908,7 @@
 
 /* ── 云鲸：正文顶部单独收紧 ──
    鲸鱼趴在左上角，壳的上沿本来就空，短句看着像掉在壳中间（实机反馈）。
-   这里只动正文的上边距：普通气泡 217*.18-12 = 27.06px，
+   这里只动正文的上边距：聊天档 217×unit−12（unit .15 时 20.6px），
    设置页样张（unit .12）取 max(14px, 26.04-12) = 14.04px。
    变量只挂在气泡自己身上（me / ta 各一条、样张各一条），
    不挂共享容器，免得一个容器上两枚属性互相串；
@@ -881,7 +916,7 @@
 :is(
   :is([data-me-skin="ill-whale"]) .row.me .bubble,
   :is([data-ta-skin="ill-whale"]) .row.ta .bubble
-):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio)),
+):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio)),
 .skin-sample-bubble:is([data-me-skin="ill-whale"]).me,
 .skin-sample-bubble:is([data-ta-skin="ill-whale"]).ta {
   --ill-text-top: max(14px, calc(var(--ill-top) * var(--ill-unit) * 1px - 12px));
@@ -890,16 +925,15 @@
 /* ── 另外三款：正文顶部也收紧 ──
    角色同样趴在上角，壳的上沿留白多，短句看着像掉在壳中间（实机反馈）。
    这里只动正文的上边距，先给原角色的爪与果实的最低点留出余量：
-     鳄鱼 248*.18-12 = 32.64px（比原来少 18px）
-     狐狸 262*.18-10 = 37.16px（少 16px）
-     草莓 191*.18-10 = 24.38px（少 16px）
+     鳄鱼 248×unit−12、狐狸 262×unit−10、草莓 191×unit−10
+   （unit .15 时分别是 25.2 / 29.3 / 18.65px）
    设置页样张（unit .12）分别是 17.76 / 21.44 / 14px（草莓踩到 14px 下限）。
    变量同样只挂在气泡自己身上（me / ta 各一条、样张各一条），不挂共享容器；
    角色角、动作、九切片、水平与底部留白一律没动。 */
 :is(
   :is([data-me-skin="ill-croc"]) .row.me .bubble,
   :is([data-ta-skin="ill-croc"]) .row.ta .bubble
-):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio)),
+):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio)),
 .skin-sample-bubble:is([data-me-skin="ill-croc"]).me,
 .skin-sample-bubble:is([data-ta-skin="ill-croc"]).ta {
   --ill-text-top: max(14px, calc(var(--ill-top) * var(--ill-unit) * 1px - 12px));
@@ -907,7 +941,7 @@
 :is(
   :is([data-me-skin="ill-fox"], [data-me-skin="ill-berry"]) .row.me .bubble,
   :is([data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]) .row.ta .bubble
-):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio)),
+):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio)),
 .skin-sample-bubble:is([data-me-skin="ill-fox"], [data-me-skin="ill-berry"]).me,
 .skin-sample-bubble:is([data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]).ta {
   --ill-text-top: max(14px, calc(var(--ill-top) * var(--ill-unit) * 1px - 10px));
@@ -922,7 +956,7 @@
   .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]).me,
   :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]).ta
-):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::before {
+):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio))::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -953,7 +987,7 @@
   .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"]).me,
   :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]).ta
-):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::before {
+):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio))::before {
   /* 角在右上：挖掉右上那一块 */
   clip-path: polygon(
     0 0,
@@ -970,7 +1004,7 @@
   .skin-sample-bubble:is([data-me-skin="ill-whale"]).me,
   :is([data-ta-skin="ill-whale"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-ta-skin="ill-whale"]).ta
-):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::before {
+):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio))::before {
   clip-path: polygon(
     calc(var(--ill-corner-w) * var(--ill-unit) * 1px - 2px) 0,
     100% 0,
@@ -992,7 +1026,7 @@
   .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]).me,
   :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"], [data-ta-skin="ill-whale"]).ta
-):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
+):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio))::after {
   content: "";
   position: absolute;
   top: calc(-24 * var(--ill-unit) * 1px);
@@ -1017,7 +1051,7 @@
   .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"]).me,
   :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]).ta
-):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
+):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio))::after {
   right: calc(-24 * var(--ill-unit) * 1px);
 }
 /* 云鲸的角在左上：动图往左上摆 24 格 */
@@ -1026,7 +1060,7 @@
   .skin-sample-bubble:is([data-me-skin="ill-whale"]).me,
   :is([data-ta-skin="ill-whale"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-ta-skin="ill-whale"]).ta
-):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
+):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio))::after {
   left: calc(-24 * var(--ill-unit) * 1px);
 }
 
@@ -1042,7 +1076,7 @@
   :is([data-ta-skin="ill-whale"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-me-skin="ill-whale"]).me,
   .skin-sample-bubble:is([data-ta-skin="ill-whale"]).ta
-):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
+):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio))::after {
   width: calc(100% + 48 * var(--ill-unit) * 1px);
   height: calc(100% + 48 * var(--ill-unit) * 1px);
   background-image: var(--ill-frame-image), var(--ill-bubbles-image, url("illustrated-bubbles/whale-bubbles-motion.webp"));
@@ -1110,7 +1144,7 @@
   .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"]).me,
   :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]).ta
-):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
+):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio))::after {
   top: calc(-24 * var(--ill-unit) * 1px);
   right: calc(-24 * var(--ill-unit) * 1px);
   left: auto;
@@ -1133,7 +1167,7 @@
   .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-berry"]).me,
   :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-berry"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-berry"]).ta
-):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::before {
+):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio))::before {
   /* 右上照旧挖；左下再挖一块（鳄鱼的叶子、草莓的奶油心在那儿） */
   clip-path: polygon(
     0 0,
@@ -1151,7 +1185,7 @@
   .skin-sample-bubble:is([data-me-skin="ill-fox"]).me,
   :is([data-ta-skin="ill-fox"]) .row.ta .bubble,
   .skin-sample-bubble:is([data-ta-skin="ill-fox"]).ta
-):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::before {
+):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio))::before {
   /* 右上照旧挖；右下再挖一块（狐狸的尾尖在那儿） */
   clip-path: polygon(
     0 0,
@@ -1163,6 +1197,71 @@
     calc(100% - (var(--ill-right) * var(--ill-unit) * 1px - 2px)) 100%,
     0 100%
   );
+}
+
+/* ============================================================
+   我这一侧：整只壳镜像（2026-11-14）
+   ------------------------------------------------------------
+   四款插画气泡原先是 me / ta 共用一套几何：角色角在右上、下角细节在左下，
+   两侧只有底色深浅之分，自己发出去那句看着跟伙伴发的一模一样（实机反馈）。
+   壳原图左下那道尾巴是画在图里的，要它落到右下，只能把壳整个反过来。
+
+     · ::before 整块 scaleX(-1)：九切片的左右分界、挖角位置、图里纹理
+       一起翻过去，视觉上就是同一张壳的镜像；切片与边框宽度不必互换
+       （换了会和翻转叠成两重镜像，反而错位）；
+     · ::after 自身也 scaleX(-1)，定位从右上/左上挪到另一侧：盒里的头角
+       跟到另一角，下角细节随背景位置一起翻过去（不用逐款改 anchor）；
+     · 挖角用的 clip-path 在元素坐标系里算，翻完自动落在新角上。
+
+   角色角翻到左上后，第一行文字就撞到它了（实测鳄鱼、狐狸、云鲸都压字）：
+   所以下面单给 me 侧抬一下 --ill-text-top，让正文从角色底下起，
+   取值是「角高 − 2px」（角色下沿到角高还差一截透明边，不必减更多），
+   四款通用，不必逐款算。
+   设置页那枚样张一并镜像并让位，不然预览跟聊天里对不上。
+   ============================================================ */
+:is(
+  :is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]) .row.me .bubble,
+  .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]).me
+):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio)) {
+  --ill-text-top: calc(var(--ill-corner-h) * var(--ill-unit) * 1px - 2px);
+}
+/* 样张小一号，角色也小，让位的留白按同一算式减几格，别把设置页那两列卡撑高 */
+.skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]).me {
+  --ill-text-top: max(12px, calc(var(--ill-corner-h) * var(--ill-unit) * 1px - 6px));
+}
+/* 狐狸的细节图（尾尖）原在右下，壳的尾尖也在右下，两边对得上；
+   壳翻过来后两者一起到视觉左下，所以这条变量不用改，跟其他两款的挖口自然对齐。
+   但狐狸那条毛尾巴是从身上垂下来的，翻到左边后会搭在正文开头，
+   所以正文左侧要让一格（同比例缩：.15 时 28px、短句缩档后约 20px）。
+   2026-11-15 从 44 收到 28：44 那档左边空出一大块，视觉上比别的款松得多。 */
+:is(
+  :is([data-me-skin="ill-fox"]) .row.me .bubble
+):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio)) {
+  padding-left: calc(var(--ill-unit) * 187px);
+}
+:is(
+  :is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]) .row.me .bubble,
+  .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"], [data-me-skin="ill-whale"]).me
+):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio))::before {
+  transform: scaleX(-1);
+}
+/* 角在右上的三款：我这边挪到左上 */
+:is(
+  :is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"]) .row.me .bubble,
+  .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"]).me
+):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio))::after {
+  right: auto;
+  left: calc(-24 * var(--ill-unit) * 1px);
+  transform: scaleX(-1);
+}
+/* 云鲸的角在左上：我这边挪到右上 */
+:is(
+  :is([data-me-skin="ill-whale"]) .row.me .bubble,
+  .skin-sample-bubble:is([data-me-skin="ill-whale"]).me
+):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio))::after {
+  left: auto;
+  right: calc(-24 * var(--ill-unit) * 1px);
+  transform: scaleX(-1);
 }
 
 /* 历史消息也保留图内动画，不按 DOM 排名悄悄替换成静态角。
@@ -1186,7 +1285,7 @@
     :is([data-ta-skin="ill-whale"]) .row.ta .bubble,
     .skin-sample-bubble:is([data-me-skin="ill-whale"]).me,
     .skin-sample-bubble:is([data-ta-skin="ill-whale"]).ta
-  ):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
+  ):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio))::after {
     --ill-bubbles-image: url("illustrated-bubbles/whale-bubbles-still.png");
   }
   /* 三款的下角细节也换静态版（和头角一起生效；鲸鱼那套小泡规则不动） */
@@ -1195,7 +1294,7 @@
     :is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]) .row.ta .bubble,
     .skin-sample-bubble:is([data-me-skin="ill-croc"], [data-me-skin="ill-fox"], [data-me-skin="ill-berry"]).me,
     .skin-sample-bubble:is([data-ta-skin="ill-croc"], [data-ta-skin="ill-fox"], [data-ta-skin="ill-berry"]).ta
-  ):not(.voice-transcript, .is-recalled, .ch-media, :has(.message-image, .ch-media, .ch-img, .sticker, video, audio))::after {
+  ):not(.voice-transcript, .is-recalled, :has(.sticker, video, audio))::after {
     --ill-detail-frame: var(--ill-detail-still);
   }
 }

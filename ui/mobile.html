@@ -300,6 +300,16 @@
   #chat .bubble.ch-media .ch-img { max-width: 100%; margin: 0; }
   #chat .bubble.ch-media .ch-media-text { margin-top: 6px; padding: 0 4px 2px; line-height: 1.55; overflow-wrap: anywhere; }
   #chat .bubble.ch-media .ch-media-text:first-child { margin-top: 0; }
+  /* 插画皮肤下的图文同泡：图文内边距换成壳的切片厚度，图才不会压在尾巴、叶子上。
+     权重带 #chat 才压得住上面那条 6px 的默认值。 */
+  #chat[data-me-skin^="ill-"] .row.me .bubble.ch-media,
+  #chat[data-ta-skin^="ill-"] .row.ta .bubble.ch-media {
+    padding:
+      var(--ill-text-top, 20px)
+      calc(var(--ill-right) * var(--ill-unit) * 1px)
+      calc(var(--ill-bottom) * var(--ill-unit) * 1px)
+      calc(var(--ill-left) * var(--ill-unit) * 1px);
+  }
   /* 引用块：最多三行，点开看全文（不在字符串里硬截 80） */
   #chat .ch-quote-strip { max-height: 4.6em; overflow: hidden; white-space: normal; }
   #chat .ch-quote-strip span { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
