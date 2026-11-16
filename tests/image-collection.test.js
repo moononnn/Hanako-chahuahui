@@ -60,9 +60,12 @@ test("明确否定赠送的不收，也不当成退收藏", () => {
   assert.equal(detectGiftIntent("不用给我做表情包").collect, false);
 });
 
-test("否定与退收藏的说法", () => {
-  for (const text of ["别再用这张了", "不要发这张表情包", "取消收藏", "这张别再当表情用了"]) {
+test("只有明确管理收藏才退订，审美要求仍由伙伴判断", () => {
+  for (const text of ["取消这张的收藏", "解除表情收藏", "从收藏里移除这张", "这张别收作表情"]) {
     assert.equal(detectGiftIntent(text).remove, true, text);
+  }
+  for (const text of ["别再用这张了", "不要发这张表情包", "这张别再当表情用了", "旧图太丑了换新的", "这张不用了", "不用取消这张的收藏", "能不能取消这张的收藏？"]) {
+    assert.equal(detectGiftIntent(text).remove, false, text);
   }
   assert.equal(detectGiftIntent("不用谢").remove, false, "不用谢不是退收藏");
   assert.equal(detectGiftIntent("这个表情包不好笑").remove, false);
@@ -118,7 +121,7 @@ test("撤回的图不算礼物，伙伴自己发的那张只有明确引用才�
 test("每个附件只认最新的一条意图：旧赠送翻不动后来的退订", () => {
   const messages = [
     { id: "m1", role: "user", at: "2026-11-01T10:00:00", attachment: { id: "img_a" }, text: "这张给你做表情包" },
-    { id: "m2", role: "user", at: "2026-11-01T10:05:00", text: "别再用这张了" },
+    { id: "m2", role: "user", at: "2026-11-01T10:05:00", text: "取消这张的收藏" },
   ];
   const intents = latestGiftIntents(messages);
   assert.equal(intents.length, 1);
@@ -135,7 +138,7 @@ test("同一个附件上超过二十条指令也不乱：最后一条说了算",
       role: "user",
       at: `2026-11-01T10:${String(i).padStart(2, "0")}:00`,
       quote: { messageId: "m0" },
-      text: i % 2 === 0 ? "别再用了这张" : "这张收作表情",
+      text: i % 2 === 0 ? "取消这张的收藏" : "这张收作表情",
     });
   }
   const intents = latestGiftIntents(messages);

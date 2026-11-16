@@ -52,7 +52,7 @@ test("不用她说「这是梗」也能学：材料里的那点东西够就学",
   assert.equal(out.text, "哈哈哈", "标记与内部 JSON 都不许漏进聊天");
 });
 
-test("文字梗、单图、三张图都认：图不能超过六张，也不能是不存在的编号", () => {
+test("文字梗、单图、多版本都认：图不能超过容量，也不能是不存在的编号", () => {
   const none = extractSharedPlay(tag([learn({ imageIds: [] })]), [], MATERIALS, ["img_a"]);
   assert.equal(none.updates.length, 1, "纯文字的梗允许");
   assert.deepEqual(none.updates[0].imageIds, []);
@@ -63,8 +63,9 @@ test("文字梗、单图、三张图都认：图不能超过六张，也不能�
   const three = extractSharedPlay(tag([learn({ imageIds: ["img_a", "img_b", "img_c"] })]), [], MATERIALS, ["img_a", "img_b", "img_c"]);
   assert.deepEqual(three.updates[0].imageIds, ["img_a", "img_b", "img_c"]);
 
-  const tooMany = extractSharedPlay(tag([learn({ imageIds: ["img_a", "img_b", "img_c", "img_d", "img_e", "img_f", "img_g"] })]), [], MATERIALS, ["img_a", "img_b", "img_c", "img_d", "img_e", "img_f", "img_g"]);
-  assert.equal(tooMany.updates.length, 0, "超过六张不收");
+  const excess = Array.from({ length: 25 }, (_, index) => `img_v${index}`);
+  const tooMany = extractSharedPlay(tag([learn({ imageIds: excess })]), [], MATERIALS, excess);
+  assert.equal(tooMany.updates.length, 0, "超过容量不收");
 
   const bad = extractSharedPlay(tag([learn({ imageIds: ["not_an_image"] })]), [], MATERIALS, ["img_a"]);
   assert.equal(bad.updates.length, 0, "编号不合法不收");

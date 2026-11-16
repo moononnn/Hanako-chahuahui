@@ -2072,13 +2072,14 @@ export function apply(ctx) {
       let recalled = false, unavailable = false;
       for (const id of entry.imageIds) {
         const meta = metas.find((item) => item.id === id);
-        if (meta && imageSourceRecalled(meta, messages)) recalled = true;
-        if (!meta || imageSourceRecalled(meta, messages)
-          || (meta.collection?.sticker === false && Number(meta.collection.sourceAt) >= Date.parse(entry.updatedAt))) unavailable = true;
+        const withdrawn = meta && (meta.collection?.recalledSource || imageSourceRecalled(meta, messages));
+        if (withdrawn) recalled = true;
+        if (!meta || withdrawn || (meta.collection?.sticker === false
+          && (meta.collection.origin !== "inferred-shared-play" || Number(meta.collection.sourceAt) >= Date.parse(entry.updatedAt)))) unavailable = true;
       }
       if (!unavailable || (entry.state === "stopped" && (!recalled || (!entry.title && !entry.meaning)))) return entry;
       const stopped = { ...entry, state: "stopped", corrected: true, revision: entry.revision + 1, updatedAt: new Date().toISOString(),
-        ...(recalled ? { title: "", meaning: "" } : {}) };
+        ...(recalled ? { title: "", meaning: "", ...(entry.preferenceNote !== undefined ? { preferenceNote: "", preferredImageIds: [] } : {}) } : {}) };
       retired.set(entry.id, stopped);
       return stopped;
     });
@@ -2091,7 +2092,7 @@ export function apply(ctx) {
       .slice(-16).map((row) => ({ id: row.id, role: row.role, text: String(row.text ?? ""), at: row.at,
         attachment: { id: row.attachment?.id ?? row.imageReuse?.attachmentId ?? "",
           description: String(metas.find((meta) => meta.id === (row.attachment?.id ?? row.imageReuse?.attachmentId))?.description ?? "").slice(0, 300) } }));
-    const unchangedPairs = pairs.filter((pair) => !book.some((entry) => (entry.corrected || entry.state === "stopped")
+    const unchangedPairs = pairs.filter((pair) => !book.some((entry) => (entry.corrected || entry.state === "stopped" || entry.preferenceNote)
       && entry.imageIds.some((id) => id === pair.userImageId || id === pair.partnerImageId)));
     return { book, materials, metas, text: [
       formatOldImageCandidates(selectOldImageCandidates({ messages, metas: usable, agentId, limit, keyword })),
@@ -2113,6 +2114,7 @@ export function apply(ctx) {
     const active = new Set(book.filter((entry) => entry.state !== "stopped").flatMap((entry) => entry.imageIds));
     for (const meta of metas) {
       const inferred = meta.collection?.origin === "inferred-shared-play";
+      if (meta.collection?.recalledSource || (meta.collection?.sticker === false && !inferred && Number(meta.collection.sourceAt) > 0)) continue;
       if (active.has(meta.id) && !imageSourceRecalled(meta, messages)) {
         if (meta.collection?.sticker === true) continue;
         const source = messages.find((row) => row.attachment?.id === meta.id && !row.imageReuse && !row.recalled);
@@ -2150,6 +2152,7 @@ export function apply(ctx) {
     const as = request.as === "sticker" ? "sticker" : "image";
     const meta = ownAttachmentMeta(agentId, id);
     if (!meta) return { ok: false, reason: "missing" };
+    if (meta.collection?.recalledSource) return { ok: false, reason: "recalled" };
     const stored = readAttachment(id, agentId);
     if (!stored?.data?.length) return { ok: false, reason: "missing" };
     const rows = Array.isArray(messages) ? messages : [];
@@ -2171,6 +2174,9 @@ export function apply(ctx) {
     const stopped = playBook.some((entry) => entry.state === "stopped" && entry.imageIds.includes(id));
     // 停梗不等于删除原件：自动投递双通道都挡住，点名索要时仍可取原图。
     if (stopped && !(as === "image" && explicitlyAsked)) return { ok: false, reason: "stopped-play" };
+    // 取消收藏不能被在途偏好稿或切换到普通图片通道绕过；明确索要原件仍可取回。
+    const removed = meta.collection?.sticker === false && meta.collection?.origin !== "inferred-shared-play" && Number(meta.collection.sourceAt) > 0;
+    if (removed && !(as === "image" && explicitlyAsked)) return { ok: false, reason: "not-collected" };
     if (as === "sticker") {
       const inferred = playBook.some((entry) => entry.state !== "stopped" && entry.imageIds.includes(id));
       if (!collected && !inferred) return { ok: false, reason: "not-collected" };
@@ -6965,27 +6971,38 @@ export function apply(ctx) {
     // 旧图这一关先过：坏协议、发不出去的旧图（本体没了、串号、没收藏、撤回、禁发），
     // 整轮安全收手——不生图、不改徽章、不出声、不落库，
     // 更不能把「给你看看」这种空头配文发出去。
-    const liveMetas = partnerAttachmentMetas(agentId);
-    const playUpdates = playFeedback.updates.filter((update) => update.op === "stop" || (update.imageIds ?? update.base?.imageIds ?? []).every((id) => {
-      const meta = liveMetas.find((item) => item.id === id);
-      return meta && !imageSourceRecalled(meta, store.getThread(agentId).messages)
-        && !(update.op === "learn" && meta.collection?.sticker === false && Number(meta.collection.sourceAt) > 0);
-    }));
+    const usablePlayUpdates = (updates) => {
+      const metas = partnerAttachmentMetas(agentId), rows = store.getThread(agentId).messages;
+      return updates.filter((update) => {
+        if (update.op === "stop") return true;
+        const images = update.op === "prefer"
+          ? [...(playContext.book.find((entry) => entry.id === update.id)?.imageIds ?? []), ...(update.imageIds ?? [])]
+          : update.imageIds ?? update.base?.imageIds ?? [];
+        return images.every((id) => {
+          const meta = metas.find((item) => item.id === id);
+          return meta && !meta.collection?.recalledSource && !imageSourceRecalled(meta, rows)
+            && !(["learn", "prefer"].includes(update.op) && meta.collection?.sticker === false && Number(meta.collection.sourceAt) > 0);
+        });
+      });
+    };
+    const playUpdates = usablePlayUpdates(playFeedback.updates);
     const pendingPlayBook = applySharedPlay(playContext.book, playUpdates, { resultMessageId: "preview-only", now: new Date() });
     const commitPlay = (resultMessageId = "", updates = playUpdates) => {
       if (!updates.length || (isCurrent && !isCurrent()) || !targetStillLive() || superseded()?.superseded) return;
-      const saved = store.commitSharedPlay(agentId, updates, resultMessageId);
+      const safe = usablePlayUpdates(updates);
+      if (!safe.length) return;
+      const saved = store.commitSharedPlay(agentId, safe, resultMessageId);
       if (saved) {
         const metas = partnerAttachmentMetas(agentId), messages = store.getThread(agentId).messages;
         syncSharedPlayImages(agentId, sharedPlayBook(saved.sharedPlay, activeImagePairs(metas, messages)), { metas, messages });
-        diagnostics({ event: "shared-play.updated", agentId, count: updates.length });
+        diagnostics({ event: "shared-play.updated", agentId, count: safe.length });
       }
     };
     const oldImagePrepared = prepareOldImage(agentId, oldImage.request, { messages: store.getThread(agentId).messages, playBook: pendingPlayBook, allowRequestedOriginal: true });
     if (oldImage.status === "invalid" || (oldImage.request && !oldImagePrepared.ok)) {
       diagnostics({ event: "chat.oldimage.rejected", agentId, status: oldImage.status, reason: oldImagePrepared.reason ?? "invalid-protocol" });
-      // 明确纠正/停用不因这份稿子错带图片而丢失；新的猜测仍不在坏回包中提交。
-      commitPlay("", playUpdates.filter((update) => update.op === "stop" || update.op === "revise"));
+      // 理解纠正、停用及已有玩法的个人偏好不随坏图片回包丢失；新的共同猜测仍不提交。
+      commitPlay("", playUpdates.filter((update) => ["stop", "revise", "prefer"].includes(update.op)));
       return { ok: false, reason: "silent", generationMs: Date.now() - startedAt };
     }
     const badgeMarker = parseBadgeMarker(chatPhoto.text);
@@ -7108,6 +7125,16 @@ export function apply(ctx) {
       releaseVoiceGeneration(preparedVoice);
       diagnostics({ event: "reply.superseded", agentId, stage: "before-save", supersededBy: staleBeforeSave.newerMessageId });
       return { ok: false, reason: "superseded", supersededBy: staleBeforeSave.newerMessageId, generationMs };
+    }
+    // 合成语音期间旧图也可能被撤回或取消收藏，出站前再核一次原件权限。
+    if (oldImagePrepared.ok) {
+      const currentImage = prepareOldImage(agentId, oldImage.request, { messages: store.getThread(agentId).messages, playBook: pendingPlayBook, allowRequestedOriginal: true });
+      if (!currentImage.ok) {
+        releaseVoiceGeneration(preparedVoice);
+        commitPlay("", playUpdates.filter((update) => ["stop", "revise", "prefer"].includes(update.op)));
+        diagnostics({ event: "reply.skipped", agentId, reason: `old-image-${currentImage.reason}` });
+        return { ok: false, reason: "silent", generationMs };
+      }
     }
     const reply = {
       role: "assistant",

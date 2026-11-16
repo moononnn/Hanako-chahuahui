@@ -206,8 +206,8 @@ test("收藏的旧图过清理那关：期限到了也不清；退收藏后照�
   assert.ok(fs.existsSync(path.join(attachmentsDir(app), `${attachmentId}.bin`)), "收作表情的收藏不被期限清掉");
   assert.equal(metaOf(app, attachmentId).collection.sticker, true);
 
-  // 她说别再用了：退出收藏后按普通图清。
-  const said = await app.request("POST", "/turns", { json: { agentId: id, text: "别再用这张了", watching: true, clientMessageId: "keep_000002" } });
+  // 明确取消收藏后按普通图清；审美上的不喜欢不会自动退收藏。
+  const said = await app.request("POST", "/turns", { json: { agentId: id, text: "取消这张的收藏", watching: true, clientMessageId: "keep_000002" } });
   await waitFor(app, id, (row) => row.role === "assistant" && row.repliedTo === said.body.messageId, "伙伴那条回复");
   assert.equal(metaOf(app, attachmentId).collection.sticker, false, "退收藏留墓碑");
   await app.request("POST", "/images/cleanup", { json: {} });
@@ -221,7 +221,7 @@ test("同一个附件上超过二十条指令：最后一条说了算，反复�
   for (let i = 0; i < 25; i += 1) {
     app.store.appendMessage(id, {
       role: "user",
-      text: i % 2 === 0 ? "别再用了这张" : "这张收作表情",
+      text: i % 2 === 0 ? "取消这张的收藏" : "这张收作表情",
       quote: { messageId, text: "看这个" },
     });
   }
@@ -243,7 +243,7 @@ test("旧的赠送话滚出窗口后，墓碑不会被复活；后来明确再�
   const app = await boot(t);
   const id = app.partner.id;
   const { attachmentId, messageId } = await sendImage(app, id, "这张给你做表情包", "revive_000001");
-  const remove = app.store.appendMessage(id, { role: "user", text: "别再用了这张", quote: { messageId, text: "看这个" } });
+  const remove = app.store.appendMessage(id, { role: "user", text: "取消这张的收藏", quote: { messageId, text: "看这个" } });
   const first = await app.request("POST", "/turns", { json: { agentId: id, text: "先说一句", watching: true, clientMessageId: "revive_000002" } });
   await waitFor(app, id, (row) => row.role === "assistant" && row.repliedTo === first.body.messageId, "伙伴那条回复");
   assert.equal(metaOf(app, attachmentId).collection.sticker, false, "先退收藏");

@@ -589,3 +589,87 @@ test("旧式成对暗号也能被停掉：第一次落盘就把墓碑写上", as
   assert.equal(book[0].state, "stopped");
   assert.equal(book[0].legacy, true);
 });
+
+async function learnForPreference(app, key) {
+  app.reply((request, a) => {
+    const user = a.latestUser();
+    return `这个纸袋表情有意思。${playTag([learnUpdate({ sourceId: user.id, quote: "纸袋", title: "纸袋版本", meaning: "用纸袋猫表示一起摸鱼", imageIds: [CAT] })])}`;
+  });
+  const result = await turn(app, { text: "纸袋猫来了", image: CAT, clientMessageId: `${key}_learn` });
+  await waitAssistant(app);
+  return { entry: app.memory()[0], sourceId: result.body.messageId };
+}
+
+function preferenceUpdate(app, imageId) {
+  const user = app.latestUser(), entry = app.memory()[0];
+  return { op: "prefer", id: entry.id, revision: entry.revision, imageIds: [BAG], preferredImageIds: imageId ? [imageId] : [],
+    preferenceNote: imageId === CAT ? "新版纸袋猫也画的是我，但旧版那个呆劲更对我的味" : imageId === BAG ? "这次新版的神态更像我，换它" : "两张都没达到我的味道，继续画一个更得意的",
+    evidence: [{ sourceId: user.id, quote: "旧图太丑了" }] };
+}
+
+for (const [name, chosen] of [["坚持旧版", CAT], ["喜欢新版", BAG], ["两版都不满意", null]]) {
+  test(`用户催换图时伙伴可以${name}，新旧都保留且含义不被审美改写`, async (t) => {
+    const app = await boot(t);
+    const { entry: original } = await learnForPreference(app, `preference_${chosen ?? "none"}`);
+    app.reply(() => {
+      const update = preferenceUpdate(app, chosen);
+      return `我有自己的口味。${playTag([update])}${chosen ? `[旧图:{"id":"${chosen}","as":"sticker"}]` : ""}`;
+    });
+    const result = await turn(app, { text: "旧图太丑了，别再用那张，换这张新版。", image: BAG, clientMessageId: `preference_${chosen ?? "none"}_new` });
+    const row = await waitRow(app, (item) => item.role === "assistant" && item.repliedTo === result.body.messageId);
+    const [entry] = app.memory();
+    assert.deepEqual(entry.imageIds, [CAT, BAG]);
+    assert.deepEqual(entry.preferredImageIds, chosen ? [chosen] : []);
+    assert.equal(entry.meaning, original.meaning);
+    assert.equal(entry.state, original.state, "审美分歧不变成对共同玩法的确认或否定");
+    assert.equal(entry.corrected, false);
+    assert.equal(app.attachmentMeta(CAT).collection.sticker, true, "嫌旧图丑不会取消旧收藏");
+    assert.equal(app.attachmentMeta(BAG).collection.sticker, true, "新版也是备选原件");
+    if (chosen) assert.equal(row.imageReuse?.attachmentId, chosen);
+    else assert.equal(row.imageReuse, undefined);
+    assert.equal(row.text.includes("shared-play"), false);
+    app.replyText("口味这回事，我自己有数。");
+    await turn(app, { text: "你还记得自己偏爱哪张不", clientMessageId: `preference_${chosen ?? "none"}_later` });
+    await waitAssistantCount(app, 3);
+    assert.ok(app.promptWith(entry.preferenceNote).includes(entry.preferenceNote));
+    assert.deepEqual(app.memory()[0].preferredImageIds, chosen ? [chosen] : []);
+    assert.equal(app.media.length, 0);
+    assert.equal(app.binCount(), 3);
+  });
+}
+
+test("与用户意见相反的偏爱可跨重启延续到主动原图投递", async (t) => {
+  const first = await boot(t);
+  await learnForPreference(first, "preference_proactive");
+  first.reply(() => `新图我也收，但我偏爱旧版。${playTag([preferenceUpdate(first, CAT)])}`);
+  await turn(first, { text: "旧图太丑了，别再用那张，换这张新版。", image: BAG, clientMessageId: "preference_proactive_new" });
+  await waitAssistantCount(first, 2);
+  assert.deepEqual(first.memory()[0].preferredImageIds, [CAT]);
+  const second = await boot(t);
+  copyDir(first.dataDir, second.dataDir);
+  for (const row of second.store.getThread(AGENT).messages) second.store.patchMessage(AGENT, row.id, { at: new Date(Date.parse(row.at) - 2 * HOUR).toISOString() });
+  second.replyText(`旧猫这个呆劲，我还是喜欢。[旧图:{"id":"${CAT}","as":"sticker"}]`);
+  const random = Math.random; Math.random = () => 0.99;
+  try { assert.equal((await second.request("POST", "/proactive/tick", { json: {} })).status, 200); }
+  finally { Math.random = random; }
+  const row = await waitRow(second, (item) => item.proactive && item.imageReuse);
+  assert.equal(row.imageReuse.attachmentId, CAT);
+  assert.ok(second.promptWith("旧版那个呆劲").includes("旧版那个呆劲"));
+  assert.deepEqual(second.memory()[0].imageIds, [CAT, BAG]);
+  assert.equal(second.media.length, 0);
+});
+
+test("伙伴偏爱不能把明确取消收藏的素材加回使用许可", async (t) => {
+  const app = await boot(t);
+  const { sourceId } = await learnForPreference(app, "preference_cancel");
+  app.reply(() => {
+    const user = app.latestUser(), entry = app.memory()[0];
+    return `我还是喜欢旧版。${playTag([{ op: "prefer", id: entry.id, revision: entry.revision, imageIds: [], preferredImageIds: [CAT], preferenceNote: "我喜欢旧版", evidence: [{ sourceId: user.id, quote: "取消这张的收藏" }] }])}[旧图:{"id":"${CAT}","as":"sticker"}]`;
+  });
+  const before = assistantCount(app);
+  await app.request("POST", "/turns", { json: { agentId: AGENT, text: "取消这张的收藏", quote: { messageId: sourceId, text: "纸袋猫来了" }, watching: true, clientMessageId: "preference_cancel_now" } });
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  assert.equal(app.attachmentMeta(CAT).collection.sticker, false);
+  assert.equal(app.memory()[0].state, "stopped");
+  assert.equal(assistantCount(app), before);
+});
