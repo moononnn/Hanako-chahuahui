@@ -83,6 +83,24 @@ test("照片依据不穿过撤回消息，且补充文本有长度上限", () =>
   assert.equal(recentSceneFor(rows, { now: NOW }).userText.length, 3000, "普通模式不变");
 });
 
+test("照片模式：撤回的原文与动作行不当作依据", () => {
+  const rows = [
+    { id: "u1", at: iso(NOW - 3 * HOUR), role: "user", text: "撤回的那句", recalled: true, recallMode: "hard" },
+    { id: "a1", at: iso(NOW - 3 * HOUR + 1000), role: "assistant", text: "被撤回的回复", recalled: true, recallMode: "hard" },
+    { id: "u2", at: iso(NOW - 2 * HOUR), role: "user", text: "现在这句" },
+  ];
+  assert.equal(recentSceneFor(rows, { now: NOW, ignoreProactive: true }), null, "撤回的一问一答不算依据");
+  const withReply = [...rows, { id: "a2", at: iso(NOW - 2 * HOUR + 1000), role: "assistant", text: "这句还在" }];
+  const scene = recentSceneFor(withReply, { now: NOW, ignoreProactive: true });
+  assert.equal(scene.userText, "现在这句");
+  assert.equal(scene.assistantText, "这句还在");
+  const withAction = [
+    { id: "u3", at: iso(NOW - HOUR), role: "user", kind: "action", text: "摸了一下" },
+    { id: "a3", at: iso(NOW - HOUR + 1000), role: "assistant", text: "怎么啦" },
+  ];
+  assert.equal(recentSceneFor(withAction, { now: NOW, ignoreProactive: true }), null, "动作行不算说了话");
+});
+
 test("照片候选概率按档位直接取值，边界取等号时不选", () => {
   const base = { enabled: true, hasContext: true };
   assert.deepEqual(PHOTO_SHARE_CHANCES, { less: 0.25, normal: 0.5, more: 0.8 });
@@ -104,6 +122,8 @@ test("照片被哪些门槛挡下只报标识，不带聊天内容", () => {
   assert.deepEqual(photoShareBlockers({ enabled: true, tier: "normal", hasContext: false }), ["no-context"]);
   assert.deepEqual(photoShareBlockers({ enabled: true, tier: "normal", hasContext: true, blocked: true }), ["blocked"]);
   assert.deepEqual(photoShareBlockers({ enabled: true, tier: "normal", hasContext: true, recentPhoto: true }), ["recent-photo"]);
+  assert.deepEqual(photoShareBlockers({ enabled: true, tier: "normal", hasContext: true, sceneUsed: true }), ["scene-used"]);
+  assert.deepEqual(photoShareBlockers({ enabled: true, tier: "normal", hasContext: true, recentPhoto: true, sceneUsed: true }), ["recent-photo", "scene-used"]);
   assert.deepEqual(imageSceneExclusions({}), []);
   assert.deepEqual(imageSceneExclusions({ exception: true, followup: true, wakeEcho: true, greetingOnly: true, todoNudge: "记得喝水", publicEvent: true, video: true, news: true, videoLoginNotice: true }),
     ["exception", "followup", "wake-echo", "greeting-only", "todo", "public-event", "video", "news", "video-login"]);
@@ -119,4 +139,8 @@ test("照片提示词：给了依据就明写进去；候选不是硬指标，�
   assert.match(withContext, /直接写普通文字/);
   assert.match(withContext, /只输出\[不回\]/);
   assert.doesNotMatch(photoSharePrompt(), /今天想喝热咖啡/);
+  const long = "咖啡".repeat(200);
+  const trimmed = photoSharePrompt({ context: { userText: long, assistantText: long } });
+  assert.ok(!trimmed.includes(long), "注入的原文要限长");
+  assert.ok(trimmed.includes("咖啡".repeat(80)), "限长后仍留有依据");
 });

@@ -145,7 +145,8 @@ test("同一场景已经真出过图，这一轮不再挑照片", OPTIONS, async
   const rows = fs.readFileSync(`${app.dataDir}/v2/diagnostics.jsonl`, "utf8").trim().split("\n").map(line => JSON.parse(line));
   const considered = rows.find(row => row.event === "proactive.photo.considered");
   assert.ok(considered, "照片候选要看得到");
-  assert.ok(considered.excludedBy.includes("recent-photo"), JSON.stringify(considered));
+  assert.ok(considered.excludedBy.includes("scene-used"), JSON.stringify(considered));
+  assert.equal(considered.excludedBy.includes("recent-photo"), false, "这次只应是同一场景挡的，不是最近图片护栏");
 });
 test("照片这一轮的排除理由只报标识，不带聊天正文", OPTIONS, async t => {
   const app = await boot(t);

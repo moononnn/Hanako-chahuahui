@@ -3400,7 +3400,7 @@ export function apply(ctx) {
     // 2026-11-02：attachNativeImage 改成返回副本、不再就地改写数组，这里必须接住返回值——
     // 丢掉它的话记号会原样当字面文进提示词，ta 主动开口时看不见那张图（也0.16.0 是就地改，才没露）。
     const proactiveMessages = attachNativeImage(historyMessages, agentId);
-    // 照片这一轮的依据是不是已经在模型手上（2026-11-15）：上下文里已经有那两行就不重复塞进提示词；
+    // 照片这一轮的依据是不是已经在模型手上：上下文里已经有那两行就不重复塞进提示词；
     // 缺了才补进去——照片不能只有一个「有依据」的开关，模型得真拿得到那段对话。
     const photoContextKnown = Boolean(photoContext)
       && historyWindow.some(row => Boolean(photoContext.userId) && row?.id === photoContext.userId)
@@ -3506,7 +3506,7 @@ export function apply(ctx) {
       photoShare = null;
     }
     const imagePromptText = chatImagePrompt({ enabled: imageEnabled, hasReference: Boolean(photoReferenceId), tier: store.getPartnerSettings(agentId).imageTier, shareOnly: Boolean(photoShare) });
-    // 照片依据真的到模型手上：上下文里没有那两行，就把这段最近聊天明写进照片提示词。
+    // 照片依据真到模型手上：上下文里没有那两行，就把这段最近聊天明写进照片提示词。
     const photoShareText = photoShare ? photoSharePrompt({ hasReference: Boolean(photoReferenceId), context: photoContextKnown ? null : photoContext }) : "";
     if (photoShare) diagnostics({ event: "proactive.photo.context", agentId, inHistory: photoContextKnown, age: photoContext ? Date.now() - Date.parse(photoContext.at ?? "") : null });
     let raw = "";
@@ -4706,9 +4706,8 @@ export function apply(ctx) {
       const sceneEcho = gate.ok && !gate.exception && !followup?.read && !wakeEcho
         ? recentSceneFor(thread.messages, { now: now.getTime() })
         : null;
-      // 照片专用的那一轮面对面聊天（2026-11-15）：中间发过主动消息不该把这轮凭据抹掉，
-      // 照片正是靠它挑画面。普通 sceneEcho 的边界与口径一个字没动，这里另取一份。
-      // 酒馆初见仍是边界：换了开场就是新场景，不反着捡旧对话。依据最多放 24 小时。
+      // 照片专用的那一轮面对面聊天：中间发过主动消息不该把这轮凭据抹掉（普通 sceneEcho 一字未改）。
+      // 酒馆初见仍是边界，依据最多放 24 小时。
       const photoContext = gate.ok && !gate.exception && !followup?.read && !wakeEcho
         ? recentSceneFor(thread.messages, { now: now.getTime(), maxAgeMs: PHOTO_SCENE_MAX_AGE_MS, ignoreProactive: true })
         : null;
@@ -4903,9 +4902,9 @@ export function apply(ctx) {
       const reasonForSend = greetingOnly ? null : reason;
       // 照片是表达候选，不另造联系动机；只占普通关系式落点，不抢素材或机动消息。
       // 依据看照片专用那份 photoContext：ta 中间主动说过几句，不该把最近那轮面对面聊天抹掉。
-      const photoRecent = thread.messages.filter(row => row.role === "assistant" && !row.recalled && isSpeechMessage(row))
-        .slice(-3).some(row => row.attachment?.description)
-        || thread.messages.some(row => !row.recalled && row.photoScene?.key === photoContext?.at && row.photoScene?.source === "scene");
+      const photoRecent3 = thread.messages.filter(row => row.role === "assistant" && !row.recalled && isSpeechMessage(row))
+        .slice(-3).some(row => row.attachment?.description);
+      const photoSceneUsed = thread.messages.some(row => !row.recalled && row.photoScene?.key === photoContext?.at && row.photoScene?.source === "scene");
       const photoEnabled = chatImageServiceReady && imageQuota?.available(agentId) === true;
       const photoBlocked = !reasonEligible || greetingOnly || Boolean(seed || discovery);
       const photoExcludedBy = [
@@ -4925,7 +4924,8 @@ export function apply(ctx) {
           tier: settings.imageTier,
           hasContext: Boolean(photoContext),
           blocked: photoBlocked,
-          recentPhoto: photoRecent,
+          recentPhoto: photoRecent3,
+          sceneUsed: photoSceneUsed,
         }),
       ];
       const photoShare = pickPhotoShare({
@@ -4933,7 +4933,7 @@ export function apply(ctx) {
         tier: settings.imageTier,
         hasContext: Boolean(photoContext),
         blocked: photoBlocked,
-        recentPhoto: photoRecent,
+        recentPhoto: photoRecent3 || photoSceneUsed,
       }) ? { key: photoContext.at, source: "scene" } : null;
       diagnostics({ event: "proactive.photo.considered", agentId, tier: settings.imageTier, selected: Boolean(photoShare), excludedBy: photoExcludedBy });
       if (photoShare) diagnostics({ event: "proactive.photo.selected", agentId, tier: settings.imageTier });
