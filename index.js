@@ -296,9 +296,22 @@ import {
 } from "./lib/sticker-library.js";
 import { ensureStickerThumb, startThumbWarmup } from "./lib/sticker-thumb.js";
 import { contentHash, isReusableAttachment, touchAttachmentMeta } from "./lib/attachment-hash.js";
+import { writeJsonAtomic } from "./lib/persistence.js";
 import { catalogRowSupportsImage } from "./lib/model.js";
 import { modelSupportsImage } from "./lib/vision.js";
-import { IMAGE_TOOL, IMAGE_TOOL_EMPTY_TEXT, IMAGE_TOOL_NAME, formatImageMatches, pickImageMessages, resolveImageRange } from "./lib/image-tool.js";
+import { IMAGE_TOOL, IMAGE_TOOL_EMPTY_TEXT, IMAGE_TOOL_NAME, formatImageMatches, pickCollectedImageRows, pickImageMessages, resolveImageRange } from "./lib/image-tool.js";
+import {
+  OLD_IMAGE_CANDIDATE_LIMIT,
+  availableAttachmentMetas,
+  detectGiftIntent,
+  findGiftTarget,
+  formatOldImageCandidates,
+  isCollectedSticker,
+  latestGiftIntents,
+  parseOldImageProtocol,
+  requestsResend,
+  selectOldImageCandidates,
+} from "./lib/image-collection.js";
 import { NATIVE_IMAGE_BODY_ROWS, NATIVE_IMAGE_BYTES_PER_TURN, NATIVE_IMAGE_PER_TURN, MARK_RE, hasNativeImageMark, rewriteNativeImageMarks } from "./lib/native-vision.js";
 import { normalizeRetentionDays, planCleanup, summarizeStorage } from "./lib/image-retention.js";
 import { canAnswerPoke } from "./lib/poke.js";
@@ -1061,14 +1074,30 @@ export function apply(ctx) {
    * 上下文只装得住最近二十几条，隔一天那张图早就不在里面了。
    * 所以她一提「昨天那张」，ta 得有地方去翻，而不是凭印象编一个。
    */
-  function createFindImageTool({ messages = [] } = {}) {
+  function createFindImageTool({ messages = [], agentId = "" } = {}) {
     const find = ({ name, arguments: args } = {}) => {
       if (name !== IMAGE_TOOL_NAME) {
         return { isError: true, text: "这个工具不存在。就用手上已有的东西说话。" };
       }
       const range = resolveImageRange({ since: args?.since, until: args?.until });
-      const rows = pickImageMessages(messages, { ...range, keyword: args?.keyword }, readAttachmentMeta);
-      const text = formatImageMatches(rows);
+      // 只认这位伙伴自己的附件：不按属主读，别的伙伴的图会从这儿漏出去。
+      const describe = (id) => {
+        const meta = readAttachmentMeta(id);
+        if (!meta) return null;
+        if (agentId && String(meta.agentId ?? "") !== String(agentId)) return null;
+        return meta;
+      };
+      const rows = pickImageMessages(messages, { ...range, keyword: args?.keyword }, describe);
+      // 消息滚出聊天记录（两千条上限）的收藏，从附件元数据里补回来：
+      // 那张图还在盘上、也还收着，翻旧图仍得能点到它。
+      const known = new Set(rows.map((row) => row.attachmentId));
+      const collected = pickCollectedImageRows(
+        partnerAttachmentMetas(agentId),
+        { ...range, keyword: args?.keyword },
+        describe,
+      ).filter((row) => !known.has(row.attachmentId));
+      const all = [...rows, ...collected].sort((a, b) => a.at - b.at);
+      const text = formatImageMatches(all);
       if (!text) return { isError: false, text: IMAGE_TOOL_EMPTY_TEXT };
       return {
         isError: false,
@@ -1937,6 +1966,224 @@ export function apply(ctx) {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * 这张旧图是不是这位伙伴的，还在，没被清。
+   *
+   * id 必须是自家附件的严格写法：归一化会把别的字符换成下划线，
+   * 那样两个不同的 id 会撞成同一个——所以这里只认原样的 id。
+   * 元数据里写的 id 也要跟请求的那个一致，别拿别的附件顶上来。
+   */
+  function ownAttachmentMeta(agentId, id) {
+    const raw = String(id ?? "");
+    if (!/^img_[A-Za-z0-9_-]{1,120}$/.test(raw)) return null;
+    const meta = readAttachmentMeta(raw);
+    if (!meta || meta.purgedAt) return null;
+    if (String(meta.agentId ?? "") !== String(agentId ?? "")) return null;
+    if (String(meta.id ?? "") !== raw) return null;
+    return meta;
+  }
+
+  /** 收藏标记写回元数据。原子写：收藏过程中不能把整个元数据文件截断。 */
+  function writeCollectionMeta(agentId, id, patch) {
+    const safeId = String(id).replace(/[^a-zA-Z0-9_-]/g, "_");
+    const metaPath = path.join(attachmentsDir, `${safeId}.json`);
+    try {
+      const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+      // 属主不符不写：不能把别人的附件改成自己的收藏。
+      if (String(meta.agentId ?? "") !== String(agentId ?? "")) return null;
+      const next = { ...meta, collection: { ...(meta.collection ?? {}), ...patch } };
+      writeJsonAtomic(metaPath, next);
+      return next;
+    } catch { return null; }
+  }
+
+  /** 谁发的这条消息：user 是她，assistant 是伙伴自己。查不到就说不知道。 */
+  function roleOfRow(row) {
+    const role = String(row?.role ?? "");
+    return role === "user" || role === "assistant" ? role : null;
+  }
+
+  /** 当前这句话里能当关键词的词：按标点切开，留两字以上的，取后面几个。 */
+  function keywordTokens(text) {
+    return String(text ?? "")
+      .split(/[\s,，。！？、；：""''（）()~…—\-]+/u)
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 2)
+      .slice(-6);
+  }
+
+  /**
+   * 扫这位伙伴的聊天历史，把「明确送给伙伴作表情」的旧图补认成收藏。
+   *
+   * 每个附件只认最新的一条意图：旧的赠送翻不动后来的退订，退订也不会被旧话复活。
+   * 源图或赠送那句话被撤回了，收藏就退役，让手动清理能把图收走；
+   * 源消息只是滚出聊天窗口（两千条上限）的话，收藏照旧留着。
+   */
+  function refreshImageCollections(agentId) {
+    const messages = store.getThread(agentId).messages;
+    let changed = 0;
+    for (const intent of latestGiftIntents(messages)) {
+      const meta = ownAttachmentMeta(agentId, intent.attachmentId);
+      if (!meta) continue;
+      const current = meta.collection ?? {};
+      const sourceAt = Number(current.sourceAt ?? 0);
+      // 同一句决定过：不重写，反复构造候选不能把收藏写回或翻转。
+      if (current.sticker === intent.collect && String(current.sourceMessageId ?? "") === intent.messageId) continue;
+      // 旧意图不能覆盖新决定：墓碑尤其不能被旧赠送复活。
+      if (sourceAt && intent.at < sourceAt) continue;
+      if (current.recalledSource && intent.collect && intent.at <= sourceAt) continue;
+      const imageRow = messages.find((row) => String(row?.id ?? "") === intent.imageMessageId) ?? null;
+      const written = writeCollectionMeta(agentId, intent.attachmentId, {
+        sticker: intent.collect,
+        at: new Date().toISOString(),
+        sourceAt: intent.at,
+        sourceMessageId: intent.messageId,
+        sourceImageMessageId: intent.imageMessageId,
+        sourceRole: roleOfRow(imageRow),
+        sourceSaid: intent.said,
+        recalledSource: false,
+      });
+      if (written) changed += 1;
+    }
+    // 源图或赠送那句话被撤回了：收藏退役，手动清理能把这张图收走。
+    for (const meta of listAttachmentMetas()) {
+      if (String(meta?.agentId ?? "") !== String(agentId)) continue;
+      if (!isCollectedSticker(meta)) continue;
+      const collection = meta.collection ?? {};
+      const imageRow = messages.find((row) => String(row?.id ?? "") === String(collection.sourceImageMessageId ?? ""));
+      const saidRow = messages.find((row) => String(row?.id ?? "") === String(collection.sourceMessageId ?? ""));
+      if (!((imageRow && imageRow.recalled) || (saidRow && saidRow.recalled))) continue;
+      const written = writeCollectionMeta(agentId, meta.id, {
+        sticker: false,
+        at: new Date().toISOString(),
+        sourceAt: Number(collection.sourceAt ?? 0) || Date.parse(saidRow?.at ?? imageRow?.at ?? "") || Date.now(),
+        recalledSource: true,
+      });
+      if (written) changed += 1;
+    }
+    return changed;
+  }
+
+  /**
+   * 这位伙伴还在盘上的附件元数据。
+   *
+   * 属主对、没清过、元数据里的 id 跟文件名一致、本体还在。
+   * 消息滚出聊天记录后，翻旧图与候选仍要靠这一份。
+   */
+  function partnerAttachmentMetas(agentId) {
+    let names = [];
+    try { names = fs.readdirSync(attachmentsDir); } catch { return []; }
+    const metas = [];
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue;
+      const fileId = name.slice(0, -".json".length);
+      try {
+        const meta = JSON.parse(fs.readFileSync(path.join(attachmentsDir, name), "utf8"));
+        // 元数据里写的 id 跟文件名对不上：不认它。
+        if (String(meta?.id ?? "") !== fileId) continue;
+        metas.push(meta);
+      } catch { /* 坏文件跳过 */ }
+    }
+    return availableAttachmentMetas(metas, {
+      agentId,
+      hasBytes: (id) => {
+        try { return fs.existsSync(attachmentPath(id)); } catch { return false; }
+      },
+    });
+  }
+
+  /** 这位伙伴手边的旧图候选：收藏优先，普通图按最近的挑。 */
+  function oldImageCandidates(agentId, { limit = OLD_IMAGE_CANDIDATE_LIMIT, keyword = "" } = {}) {
+    try { refreshImageCollections(agentId); } catch { /* 扫不动就不给旧图，不挡聊天 */ }
+    return selectOldImageCandidates({
+      messages: store.getThread(agentId).messages,
+      metas: partnerAttachmentMetas(agentId),
+      agentId,
+      limit,
+      keyword,
+    });
+  }
+
+  /** 表情许可：与挑图那条路用同一套规矩，不能因为是旧图就绕过「别发表情」。 */
+  function stickerPolicyFor(agentId, currentContext = {}) {
+    const knowing = store.getKnowing(agentId);
+    const partnerAdaptation = store.getPartnerAdaptation(agentId);
+    const userAdaptation = store.getUserAdaptation();
+    return resolveStickerPolicy({
+      relationship: effectiveRelationship(knowing),
+      personality: knowing.personality,
+      guides: [...userAdaptation.guides, ...partnerAdaptation.guides],
+      context: { kind: "reply", lifeDay: dayKey(new Date()), ...currentContext },
+      runtime: adaptationFeedbackRuntime(agentId),
+    });
+  }
+
+  /**
+   * 这张旧图能不能发出去。
+   *
+   * 属主、字节还在、没被撤回、在本伙伴历史或已收藏，四条都得过。
+   * 当表情发的还必须是收作表情的那几张，且不违反她定下的表情许可。
+   */
+  function prepareOldImage(agentId, request, { messages = [] } = {}) {
+    if (!request) return { ok: false, reason: "none" };
+    const id = String(request.id ?? "");
+    const as = request.as === "sticker" ? "sticker" : "image";
+    const meta = ownAttachmentMeta(agentId, id);
+    if (!meta) return { ok: false, reason: "missing" };
+    const stored = readAttachment(id, agentId);
+    if (!stored?.data?.length) return { ok: false, reason: "missing" };
+    const rows = Array.isArray(messages) ? messages : [];
+    const inHistory = rows.some((row) => row?.attachment?.id === id && !row.recalled);
+    const collected = isCollectedSticker(meta);
+    // 她撤回了送图的那句话或那张图：那就算了，不能把收回去的东西再发出去。
+    const saidId = String(meta.collection?.sourceMessageId ?? "");
+    const saidRow = saidId ? rows.find((row) => String(row?.id ?? "") === saidId) : null;
+    const imageId = String(meta.collection?.sourceImageMessageId ?? "");
+    const imageRow = imageId ? rows.find((row) => String(row?.id ?? "") === imageId) : null;
+    if (saidRow?.recalled || imageRow?.recalled) return { ok: false, reason: "recalled" };
+    // 只有被撤回的消息认着它：也算收回去了。
+    const holders = rows.filter((row) => row?.attachment?.id === id);
+    if (holders.length && !holders.some((row) => !row.recalled)) return { ok: false, reason: "recalled" };
+    if (as === "sticker") {
+      if (!collected) return { ok: false, reason: "not-collected" };
+      const policy = stickerPolicyFor(agentId);
+      if (policy.hardBlocked) return { ok: false, reason: "policy" };
+      if (policy.restrictToSpecific && !policy.allowedIds.map(String).includes(id)) return { ok: false, reason: "policy" };
+      if (policy.deniedIds.map(String).includes(id)) return { ok: false, reason: "policy" };
+    } else if (!inHistory && !collected) {
+      return { ok: false, reason: "unknown" };
+    }
+    // 同一张别连着刷：她明确要你再发一次，才可以再发同一张。
+    const recentUser = [...rows].reverse().find((row) => row?.role === "user" && !row.recalled);
+    if (!requestsResend(String(recentUser?.text ?? ""))) {
+      const usedRecently = rows.slice(-6).some((row) => row?.role === "assistant" && !row.recalled
+        && (row?.attachment?.id === id || row?.imageReuse?.attachmentId === id));
+      if (usedRecently) return { ok: false, reason: "recent-duplicate" };
+    }
+    const rest = { ...stored };
+    delete rest.data;
+    return {
+      ok: true,
+      id,
+      as,
+      meta: rest,
+      // 当普通图重发：挂原附件 id，不复制字节。
+      // 描述与标题一并带上：不然下一轮就当这张图没内容了。
+      attachment: as === "image"
+        ? {
+          id: rest.id,
+          name: rest.name,
+          mimeType: rest.mimeType,
+          size: rest.size,
+          ...(rest.description ? { description: rest.description } : {}),
+          ...(rest.title ? { title: rest.title } : {}),
+          reused: true,
+          originalAt: rest.at,
+        }
+        : null,
+    };
   }
 
   /** 扫一遗元数据，找这位伙伴发过的同一份文件。老图没有 hash，自然不命中。 */
@@ -3506,6 +3753,9 @@ export function apply(ctx) {
       photoShare = null;
     }
     const imagePromptText = chatImagePrompt({ enabled: imageEnabled, hasReference: Boolean(photoReferenceId), tier: store.getPartnerSettings(agentId).imageTier, shareOnly: Boolean(photoShare) });
+    // 旧图候选：主动开口时也能翻自己以前发过的图与收藏，不只生图那一条路。
+    const proactiveKeyword = keywordTokens(String([...store.getThread(agentId).messages].reverse().find((row) => row.role === "user")?.text ?? ""));
+    const oldImageText = formatOldImageCandidates(oldImageCandidates(agentId, { keyword: proactiveKeyword }));
     // 照片依据真到模型手上：上下文里没有那两行，就把这段最近聊天明写进照片提示词。
     const photoShareText = photoShare ? photoSharePrompt({ hasReference: Boolean(photoReferenceId), context: photoContextKnown ? null : photoContext }) : "";
     if (photoShare) diagnostics({ event: "proactive.photo.context", agentId, inHistory: photoContextKnown, age: photoContext ? Date.now() - Date.parse(photoContext.at ?? "") : null });
@@ -3520,7 +3770,7 @@ export function apply(ctx) {
           globalRef: store.getGlobalSettings().model, agentRef: await agentDefaultModel(agentId) });
         if ((shareableVideo || videoLoginNotice) && (!videoPartnerEnabled(agentId) || threadStamp(agentId) !== videoStamp || focusCompanion.active()
           || (shareableVideo && !videoQuota()))) return { ok: false, reason: "video-stale" };
-        const systemPrompt = withNamePlate([spec.systemPrompt, badgeHint, imagePromptText, photoShareText].filter(Boolean).join("\n\n"), partnerName);
+        const systemPrompt = withNamePlate([spec.systemPrompt, badgeHint, imagePromptText, photoShareText, oldImageText].filter(Boolean).join("\n\n"), partnerName);
         const generate = async (prompt, userText, maxTokens, options = {}) => (await generateReply(ctx, {
           systemPrompt: prompt,
           messages: options.messages ?? [...proactiveMessages, { role: "user", content: userText }], diagnostics, maxTokens,
@@ -3548,8 +3798,19 @@ export function apply(ctx) {
       diagnostics({ event: "proactive.silent", agentId, reason: "read-followup" });
       return { ok: false, reason: "silent" };
     }
-    const chatPhoto = parseChatImage(raw);
+    const oldImage = parseOldImageProtocol(raw);
+    const chatPhoto = parseChatImage(oldImage.text);
+    // 旧图与生图撞上时旧图优先：只要出现过旧图标记（哪怕是坏的），这一轮就不生图。
+    const photoRequest = oldImage.status !== "none" ? null : chatPhoto.request;
     diagnostics({ event: "chat.image.parsed", agentId, source: "proactive", status: chatPhoto.status });
+    diagnostics({ event: "chat.oldimage.parsed", agentId, source: "proactive", status: oldImage.status });
+    // 旧图这一关先过：坏协议、发不出去的旧图，整轮安全收手——
+    // 不改徽章、不出声、不落库，也不发空头配文。
+    const oldImagePrepared = prepareOldImage(agentId, oldImage.request, { messages: store.getThread(agentId).messages });
+    if (oldImage.status === "invalid" || (oldImage.request && !oldImagePrepared.ok)) {
+      diagnostics({ event: "proactive.oldimage.rejected", agentId, status: oldImage.status, reason: oldImagePrepared.reason ?? "invalid-protocol" });
+      return { ok: false, reason: "silent" };
+    }
     const badgeMarker = parseBadgeMarker(chatPhoto.text);
     if (badgeMarker.badge) store.setPartnerSettings(agentId, { badge: badgeMarker.badge });
     const badgeLessRaw = badgeMarker.found
@@ -3583,15 +3844,15 @@ export function apply(ctx) {
       diagnostics({ event: "proactive.sleep-check-skipped", agentId });
       return { ok: false, reason: "nighttime-sleep-check" };
     }
-    if (chatPhoto.request && !imageEnabled) return { ok: false, reason: "image-disabled" };
+    if (photoRequest && !imageEnabled) return { ok: false, reason: "image-disabled" };
     // 照片候选不是硬性出图（2026-11-15）：模型给了普通文字就按普通主动发出去，
     // 别因为“这一轮本来想拍照”把整轮丢掉——那是白等一场。只有协议写坏才当这一轮不成：
     // 坏标记不能当正文发，也不能触发生图。
-    if (photoShare && chatPhoto.status === "invalid") {
+    if (photoShare && photoRequest && chatPhoto.status === "invalid") {
       diagnostics({ event: "proactive.photo.skipped", agentId, reason: "invalid-marker" });
       return { ok: false, reason: "photo-declined" };
     }
-    if (photoShare && chatPhoto.request) {
+    if (photoShare && photoRequest) {
       const previousPhotos = threadRows.filter(row => row.role === "assistant" && !row.recalled && row.attachment?.description)
         .slice(-6).map(row => ({ ...row, text: row.attachment.description }));
       if (isRepeatedPhrasing(previousPhotos, chatPhoto.request.prompt, { now: Date.now() }).repeated) {
@@ -3599,13 +3860,14 @@ export function apply(ctx) {
         return { ok: false, reason: "repeat-image" };
       }
     }
-    const imageOnlyReply = Boolean(chatPhoto.request) && !text && !marker.keyword;
+    const imageOnlyReply = (Boolean(photoRequest) || oldImagePrepared.ok) && !text && !marker.keyword;
     if (!isUsableVoice(text) && !marker.keyword && !imageOnlyReply) {
       diagnostics({ event: "proactive.empty", agentId, rawHead: String(raw ?? "").slice(0, 160) });
       return { ok: false, reason: "empty" };
     }
     // 无正文的纯表情或有效纯照片可跳过正文内容关；有配文时，图不能替文字走后门。
-    const stickerOnlyReply = isStickerOnlyReply({ keyword: marker.keyword, text });
+    const stickerOnlyReply = isStickerOnlyReply({ keyword: marker.keyword, text })
+      || (oldImagePrepared.ok && oldImagePrepared.as === "sticker" && !String(text ?? "").trim());
     if (!stickerOnlyReply && !imageOnlyReply && isLowSignalProactive(text, { reason: sendReason })) {
       diagnostics({ event: "proactive.low-signal", agentId, head: text.slice(0, 40) });
       return { ok: false, reason: "low-signal" };
@@ -3654,8 +3916,15 @@ export function apply(ctx) {
       maxBubbles: 4,
       history: store.getThread(agentId).messages,
     });
-    let bubbles = composed.bubbles;
-    if (bubbles.length === 0 && !chatPhoto.request) return { ok: false, reason: marker.keyword ? "sticker-unavailable" : "no-bubbles" };
+    let bubbles = [...composed.bubbles];
+    if (oldImagePrepared.ok) {
+      if (oldImagePrepared.as === "sticker") {
+        bubbles.push(encodeStickerBubble(oldImagePrepared.id));
+      } else {
+        touchAttachment(oldImagePrepared.meta);
+      }
+    }
+    if (bubbles.length === 0 && !photoRequest && !oldImagePrepared.attachment) return { ok: false, reason: marker.keyword ? "sticker-unavailable" : "no-bubbles" };
     if (shareableVideo) {
       // 分享这一段由系统给：真人点 B 站「分享」拿到的就是「【标题-哔哩哔哩】 短链」，
       // 让模型自己写只会写成一条裸链接（而且它没能力生成短链，也不该编）。
@@ -3687,14 +3956,16 @@ export function apply(ctx) {
           && global.rhythmProactiveEnabled === true && partner.proactiveEnabled !== false
           && global.imageTier !== "off" && partner.imageTier !== "off"
           && gate.ok && !gate.exception
-          && (!chatPhoto.request?.self || imageReferences.view(agentId).currentId === photoReferenceId);
+          && (!photoRequest?.self || imageReferences.view(agentId).currentId === photoReferenceId);
       } catch { return false; }
     };
     // 先过正文、去重和语义关再花额度。失败不投递空头配文，也不重试原生图请求。
-    const preparedImage = await prepareChatImage(agentId, chatPhoto.request, { stillCurrent: photoStillCurrent });
+    // 旧图与生图撞上时旧图优先：不真的生图。
+    const preparedImage = await prepareChatImage(agentId, photoRequest, { stillCurrent: photoStillCurrent });
     if (preparedImage.stale) return { ok: false, reason: "stale" };
-    if (chatPhoto.request && !preparedImage.attachment) return { ok: false, reason: "image-unavailable" };
-    let preparedVoice = await prepareVoice(agentId, text, { kind: "proactive", hasPhoto: Boolean(preparedImage.attachment) });
+    if (photoRequest && !preparedImage.attachment) return { ok: false, reason: "image-unavailable" };
+    const replyAttachment = preparedImage.attachment ?? oldImagePrepared.attachment ?? null;
+    let preparedVoice = await prepareVoice(agentId, text, { kind: "proactive", hasPhoto: Boolean(replyAttachment) });
     if (preparedVoice.reason === "cancelled") {
       diagnostics({ event: "proactive.cancelled", agentId });
       return { ok: false, reason: "stale" };
@@ -3738,13 +4009,15 @@ export function apply(ctx) {
         : null);
     const stored = appendPartnerMessage(agentId, {
       role: "assistant",
-      text: visibleTextOf(bubbles) || (preparedImage.attachment ? "[图片]" : ""),
+      text: visibleTextOf(bubbles) || (replyAttachment ? "[图片]" : ""),
       bubbles,
-      ...(preparedImage.attachment ? { attachment: preparedImage.attachment } : {}),
+      ...(replyAttachment ? { attachment: replyAttachment } : {}),
+      // 旧图重发的来路：以后翻历史时认得出这条是复用哪张图。
+      ...(oldImagePrepared.ok ? { imageReuse: { attachmentId: oldImagePrepared.id, as: oldImagePrepared.as, at: new Date().toISOString() } } : {}),
       proactive: true,
       form: "word",
       proactiveKind: kind,
-      ...(photoShare && chatPhoto.request ? { proactiveExpression: "photo", photoScene: photoShare } : {}),
+      ...(photoShare && photoRequest ? { proactiveExpression: "photo", photoScene: photoShare } : {}),
       proactiveContext,
       exception: Boolean(exception),
       topicId: topic?.id ?? null,
@@ -3816,7 +4089,7 @@ export function apply(ctx) {
       bubbles,
       messageId: stored.id,
       // 这一轮真的出图了吗：来源交错按真实结果记，不能因为“本来是照片候选”就当成出过分。
-      photo: Boolean(photoShare && chatPhoto.request),
+      photo: Boolean(photoShare && photoRequest),
       interest: shareableHobby ? { id: shareableHobby.id ?? null, name: shareableHobby.name ?? null, object: shareableHobby.object ?? null } : null,
     };
   }
@@ -6072,7 +6345,8 @@ export function apply(ctx) {
    * （多余的标记在 parseStickerMarker 那里就被吃掉了）。
    */
   async function composeBubbles(agentId, rawText, { maxBubbles = 6, history = [], currentContext = {} } = {}) {
-    const mark = parseStickerMarker(parseChatImage(rawText).text);
+    // 旧图协议在这一层也要剥：不然内部 JSON 会跟着分条进聊天。
+    const mark = parseStickerMarker(parseChatImage(parseOldImageProtocol(rawText).text).text);
     let stickerBubble = null;
     let stickerId = null;
     let stickerException = null;
@@ -6080,16 +6354,7 @@ export function apply(ctx) {
       const index = await readCatalog(ctx);
       const catalog = index ? buildCatalog(index, agentId) : null;
       if (catalog) {
-        const knowing = store.getKnowing(agentId);
-        const partnerAdaptation = store.getPartnerAdaptation(agentId);
-        const userAdaptation = store.getUserAdaptation();
-        const stickerPolicy = resolveStickerPolicy({
-          relationship: effectiveRelationship(knowing),
-          personality: knowing.personality,
-          guides: [...userAdaptation.guides, ...partnerAdaptation.guides],
-          context: { kind: "reply", lifeDay: dayKey(new Date()), ...currentContext },
-          runtime: adaptationFeedbackRuntime(agentId),
-        });
+        const stickerPolicy = stickerPolicyFor(agentId, currentContext);
         const picked = pickSticker(catalog, {
           keyword: mark.keyword,
           recentIds: recentStickerIds(history),
@@ -6435,7 +6700,10 @@ export function apply(ctx) {
       try { hasImageReference = Boolean(imageReferences.current(agentId)); } catch { /* 坏参考照不能变成陌生脸 */ }
     }
     const imagePromptText = chatImagePrompt({ enabled: imageEnabled, hasReference: hasImageReference, tier: store.getPartnerSettings(agentId).imageTier });
-    const systemPrompt = buildSystemPrompt({
+    // 旧图候选：这位伙伴手边的旧图与收藏，只给一小把，不把整个图库塞进去。
+    const oldImageKeyword = keywordTokens(String(threadMessages.find((row) => row.id === replyTargetId)?.text ?? ""));
+    const oldImageText = formatOldImageCandidates(oldImageCandidates(agentId, { keyword: oldImageKeyword }));
+    const systemPromptBase = buildSystemPrompt({
       ruleProfile: agentId === compactReplyPilotId ? "compact-v1" : "legacy",
       partnerId: agentId,
       partnerName: partner?.name ?? agentId,
@@ -6481,6 +6749,7 @@ export function apply(ctx) {
       memeText: memeTextFor(agentId),
       userName: USER_NAME,
     });
+    const systemPrompt = [systemPromptBase, oldImageText].filter(Boolean).join("\n\n");
     // 只记体积和档位，不记私聊原文；字符数不是实际 token 用量。
     diagnostics({ event: "reply.prompt.profile", agentId, profile: agentId === compactReplyPilotId ? "compact-v1" : "legacy", systemChars: systemPrompt.length });
     // 只记「提醒了没、为什么提醒」，提醒后有没有真动，看 sticker.reply 那条的 marker/sent。
@@ -6534,10 +6803,13 @@ export function apply(ctx) {
     const chatTools = [];
     if (offerSearchTool) chatTools.push(SEARCH_TOOL);
     if (videoShelf.length) chatTools.push(READ_VIDEO_TOOL);
-    // 翻旧图的工具只在「她真的发过图」时才给：一张都没发过时挂个空工具，只会招 ta 乱调。
+    // 翻旧图的工具只在「她真的发过图」或「这位伙伴手边还收着图」时才给：
+    // 一张都没发过时挂个空工具，只会招 ta 乱调。消息滚出聊天记录后只剩收藏，
+    // 工具照样要在——那张图还在盘上，也还收着。
     const threadForTools = store.getThread(agentId).messages;
-    const imageShelf = threadForTools.filter((row) => row?.role === "user" && row?.attachment?.id);
-    const findImageTool = imageShelf.length ? createFindImageTool({ messages: threadForTools }) : null;
+    const imageShelf = threadForTools.filter((row) => row?.attachment?.id);
+    const collectedShelf = partnerAttachmentMetas(agentId).filter((meta) => isCollectedSticker(meta));
+    const findImageTool = (imageShelf.length || collectedShelf.length) ? createFindImageTool({ messages: threadForTools, agentId }) : null;
     if (findImageTool) chatTools.push(IMAGE_TOOL);
     const runChatTool = chatTools.length
       ? async (payload) => {
@@ -6651,9 +6923,19 @@ export function apply(ctx) {
     // ta决定这回安静收尾：看到了（已读已经盖过），但不发伙伴消息。
     // 这是正常的回应结果，不是生成失败，也不能触发五分钟重试。
     // 协议必须先于徽章、表情、正文清洗和语音处理剥离；坏回包不提交判断。
-    const rawGeneratedText = String(memoryFeedback.text ?? "");
+    const oldImage = parseOldImageProtocol(memoryFeedback.text);
+    const rawGeneratedText = oldImage.text;
     const chatPhoto = parseChatImage(rawGeneratedText);
     diagnostics({ event: "chat.image.parsed", agentId, source: "chat", status: chatPhoto.status });
+    diagnostics({ event: "chat.oldimage.parsed", agentId, status: oldImage.status });
+    // 旧图这一关先过：坏协议、发不出去的旧图（本体没了、串号、没收藏、撤回、禁发），
+    // 整轮安全收手——不生图、不改徽章、不出声、不落库，
+    // 更不能把「给你看看」这种空头配文发出去。
+    const oldImagePrepared = prepareOldImage(agentId, oldImage.request, { messages: store.getThread(agentId).messages });
+    if (oldImage.status === "invalid" || (oldImage.request && !oldImagePrepared.ok)) {
+      diagnostics({ event: "chat.oldimage.rejected", agentId, status: oldImage.status, reason: oldImagePrepared.reason ?? "invalid-protocol" });
+      return { ok: false, reason: "silent", generationMs: Date.now() - startedAt };
+    }
     const badgeMarker = parseBadgeMarker(chatPhoto.text);
     if (badgeMarker.badge) store.setPartnerSettings(agentId, { badge: badgeMarker.badge });
     const badgeLessRaw = badgeMarker.found
@@ -6671,7 +6953,10 @@ export function apply(ctx) {
       diagnostics({ event: "reply.silent", agentId, generationMs });
       return { ok: false, reason: "silent", generationMs };
     }
-    const preparedImage = await prepareChatImage(agentId, chatPhoto.request, {
+    // 同一轮里旧图与生图撞上：旧图优先，不真的生图（生图要花钱，也不能两张图一起发）。
+    // 只要出现过旧图标记（哪怕是坏的），这一轮就不生图。
+    const photoRequest = oldImage.status !== "none" ? null : chatPhoto.request;
+    const preparedImage = await prepareChatImage(agentId, photoRequest, {
       signal, stillCurrent: () => (!isCurrent || isCurrent()) && targetStillLive() && !superseded()?.superseded,
     });
     if (preparedImage.stale) return { ok: false, reason: "stale", generationMs: Date.now() - startedAt };
@@ -6697,8 +6982,19 @@ export function apply(ctx) {
       history: windowed,
       currentContext: { currentTurnId: currentMessageId || replyTargetId || repliedTo || "" },
     });
-    const { bubbles } = composed;
-    if (bubbles.length === 0 && !preparedImage.attachment) {
+    const bubbles = [...composed.bubbles];
+    // 旧图：属主、还在、没撤回、在本伙伴历史或已收藏，四条都过了才发（前面已校验过）。
+    if (oldImagePrepared.ok) {
+      if (oldImagePrepared.as === "sticker") {
+        // 当表情发：只进气泡，不再挂附件，免得一条消息出两张图。
+        bubbles.push(encodeStickerBubble(oldImagePrepared.id));
+      } else {
+        // 当普通图重发：挂原附件 id，不复制字节；只记一次“最近见过”。
+        touchAttachment(oldImagePrepared.meta);
+      }
+    }
+    const replyAttachment = preparedImage.attachment ?? oldImagePrepared.attachment ?? null;
+    if (bubbles.length === 0 && !replyAttachment) {
       const staleEmpty = supersededResult("empty");
       if (staleEmpty) return staleEmpty;
       // 伙伴只想甩图，但这次没有可用匹配：跟安静收尾一样结束，别把图库缺图伪装成模型失败重试。
@@ -6732,7 +7028,7 @@ export function apply(ctx) {
 
     if (isCurrent && !isCurrent()) return { ok: false, reason: "stale", generationMs };
     let preparedVoice = await prepareVoice(agentId, cleanedText, {
-      hasPhoto: Boolean(preparedImage.attachment),
+      hasPhoto: Boolean(replyAttachment),
       kind: "reply",
       currentTurnId: currentMessageId || replyTargetId || repliedTo || "",
       triggerMessageId: replyTargetId,
@@ -6762,9 +7058,11 @@ export function apply(ctx) {
     }
     const reply = {
       role: "assistant",
-      text: visibleTextOf(bubbles) || (preparedImage.attachment ? "[图片]" : ""),
+      text: visibleTextOf(bubbles) || (replyAttachment ? "[图片]" : ""),
       bubbles,
-      ...(preparedImage.attachment ? { attachment: preparedImage.attachment } : {}),
+      ...(replyAttachment ? { attachment: replyAttachment } : {}),
+      // 旧图重发的来路：以后翻历史时认得出这条是复用哪张图。
+      ...(oldImagePrepared.ok ? { imageReuse: { attachmentId: oldImagePrepared.id, as: oldImagePrepared.as, at: new Date().toISOString() } } : {}),
       via: generated.via,
       reasoningChars: generated.reasoningChars ?? 0,
       repliedTo: replyTargetId,
@@ -10708,6 +11006,12 @@ export function apply(ctx) {
           return c.json({ ok: false, error: { message: "表情包编号不合法" } }, 400);
         }
         try {
+          // 旧图当表情发：id 是本伙伴的附件 id 时直接读原件（不复制字节、不进图库）。
+          // 读不到就往下走原路，不抢公共图库里同名的号。
+          if (/^img_[A-Za-z0-9_-]{1,120}$/.test(id)) {
+            const old = readAttachment(id, agentId);
+            if (old?.data?.length) return c.body(old.data, 200, { "Content-Type": old.mimeType, "Cache-Control": "private, max-age=3600" });
+          }
           const own = readOwnSticker(ctx.dataDir, id);
           if (own) return c.body(own.bytes, 200, { "Content-Type": own.contentType, "Cache-Control": "private, max-age=3600" });
           const index = await readCatalog(ctx);
@@ -10735,6 +11039,11 @@ export function apply(ctx) {
           return c.json({ ok: false, error: { message: "表情包编号不合法" } }, 400);
         }
         try {
+          // 旧图当表情发：缩略图那条路也得认附件 id，否则手机端读不到。
+          if (/^img_[A-Za-z0-9_-]{1,120}$/.test(id)) {
+            const old = readAttachment(id, agentId);
+            if (old?.data?.length) return c.body(old.data, 200, { "Content-Type": old.mimeType, "Cache-Control": "private, max-age=3600" });
+          }
           const ownRow = readStickerRow(ctx.dataDir, id);
           if (ownRow) {
             const thumb = await ensureStickerThumb(ctx.dataDir, ownRow, () => readStickerBytesOf(ctx.dataDir, ownRow));

@@ -44,6 +44,14 @@ test("正常账本读坏时，扫描既不丢引用也不把它再改名", () =>
   assert.ok(fs.existsSync(live), "扫描不该顺手把坏账改名");
 });
 
+test("个人表情旧图只挂在 imageReuse 上：也得算有人认领", () => {
+  // 当表情发的旧图挂在气泡哨兵上，消息上没有 attachment：
+  // 不认它，退收藏后那张图会被当孤儿删掉。
+  const { store } = tmpStore();
+  store.appendMessage("hanako", { role: "assistant", text: "[表情]", bubbles: ["\u0001stk:img_reuse"], imageReuse: { attachmentId: "img_reuse", as: "sticker" } });
+  assert.ok(store.referencedAttachmentIds().has("img_reuse"));
+});
+
 test("别的文件不算引用", () => {
   const { store, threads } = tmpStore();
   fs.writeFileSync(path.join(threads, "notes.txt"), "img_not_a_thread");

@@ -281,7 +281,7 @@ test("正文内容关只允许纯表情或有效纯照片绕过，有正文的�
   const abstractAt = INDEX_SOURCE.indexOf("if (!stickerOnlyReply && !imageOnlyReply && isAbstractOnlyProactive", start);
   assert.ok(abstractAt > start, "抽象总结那一关也得走同一个豁免");
   const window = INDEX_SOURCE.slice(INDEX_SOURCE.indexOf("const stickerOnlyReply"), abstractAt + 80);
-  assert.match(INDEX_SOURCE, /const imageOnlyReply = Boolean\(chatPhoto\.request\) && !text && !marker\.keyword/);
+  assert.match(INDEX_SOURCE, /const imageOnlyReply = \(Boolean\(photoRequest\) \|\| oldImagePrepared\.ok\) && !text && !marker\.keyword/);
   assert.match(window, /const stickerOnlyReply = isStickerOnlyReply\(\{ keyword: marker\.keyword, text \}\)/);
   assert.match(window, /if \(!stickerOnlyReply && !imageOnlyReply && isLowSignalProactive\(/);
   assert.match(window, /if \(!stickerOnlyReply && !imageOnlyReply && isAbstractOnlyProactive\(/);

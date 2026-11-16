@@ -1,5 +1,15 @@
 # TESTING · 茶话会
 
+## 旧图复用与伙伴小收藏（2026-11-16，0.19.0-dev.1）
+
+- 普通聊天与主动消息可使用 `[旧图:{"id":"img_…","as":"image|sticker"}]` 直接投递原附件，不重新生图；原图与生图标记同轮时旧图优先。候选标注原日期与发送方，避免把她的图片当成伙伴自己的经历。
+- 明确赠送、收作表情的图片记入本伙伴附件元数据。普通图片不自动当表情；看图、提问、假设、否定赠送均不收。支持取消及后来重新收藏，只处理最新意图，旧赠送不能复活取消记录。
+- 收藏不随普通旧图清理；源图或赠送消息撤回则停用。源消息仅滚出历史仍可检索、重发；完全删除伙伴会带走收藏。历史 `imageReuse` 引用参与孤儿判断。
+- 候选和发送校验属主、严格附件编号、元数据与本体、撤回及表情使用限制。坏协议、不可发送旧图整轮安静结束，不发悬空配文、不触发生图。桌面和手机沿用现有表情/附件路由返回原件。
+- 定向回归：`node --test tests/image-collection.test.js tests/image-collection-flow.test.js tests/image-collection-proactive.test.js tests/image-tool.test.js tests/image-retention.test.js tests/image-references.test.js tests/mobile-routes.test.js tests/compose.test.js`：156/156通过；另跑 `tests/chat-image-proactive.test.js tests/chat-image-delivery.test.js tests/proactive-chain.test.js tests/ui.test.js tests/image-cleanup.test.js`：222/222通过。
+- 主会话最终亲跑 `node --test tests/image-collection.test.js tests/image-collection-flow.test.js tests/image-collection-proactive.test.js tests/image-tool.test.js`：43/43通过；`git diff --check`通过。检索用例实际调用模型工具回路，源消息消失后仍能取得收藏编号并投递表情，不用撤回来冒充历史滚出。
+- 验证使用隔离测试数据和模型回包；没有向真实聊天写入测试消息，没有调用真实生图。本轮未做浏览器/手机实机渲染验收，未发布。
+
 ## 八款生图动态气泡（2026-11-15，0.18.2-dev.3）
 
 - 新增桃桃垂耳兔、奶茶水豚、月光水母、黄油小鸡、晴空云糖、折角情书、像素心跳、海盐水族箱。后四款采用云形、折角纸、阶梯像素、胶囊水族箱的不同轮廓。八张透明原画来自本轮生图，没有复用 QQ 商业气泡素材。

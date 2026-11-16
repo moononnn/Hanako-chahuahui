@@ -5,6 +5,7 @@ import {
   IMAGE_TOOL_NAME,
   formatImageMatches,
   parseImageTime,
+  pickCollectedImageRows,
   pickImageMessages,
   resolveImageRange,
 } from "../lib/image-tool.js";
@@ -89,7 +90,61 @@ test("结果按时间旧到新，每条带上她当时那句话", () => {
   assert.match(formatImageMatches([{ at: at("2026-10-26T18:00:00"), said: "", title: "图", description: "描述" }]), /她当时没说话/u);
 });
 
+test("消息滚出聊天记录后，收藏里的图仍能翻到", () => {
+  const metas = [{
+    id: "img_gift", agentId: "nova", at: "2026-10-01T00:00:00",
+    collection: { sticker: true, at: "2026-10-02T00:00:00", sourceSaid: "这张给你做表情包", sourceRole: "user" },
+    title: "猫", description: "一只猫",
+  }];
+  const rows = pickCollectedImageRows(metas, { from: 0, to: Date.parse("2026-10-03T00:00:00") });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].attachmentId, "img_gift");
+  assert.equal(rows[0].role, "user", "来源是她发的，不能说成伙伴自己的");
+  const text = formatImageMatches(rows);
+  assert.match(text, /img_gift/u, "编号要给出来，重发旧图时得靠它");
+  assert.match(text, /她说「这张给你做表情包」/u);
+  assert.equal(pickCollectedImageRows(metas, { from: 0, to: Date.parse("2026-09-01T00:00:00") }).length, 0, "时间范围照旧管用");
+  assert.equal(pickCollectedImageRows([{ id: "x", agentId: "nova", at: "2026-10-01", collection: { sticker: true } }], { from: 0, to: Date.now() })[0].role, null, "来源查不到就不臆断");
+});
+
+test("翻收藏按原图那天的日期算，不是按收藏那天", () => {
+  const metas = [{
+    id: "img_old", agentId: "nova", at: "2026-10-01T00:00:00",
+    collection: { sticker: true, at: new Date().toISOString(), sourceSaid: "给你的", sourceRole: "user" },
+  }];
+  const byOriginal = pickCollectedImageRows(metas, { from: Date.parse("2026-09-25T00:00:00"), to: Date.parse("2026-10-05T00:00:00") });
+  assert.equal(byOriginal.length, 1, "按原图那天能翻到");
+  assert.equal(byOriginal[0].collectedAt > 0, true, "收藏日期另记，不替代原图日期");
+  const byCollected = pickCollectedImageRows(metas, { from: Date.parse("2026-11-01T00:00:00"), to: Date.parse("2026-12-01T00:00:00") });
+  assert.equal(byCollected.length, 0, "按收藏那天不该误认成原图那天");
+});
+
 test("翻不到就给空，别拿一句废话充数", () => {
   assert.equal(formatImageMatches([]), "");
   assert.equal(formatImageMatches(null), "");
+});
+
+test("自己以前发过的照片也翻得到，编号要写出来供旧图协议用", () => {
+  const both = [
+    { role: "user", at: "2026-10-26T17:00:00", attachment: { id: "img_a" }, text: "这张报错" },
+    { role: "assistant", at: "2026-10-26T17:10:00", attachment: { id: "img_mine" }, text: "我昨天拍的窗台" },
+  ];
+  const rows = pickImageMessages(both, resolveImageRange({}), metaOf);
+  assert.deepEqual(rows.map((row) => row.attachmentId), ["img_a", "img_mine"]);
+  assert.equal(rows[1].role, "assistant");
+  const text = formatImageMatches(rows);
+  assert.match(text, /img_a/u, "编号要给出来，重发旧图时得靠它");
+  assert.match(text, /img_mine/u);
+  assert.match(text, /你说「我昨天拍的窗台」/u, "自己发的那张不能说成她说的");
+});
+
+test("收作表情的那几张要标出来：能当表情发的只有它们", () => {
+  const meta = (id) => (id === "img_gift" ? { title: "猫", description: "一只猫", collection: { sticker: true } } : { title: "截图", description: "报错" });
+  const rows = pickImageMessages([
+    { role: "user", at: "2026-10-26T17:00:00", attachment: { id: "img_gift" }, text: "给你的" },
+    { role: "user", at: "2026-10-26T17:30:00", attachment: { id: "img_plain" }, text: "报错" },
+  ], resolveImageRange({}), meta);
+  assert.equal(rows.find((row) => row.attachmentId === "img_gift").sticker, true);
+  assert.equal(rows.find((row) => row.attachmentId === "img_plain").sticker, false);
+  assert.match(formatImageMatches(rows), /可当表情发/u);
 });

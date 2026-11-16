@@ -80,7 +80,7 @@ test("额度预占或结算写入失败时暂停生图，不抛出整条聊天�
 });
 test("聊天接线把纯图作为正常回复保存，关闭也会剥离幻觉协议", () => {
   assert.match(source, /parseChatImage\(rawGeneratedText\)/);
-  assert.match(source, /bubbles.length === 0 && !preparedImage.attachment/);
-  assert.match(source, /attachment: preparedImage.attachment/);
-  assert.match(source, /parseStickerMarker\(parseChatImage\(rawText\).text\)/);
+  assert.match(source, /bubbles.length === 0 && !replyAttachment/);
+  assert.match(source, /attachment: replyAttachment/);
+  assert.match(source, /parseStickerMarker\(parseChatImage\(parseOldImageProtocol\(rawText\).text\).text\)/);
 });

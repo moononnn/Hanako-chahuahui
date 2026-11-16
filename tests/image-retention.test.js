@@ -144,3 +144,26 @@ test("没给引用名单时只按期限算，不把每张都当孤儿", () => {
   assert.equal(s.orphanCount, 0);
   assert.equal(s.cleanupCount, 0);
 });
+
+test("收作表情的小收藏不过期也不当孤儿清，但张数与占用照算", () => {
+  const collected = { id: "kept", agentId: "nova", at: daysAgo(200), lastSeenAt: daysAgo(200), size: 500, collection: { sticker: true } };
+  const plain = { id: "plain", agentId: "nova", at: daysAgo(200), lastSeenAt: daysAgo(200), size: 100 };
+  const s = summarizeStorage([collected, plain], 30, now, new Set(["plain"]));
+  assert.equal(s.count, 2, "收藏也得算在张数里");
+  assert.equal(s.bytes, 600, "收藏也得算在占用里");
+  assert.equal(s.expiredCount, 1, "只有普通那张算过期");
+  assert.equal(s.expiredBytes, 100);
+  assert.equal(s.orphanCount, 0, "收藏不当孤儿");
+  assert.equal(s.cleanupCount, 1);
+  const plan = planCleanup([collected, plain], { days: 30, referencedIds: new Set(["plain"]) }, now);
+  assert.deepEqual(plan.rows.map((row) => row.id), ["plain"], "收藏不进待清名单");
+  const orphanPlan = planCleanup([collected], { days: 30, referencedIds: new Set() }, now);
+  assert.deepEqual(orphanPlan.rows, [], "没人认领的收藏也不当孤儿清");
+});
+
+test("退收藏的墓碑不再受保护，按普通图清", () => {
+  const tomb = { id: "gone", agentId: "nova", at: daysAgo(200), lastSeenAt: daysAgo(200), size: 50, collection: { sticker: false } };
+  assert.equal(isExpired(tomb, 30, now), true);
+  const plan = planCleanup([tomb], { days: 30, referencedIds: new Set() }, now);
+  assert.deepEqual(plan.rows.map((row) => row.id), ["gone"]);
+});
