@@ -32,8 +32,7 @@ import { hasPalette, isPaletteDone, normalizePalette, paletteToText } from "./li
 import { createAvatarReader, looksLikeImage, toBytes } from "./lib/avatar.js";
 import { registerTavernImportService, renderImportedPersona } from "./lib/character-import.js";
 import { buildSystemPrompt, buildTeaseText, identityBlock, replyChoiceBlock, searchToolText, shouldQuietClose, threadToMessages, VOICE_REQUEST_TEXT } from "./lib/prompt.js";
-import { detectMemeMention, detectMemeExplanation, pickMemeSource } from "./lib/meme-capture.js";
-import { addUserMeme, selectMemesForAgent, markMemeUsed, formatMemePrompt } from "./lib/meme-pool.js";
+import { selectMemesForAgent, markMemeUsed, formatMemePrompt } from "./lib/meme-pool.js";
 import { buildAmbientContextText, buildDaybookText, buildFestivalResponseText, daybookAvailable, daybookEntry, daybookHash, daybookQueryTopics, periodNoteDecision, previousAssistantBeforeUser, readDaybook, readDaybookVerbose, shouldUseDaybook } from "./lib/daybook.js";
 // 茶话会自己的一天（2026-10-31）：天气与节日不借拾光记，自己查自己记。
 import {
@@ -312,7 +311,8 @@ import {
   requestsResend,
   selectOldImageCandidates,
 } from "./lib/image-collection.js";
-import { activeImagePairs, formatImagePairPrompt, isFreshPairReply, registerImagePairTool } from "./lib/image-pairs.js";
+import { activeImagePairs, formatImagePairPrompt, imageSourceRecalled, registerImagePairTool } from "./lib/image-pairs.js";
+import { sharedPlayBook, sharedPlayPrompt, extractSharedPlay, applySharedPlay, forgetSharedPlaySource } from "./lib/shared-play.js";
 import { NATIVE_IMAGE_BODY_ROWS, NATIVE_IMAGE_BYTES_PER_TURN, NATIVE_IMAGE_PER_TURN, MARK_RE, hasNativeImageMark, rewriteNativeImageMarks } from "./lib/native-vision.js";
 import { normalizeRetentionDays, planCleanup, summarizeStorage } from "./lib/image-retention.js";
 import { canAnswerPoke } from "./lib/poke.js";
@@ -1081,12 +1081,13 @@ export function apply(ctx) {
         return { isError: true, text: "这个工具不存在。就用手上已有的东西说话。" };
       }
       const range = resolveImageRange({ since: args?.since, until: args?.until });
+      const stopped = new Set(store.readMemory(agentId).sharedPlay.filter((entry) => entry.state === "stopped").flatMap((entry) => entry.imageIds));
       // 只认这位伙伴自己的附件：不按属主读，别的伙伴的图会从这儿漏出去。
       const describe = (id) => {
         const meta = readAttachmentMeta(id);
         if (!meta) return null;
         if (agentId && String(meta.agentId ?? "") !== String(agentId)) return null;
-        return meta;
+        return stopped.has(id) ? { ...meta, collection: { ...meta.collection, sticker: false } } : meta;
       };
       const rows = pickImageMessages(messages, { ...range, keyword: args?.keyword }, describe);
       // 消息滚出聊天记录（两千条上限）的收藏，从附件元数据里补回来：
@@ -1537,50 +1538,6 @@ export function apply(ctx) {
       if (partnerMessageEventWarningLogged) return;
       partnerMessageEventWarningLogged = true;
       diagnostics({ event: "message.arrival.event.failed", code: String(error?.code ?? "unknown") });
-    }
-  }
-
-  /**
-   * 梗：只在她自己说破的那一刻记。
-   *
-   * 为什么只认这个时机（2026-11-14 验证）：这是世界上唯一免费且准的标注。
-   * 去外面抓抓不到——B 站弹幕是现场反应、热评是观后感，上万个样本里没有一条能搬走；
-   * 群里复读出来的是黑话（大怨种、斩杀），不是梗。她自己说“我在玩梗”的那一下，
-   * 后面跟她要指的东西就在前三句里（设计记录的取舍只在本地，不随应用分发）。
-   *
-   * 只存不判：原句取不到就不存，绝不塞一句看似相关的进去凑数。
-   */
-  function captureMemeFromUserMessage(agentId, stored, messageText) {
-    try {
-      const rows = store.getThread(agentId).messages;
-      const said = detectMemeMention(messageText);
-      if (said.said) {
-        const at = rows.findIndex((row) => row.id === stored.id);
-        const src = pickMemeSource(rows, at);
-        if (!src) {
-          diagnostics({ event: "meme.capture.skipped", agentId, reason: "no-source" });
-          return;
-        }
-        const { pool } = addUserMeme(store.getMemes(), { text: src.text, meaning: src.meaning, messageId: src.messageId, at: Date.now() });
-        store.saveMemes(pool);
-        diagnostics({ event: "meme.capture", agentId, kind: "said", chars: src.text.length, hasMeaning: Boolean(src.meaning) });
-        return;
-      }
-      // 她紧接着给的那句释义（“就是模仿猫咪生气叫声哇”），补给刚记下的那一条。
-      // 只认“上一条是我在说破”这一种场合，离远了就不当解释。
-      const meaning = detectMemeExplanation(messageText);
-      if (!meaning) return;
-      const prevUser = rows.slice(0, -1).reverse().find((row) => row.role === "user");
-      if (!prevUser || !detectMemeMention(prevUser.text ?? "").said) return;
-      const pool = store.getMemes();
-      const target = pool.slice().reverse().find((row) => row.status === "confirmed" && !row.meaning);
-      if (!target) return;
-      target.meaning = meaning;
-      store.saveMemes(pool);
-      diagnostics({ event: "meme.capture", agentId, kind: "explained", chars: meaning.length });
-    } catch (error) {
-      // 记梗失败不能挡聊天
-      diagnostics({ event: "meme.capture.failed", code: String(error?.code ?? "unknown") });
     }
   }
 
@@ -2042,6 +1999,7 @@ export function apply(ctx) {
       const imageRow = messages.find((row) => String(row?.id ?? "") === intent.imageMessageId) ?? null;
       const written = writeCollectionMeta(agentId, intent.attachmentId, {
         sticker: intent.collect,
+        origin: "user-gift",
         at: new Date().toISOString(),
         sourceAt: intent.at,
         sourceMessageId: intent.messageId,
@@ -2099,15 +2057,71 @@ export function apply(ctx) {
     });
   }
 
-  /** 这位伙伴手边的旧图候选：收藏优先，普通图按最近的挑。 */
-  function oldImageContext(agentId, { limit = OLD_IMAGE_CANDIDATE_LIMIT, keyword = "" } = {}) {
-    try { refreshImageCollections(agentId); } catch { /* 扫不动就不给旧图，不挡聊天 */ }
+  /** 每个伙伴自己的共同玩法；回忆与本轮学习共用同一份材料。 */
+  function oldImageContext(agentId, { limit = OLD_IMAGE_CANDIDATE_LIMIT, keyword = "", learn = true } = {}) {
+    try { refreshImageCollections(agentId); } catch { /* 不挡聊天 */ }
     const messages = store.getThread(agentId).messages;
     const metas = partnerAttachmentMetas(agentId);
-    return [
-      formatOldImageCandidates(selectOldImageCandidates({ messages, metas, agentId, limit, keyword })),
-      formatImagePairPrompt(activeImagePairs(metas, messages), messages),
-    ].filter(Boolean).join("\n\n");
+    const memory = store.readMemory(agentId);
+    let saved = memory.sharedPlay;
+    // 软撤回同样停用玩法；保留最小墓碑，避免原消息滚出后旧猜测复活。
+    for (const row of messages.filter((row) => row.recalled)) saved = forgetSharedPlaySource(saved, row.id);
+    const pairs = activeImagePairs(metas, messages);
+    const retired = new Map();
+    const book = sharedPlayBook(saved, pairs).map((entry) => {
+      let recalled = false, unavailable = false;
+      for (const id of entry.imageIds) {
+        const meta = metas.find((item) => item.id === id);
+        if (meta && imageSourceRecalled(meta, messages)) recalled = true;
+        if (!meta || imageSourceRecalled(meta, messages)
+          || (meta.collection?.sticker === false && Number(meta.collection.sourceAt) >= Date.parse(entry.updatedAt))) unavailable = true;
+      }
+      if (!unavailable || (entry.state === "stopped" && (!recalled || (!entry.title && !entry.meaning)))) return entry;
+      const stopped = { ...entry, state: "stopped", corrected: true, revision: entry.revision + 1, updatedAt: new Date().toISOString(),
+        ...(recalled ? { title: "", meaning: "" } : {}) };
+      retired.set(entry.id, stopped);
+      return stopped;
+    });
+    saved = saved.map((entry) => retired.get(entry.id) ?? entry);
+    if (JSON.stringify(saved) !== JSON.stringify(memory.sharedPlay)) store.writeMemory(agentId, { ...memory, sharedPlay: saved });
+    syncSharedPlayImages(agentId, book, { metas, messages });
+    const blocked = new Set(book.filter((entry) => entry.state === "stopped").flatMap((entry) => entry.imageIds));
+    const usable = metas.filter((meta) => !imageSourceRecalled(meta, messages) && !blocked.has(meta.id));
+    const materials = messages.filter((row) => !row.recalled && ["user", "assistant"].includes(row.role))
+      .slice(-16).map((row) => ({ id: row.id, role: row.role, text: String(row.text ?? ""), at: row.at,
+        attachment: { id: row.attachment?.id ?? row.imageReuse?.attachmentId ?? "",
+          description: String(metas.find((meta) => meta.id === (row.attachment?.id ?? row.imageReuse?.attachmentId))?.description ?? "").slice(0, 300) } }));
+    const unchangedPairs = pairs.filter((pair) => !book.some((entry) => (entry.corrected || entry.state === "stopped")
+      && entry.imageIds.some((id) => id === pair.userImageId || id === pair.partnerImageId)));
+    return { book, materials, metas, text: [
+      formatOldImageCandidates(selectOldImageCandidates({ messages, metas: usable, agentId, limit, keyword })),
+      formatImagePairPrompt(unchangedPairs, messages),
+      sharedPlayPrompt(book, materials, { learn }),
+    ].filter(Boolean).join("\n\n") };
+  }
+
+  function freshSharedImageReply(book, rows, id) {
+    const index = rows.findLastIndex((row) => row.role === "user" && !row.recalled);
+    const incoming = rows[index]?.attachment?.id;
+    return Boolean(incoming && book.some((entry) => entry.state !== "stopped" && entry.imageIds.includes(incoming) && entry.imageIds.includes(id))
+      && !rows.slice(index + 1).some((row) => row.role === "assistant" && !row.recalled
+        && (row.imageReuse?.attachmentId ?? row.attachment?.id) === id));
+  }
+
+  /** 把已落账的推测素材收进私人收藏；停止后只撤销推测收藏，不抹用户明确收藏。 */
+  function syncSharedPlayImages(agentId, book, { metas = partnerAttachmentMetas(agentId), messages = store.getThread(agentId).messages } = {}) {
+    const active = new Set(book.filter((entry) => entry.state !== "stopped").flatMap((entry) => entry.imageIds));
+    for (const meta of metas) {
+      const inferred = meta.collection?.origin === "inferred-shared-play";
+      if (active.has(meta.id) && !imageSourceRecalled(meta, messages)) {
+        if (meta.collection?.sticker === true) continue;
+        const source = messages.find((row) => row.attachment?.id === meta.id && !row.imageReuse && !row.recalled);
+        writeCollectionMeta(agentId, meta.id, { sticker: true, origin: "inferred-shared-play", at: new Date().toISOString(),
+          sourceAt: Date.now(), sourceMessageId: "", sourceImageMessageId: source?.id ?? "", sourceRole: source?.role ?? meta.collection?.sourceRole ?? null });
+      } else if (inferred && meta.collection.sticker === true) {
+        writeCollectionMeta(agentId, meta.id, { sticker: false, sourceAt: Date.now() });
+      }
+    }
   }
 
   /** 表情许可：与挑图那条路用同一套规矩，不能因为是旧图就绕过「别发表情」。 */
@@ -2130,7 +2144,7 @@ export function apply(ctx) {
    * 属主、字节还在、没被撤回、在本伙伴历史或已收藏，四条都得过。
    * 当表情发的还必须是收作表情的那几张，且不违反她定下的表情许可。
    */
-  function prepareOldImage(agentId, request, { messages = [] } = {}) {
+  function prepareOldImage(agentId, request, { messages = [], playBook = [], allowRequestedOriginal = false } = {}) {
     if (!request) return { ok: false, reason: "none" };
     const id = String(request.id ?? "");
     const as = request.as === "sticker" ? "sticker" : "image";
@@ -2150,8 +2164,16 @@ export function apply(ctx) {
     // 只有被撤回的消息认着它：也算收回去了。
     const holders = rows.filter((row) => row?.attachment?.id === id);
     if (holders.length && !holders.some((row) => !row.recalled)) return { ok: false, reason: "recalled" };
+    const recentUser = [...rows].reverse().find((row) => row?.role === "user" && !row.recalled);
+    const askText = String(recentUser?.text ?? "");
+    const explicitlyAsked = allowRequestedOriginal && !/(?:别|不要|不用|不许|停止|取消)[^。！？!?\n]{0,8}(?:发|给|看|图|用)/u.test(askText)
+      && (requestsResend(askText) || /(?:发|给|找|拿|看|翻)[^。！？!?\n]{0,8}(?:原图|图片|照片|那张|这张)|(?:那张|这张)[^。！？!?\n]{0,6}(?:图|照片)[^。！？!?\n]{0,4}(?:呢|在哪|给我|发我|看看)/u.test(askText));
+    const stopped = playBook.some((entry) => entry.state === "stopped" && entry.imageIds.includes(id));
+    // 停梗不等于删除原件：自动投递双通道都挡住，点名索要时仍可取原图。
+    if (stopped && !(as === "image" && explicitlyAsked)) return { ok: false, reason: "stopped-play" };
     if (as === "sticker") {
-      if (!collected) return { ok: false, reason: "not-collected" };
+      const inferred = playBook.some((entry) => entry.state !== "stopped" && entry.imageIds.includes(id));
+      if (!collected && !inferred) return { ok: false, reason: "not-collected" };
       const policy = stickerPolicyFor(agentId);
       if (policy.hardBlocked) return { ok: false, reason: "policy" };
       if (policy.restrictToSpecific && !policy.allowedIds.map(String).includes(id)) return { ok: false, reason: "policy" };
@@ -2160,11 +2182,10 @@ export function apply(ctx) {
       return { ok: false, reason: "unknown" };
     }
     // 同一张别连着刷：她明确要你再发一次，才可以再发同一张。
-    const recentUser = [...rows].reverse().find((row) => row?.role === "user" && !row.recalled);
-    if (!requestsResend(String(recentUser?.text ?? ""))) {
+    if (!requestsResend(askText) && !(stopped && explicitlyAsked)) {
       const usedRecently = rows.slice(-6).some((row) => row?.role === "assistant" && !row.recalled
         && (row?.attachment?.id === id || row?.imageReuse?.attachmentId === id));
-      if (usedRecently && !isFreshPairReply(activeImagePairs(partnerAttachmentMetas(agentId), rows), rows, id)) {
+      if (usedRecently && !freshSharedImageReply(playBook, rows, id)) {
         return { ok: false, reason: "recent-duplicate" };
       }
     }
@@ -3761,7 +3782,8 @@ export function apply(ctx) {
     const imagePromptText = chatImagePrompt({ enabled: imageEnabled, hasReference: Boolean(photoReferenceId), tier: store.getPartnerSettings(agentId).imageTier, shareOnly: Boolean(photoShare) });
     // 旧图候选：主动开口时也能翻自己以前发过的图与收藏，不只生图那一条路。
     const proactiveKeyword = keywordTokens(String([...store.getThread(agentId).messages].reverse().find((row) => row.role === "user")?.text ?? ""));
-    const oldImageText = oldImageContext(agentId, { keyword: proactiveKeyword });
+    const playContext = oldImageContext(agentId, { keyword: proactiveKeyword, learn: false });
+    const oldImageText = playContext.text;
     // 照片依据真到模型手上：上下文里没有那两行，就把这段最近聊天明写进照片提示词。
     const photoShareText = photoShare ? photoSharePrompt({ hasReference: Boolean(photoReferenceId), context: photoContextKnown ? null : photoContext }) : "";
     if (photoShare) diagnostics({ event: "proactive.photo.context", agentId, inHistory: photoContextKnown, age: photoContext ? Date.now() - Date.parse(photoContext.at ?? "") : null });
@@ -3804,7 +3826,8 @@ export function apply(ctx) {
       diagnostics({ event: "proactive.silent", agentId, reason: "read-followup" });
       return { ok: false, reason: "silent" };
     }
-    const oldImage = parseOldImageProtocol(raw);
+    // 主动轮只取用，不以自己的新独白给共同梗续证据；协议仍须剥净。
+    const oldImage = parseOldImageProtocol(extractSharedPlay(raw, playContext.book, [], []).text);
     const chatPhoto = parseChatImage(oldImage.text);
     // 旧图与生图撞上时旧图优先：只要出现过旧图标记（哪怕是坏的），这一轮就不生图。
     const photoRequest = oldImage.status !== "none" ? null : chatPhoto.request;
@@ -3812,7 +3835,7 @@ export function apply(ctx) {
     diagnostics({ event: "chat.oldimage.parsed", agentId, source: "proactive", status: oldImage.status });
     // 旧图这一关先过：坏协议、发不出去的旧图，整轮安全收手——
     // 不改徽章、不出声、不落库，也不发空头配文。
-    const oldImagePrepared = prepareOldImage(agentId, oldImage.request, { messages: store.getThread(agentId).messages });
+    const oldImagePrepared = prepareOldImage(agentId, oldImage.request, { messages: store.getThread(agentId).messages, playBook: playContext.book });
     if (oldImage.status === "invalid" || (oldImage.request && !oldImagePrepared.ok)) {
       diagnostics({ event: "proactive.oldimage.rejected", agentId, status: oldImage.status, reason: oldImagePrepared.reason ?? "invalid-protocol" });
       return { ok: false, reason: "silent" };
@@ -6708,7 +6731,8 @@ export function apply(ctx) {
     const imagePromptText = chatImagePrompt({ enabled: imageEnabled, hasReference: hasImageReference, tier: store.getPartnerSettings(agentId).imageTier });
     // 旧图候选：这位伙伴手边的旧图与收藏，只给一小把，不把整个图库塞进去。
     const oldImageKeyword = keywordTokens(String(threadMessages.find((row) => row.id === replyTargetId)?.text ?? ""));
-    const oldImageText = oldImageContext(agentId, { keyword: oldImageKeyword });
+    const playContext = oldImageContext(agentId, { keyword: oldImageKeyword });
+    const oldImageText = playContext.text;
     const systemPromptBase = buildSystemPrompt({
       ruleProfile: agentId === compactReplyPilotId ? "compact-v1" : "legacy",
       partnerId: agentId,
@@ -6855,7 +6879,8 @@ export function apply(ctx) {
             systemPrompt: [system, imagePromptText, focusText, feedbackPrompt].filter(Boolean).join('\n\n'),
             messages: seesImages ? messagesWithBody : attachNativeImage(messages, agentId, { withBody: false }),
             diagnostics,
-            maxTokens: feedbackPrompt ? 1800 : 900,
+            // 图组/已有玩法留足标记空间；普通文字沿用原预算，不另开学习请求。
+            maxTokens: feedbackPrompt || playContext.book.length || playContext.materials.some((row) => row.attachment.id) ? 1800 : 900,
             modelRef: candidate ? { provider: candidate.provider, model: candidate.model } : null,
             catalog: modelCatalog,
             usageTag: { agentId, kind: "chat" },
@@ -6902,7 +6927,8 @@ export function apply(ctx) {
       return { ok: false, reason: "unavailable", kind: generated.kind, generationMs: Date.now() - startedAt };
     }
     let memoryFeedback = extractMemoryFeedback(generated.text, feedbackEntries, feedbackMessages);
-    const voiceRisk = inspectVoice(parseChatImage(memoryFeedback.text).text);
+    let playFeedback = extractSharedPlay(memoryFeedback.text, playContext.book, playContext.materials, playContext.metas.map((meta) => meta.id));
+    const voiceRisk = inspectVoice(parseChatImage(parseOldImageProtocol(playFeedback.text).text).text);
     if (voiceRisk.level === "retry") {
       diagnostics({ event: "chat.output.retry", agentId, reason: voiceRisk.reason, tail: voiceRisk.tail });
       const retried = await callModel(`${systemPrompt}\n\n刚才的输出末尾疑似混入了无关字符。请只重新输出要说给对方的自然正文，不要解释格式。`);
@@ -6910,11 +6936,13 @@ export function apply(ctx) {
         return { ok: false, reason: "unavailable", kind: retried.kind, generationMs: Date.now() - startedAt };
       }
       const retryFeedback = extractMemoryFeedback(retried.text, feedbackEntries, feedbackMessages);
-      const retryRisk = inspectVoice(parseChatImage(retryFeedback.text).text);
+      const retryPlay = extractSharedPlay(retryFeedback.text, playContext.book, playContext.materials, playContext.metas.map((meta) => meta.id));
+      const retryRisk = inspectVoice(parseChatImage(parseOldImageProtocol(retryPlay.text).text).text);
       diagnostics({ event: "chat.output.retry.result", agentId, level: retryRisk.level, reason: retryRisk.reason });
       if (retryRisk.level !== "retry") {
         generated = retried;
         memoryFeedback = retryFeedback;
+        playFeedback = retryPlay;
       }
     }
     if (choice) {
@@ -6929,7 +6957,7 @@ export function apply(ctx) {
     // ta决定这回安静收尾：看到了（已读已经盖过），但不发伙伴消息。
     // 这是正常的回应结果，不是生成失败，也不能触发五分钟重试。
     // 协议必须先于徽章、表情、正文清洗和语音处理剥离；坏回包不提交判断。
-    const oldImage = parseOldImageProtocol(memoryFeedback.text);
+    const oldImage = parseOldImageProtocol(playFeedback.text);
     const rawGeneratedText = oldImage.text;
     const chatPhoto = parseChatImage(rawGeneratedText);
     diagnostics({ event: "chat.image.parsed", agentId, source: "chat", status: chatPhoto.status });
@@ -6937,9 +6965,27 @@ export function apply(ctx) {
     // 旧图这一关先过：坏协议、发不出去的旧图（本体没了、串号、没收藏、撤回、禁发），
     // 整轮安全收手——不生图、不改徽章、不出声、不落库，
     // 更不能把「给你看看」这种空头配文发出去。
-    const oldImagePrepared = prepareOldImage(agentId, oldImage.request, { messages: store.getThread(agentId).messages });
+    const liveMetas = partnerAttachmentMetas(agentId);
+    const playUpdates = playFeedback.updates.filter((update) => update.op === "stop" || (update.imageIds ?? update.base?.imageIds ?? []).every((id) => {
+      const meta = liveMetas.find((item) => item.id === id);
+      return meta && !imageSourceRecalled(meta, store.getThread(agentId).messages)
+        && !(update.op === "learn" && meta.collection?.sticker === false && Number(meta.collection.sourceAt) > 0);
+    }));
+    const pendingPlayBook = applySharedPlay(playContext.book, playUpdates, { resultMessageId: "preview-only", now: new Date() });
+    const commitPlay = (resultMessageId = "", updates = playUpdates) => {
+      if (!updates.length || (isCurrent && !isCurrent()) || !targetStillLive() || superseded()?.superseded) return;
+      const saved = store.commitSharedPlay(agentId, updates, resultMessageId);
+      if (saved) {
+        const metas = partnerAttachmentMetas(agentId), messages = store.getThread(agentId).messages;
+        syncSharedPlayImages(agentId, sharedPlayBook(saved.sharedPlay, activeImagePairs(metas, messages)), { metas, messages });
+        diagnostics({ event: "shared-play.updated", agentId, count: updates.length });
+      }
+    };
+    const oldImagePrepared = prepareOldImage(agentId, oldImage.request, { messages: store.getThread(agentId).messages, playBook: pendingPlayBook, allowRequestedOriginal: true });
     if (oldImage.status === "invalid" || (oldImage.request && !oldImagePrepared.ok)) {
       diagnostics({ event: "chat.oldimage.rejected", agentId, status: oldImage.status, reason: oldImagePrepared.reason ?? "invalid-protocol" });
+      // 明确纠正/停用不因这份稿子错带图片而丢失；新的猜测仍不在坏回包中提交。
+      commitPlay("", playUpdates.filter((update) => update.op === "stop" || update.op === "revise"));
       return { ok: false, reason: "silent", generationMs: Date.now() - startedAt };
     }
     const badgeMarker = parseBadgeMarker(chatPhoto.text);
@@ -6957,6 +7003,7 @@ export function apply(ctx) {
       const staleSilent = supersededResult("silent");
       if (staleSilent) return staleSilent;
       diagnostics({ event: "reply.silent", agentId, generationMs });
+      commitPlay();
       return { ok: false, reason: "silent", generationMs };
     }
     // 同一轮里旧图与生图撞上：旧图优先，不真的生图（生图要花钱，也不能两张图一起发）。
@@ -7076,6 +7123,7 @@ export function apply(ctx) {
     };
     const stored = appendPartnerMessage(agentId, reply, preparedVoice, replaceMessageId);
     if (!stored) return { ok: false, reason: "message-missing", generationMs };
+    commitPlay(stored.id);
     if (memoryFeedback.updates.length) {
       store.commitMemoryFeedback(agentId, memoryFeedback.updates, stored.id);
       store.saveVideoBook(agentId, applyVideoFeedback(store.getVideoBook(agentId), memoryFeedback.updates, {
@@ -9715,7 +9763,7 @@ export function apply(ctx) {
           diagnostics({ event: "adaptation.candidate", agentId, sourceMessageId: stored.id, signals: adaptationHint.signals });
           await reconcileAdaptationFromUserMessage(agentId, stored);
         }
-        captureMemeFromUserMessage(agentId, stored, messageText);
+        // 新的共同玩法由本伙伴本轮回复判断并落自己的记忆，不再自动写全局公共梗池。
         // 弱观察只看用户真实发过的多日行为；explicit 刚落账时会先把同目标观察挡住。
         observeAdaptationFromHistory(agentId);
         const responseInFlight = [...turns.values()].some((turn) => turn.agentId === agentId && ["pending", "generating"].includes(turn.status))

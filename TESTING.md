@@ -1,5 +1,17 @@
 # TESTING · 茶话会
 
+## 从聊天自动学共同玩法（2026-11-16，0.19.0-dev.3）
+
+- 普通聊天模型在当前回复附带隐藏 `<shared-play>` 更新，由本伙伴的 `memory.json.sharedPlay` 保存；无需先说“这是梗”、不调用外部配对登记工具、不新增学习模型请求。支持纯文字、单图和多图，首轮猜测即可试玩；接着同一玩法互动才加深，沉默、换话题与伙伴独白不视作用户确认。
+- 各条保存原消息来源、版本及猜测/熟悉/停用状态。证据逐字匹配本伙伴未撤回的真实材料，必须包含最新用户消息；附件只认本伙伴有效原件。语义判断留给模型，程序不靠“梗”关键词或特定OC分类；猜测不会标成已经共同确认的事实。
+- 纠正修改当前理解，停用保留墓碑；旧版本、旧来源/同图的新建不能覆盖或复活纠正。明确恢复可用新用户证据修订停用条目。撤回则清语义内容并幂等停用；历史正常滚出不算撤回。共同玩法的当前状态优先于旧摘要及旧配对，不套用长期事实记忆的 hold/doubt。
+- 新猜测图片以 `inferred-shared-play` 标记私人收藏，沿用原字节和既有保留规则；显式赠送覆盖推断来源，停梗不抹掉明确赠送的收藏。普通与主动投递共享同一本玩法及旧图协议；新图来信可接同玩法原图一次，禁止靠旧来信反复绕过去重。表情许可、安静时段与未回应限制保留。
+- 停用同时拦截自动表情与普通图片投递；普通当轮明确索取原图仍可取回原件，否定句不当作索取，主动轮无此例外。主动轮仅取用已学内容，不以自说内容加强或新建共同玩法。坏/半截协议被剥除，不进入正文、气泡或语音。
+- 新私有内容不再由旧“说破才记”入口自动写入全局公共梗池；既有公共内容保留。旧人工图片配对仍兼容，首次修订或停用直接覆盖该伙伴的旧配对理解，不硬编码具体图片或伙伴。
+- `tests/shared-play.test.js` 覆盖首次空库学习、0/1/3图、来源与归属、协议剥除、幂等、旧版本、纠正/停止/恢复、撤回、旧配对投影，以及按含义唤回旧玩法。`tests/shared-play-flow.test.js` 走隔离 `apply(ctx)`、`POST /turns`、主动调度与真实本地落盘，覆盖同轮首次试玩、后续复用、伙伴隔离、旧稿作废、原件不复制与零生图调用。
+- 测试使用占位PNG、文字描述及模型/宿主桩，只证明协议、状态和投递接线；不冒称真实视觉识别或真实模型自主判断验收，不写生产聊天、记忆或设置。连续用例先正常聊天学习，再将该隔离 dataDir 复制给重启的harness，并把测试消息时间前移2小时以度过既有会话缓冲；不直接写玩法记忆、不改全局时钟、不新增生产hook，主动轮从实际学到的记录复用原件。
+- 新增纯逻辑25项、App隔离15项均通过。主会话最终执行 `node --test --test-concurrency=1 --test-timeout=60000`，目标为 `tests/shared-play.test.js`、`tests/shared-play-flow.test.js`、`tests/image-pairs.test.js`、`tests/image-pairs-flow.test.js`、`tests/image-collection.test.js`、`tests/image-collection-flow.test.js`、`tests/image-collection-proactive.test.js`、`tests/image-tool.test.js`、`tests/image-retention.test.js`、`tests/image-cleanup.test.js`、`tests/longterm-store.test.js`、`tests/longterm-routes.test.js`、`tests/memory.test.js`、`tests/memory-pipeline.test.js`、`tests/reply-memory-latency.test.js`、`tests/compose.test.js`、`tests/proactive-chain.test.js`：**245/245通过，0跳过**。改动JS语法及 `git diff --check` 通过；未跑全量、未发布。
+
 ## 成对图片暗号（2026-11-16，0.19.0-dev.2）
 
 - 通过正式 `chahuahui_image_pair` 工具 read/bind；绑定需准确伙伴编号、两张不同原附件、双方OC身份与共同含义，以及明确确认。只使用各图既有收藏元数据，不改全局梗池、聊天、性格或记忆，不含真实图片编号或特定伙伴的预置配对。
