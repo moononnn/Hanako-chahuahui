@@ -1,5 +1,14 @@
 # TESTING · 茶话会
 
+## 成对图片暗号（2026-11-16，0.19.0-dev.2）
+
+- 通过正式 `chahuahui_image_pair` 工具 read/bind；绑定需准确伙伴编号、两张不同原附件、双方OC身份与共同含义，以及明确确认。只使用各图既有收藏元数据，不改全局梗池、聊天、性格或记忆，不含真实图片编号或特定伙伴的预置配对。
+- 双方元数据相互指向、角色相反且均收藏、属同伙伴、原件存在、源消息未撤回才形成有效配对。绑定先验证两张，回读验证后才报成功；同内容重试幂等，单边写入不形成有效暗号。退收藏或撤回使配对失效，源历史缺行不等于撤回。
+- 普通回复及主动消息共享旧图与配对提示；区分原发送者与画中角色，提供共同含义、另一张编号、历史图消息及其时间。允许自然接图、主动邀接或轻松调侃，不固定台词、不对回应打分。
+- 仅在最新用户消息确实带来一张已配对图片、请求为另一张、且该用户消息后尚未发送过该目标时放行一次近期重复；普通图片、无新来图的主动消息仍遵守原去重。表情许可、安静时段、未回应等护栏未放宽。
+- `node --test tests/image-pairs.test.js tests/image-pairs-flow.test.js`：9/9通过。隔离App实际注册并执行工具，验证A接B、B接A、再次A仍接B、主动用任一张、原件字节与文件数不变、零生图调用，以及取消、撤回、缺源历史、跨伙伴、缺原件、冲突和部分写入边界。
+- 最终相关回归在以上两份后追加 `tests/image-collection.test.js tests/image-collection-flow.test.js tests/image-collection-proactive.test.js tests/image-tool.test.js tests/image-retention.test.js tests/image-references.test.js tests/compose.test.js tests/mobile-routes.test.js tests/chat-image-proactive.test.js tests/chat-image-delivery.test.js tests/proactive-chain.test.js tests/ui.test.js tests/image-cleanup.test.js`：387/387通过，0跳过。语法检查通过；未进行真实模型自然度或手机/浏览器实机验收，未发布。
+
 ## 旧图复用与伙伴小收藏（2026-11-16，0.19.0-dev.1）
 
 - 普通聊天与主动消息可使用 `[旧图:{"id":"img_…","as":"image|sticker"}]` 直接投递原附件，不重新生图；原图与生图标记同轮时旧图优先。候选标注原日期与发送方，避免把她的图片当成伙伴自己的经历。

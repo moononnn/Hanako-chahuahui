@@ -312,6 +312,7 @@ import {
   requestsResend,
   selectOldImageCandidates,
 } from "./lib/image-collection.js";
+import { activeImagePairs, formatImagePairPrompt, isFreshPairReply, registerImagePairTool } from "./lib/image-pairs.js";
 import { NATIVE_IMAGE_BODY_ROWS, NATIVE_IMAGE_BYTES_PER_TURN, NATIVE_IMAGE_PER_TURN, MARK_RE, hasNativeImageMark, rewriteNativeImageMarks } from "./lib/native-vision.js";
 import { normalizeRetentionDays, planCleanup, summarizeStorage } from "./lib/image-retention.js";
 import { canAnswerPoke } from "./lib/poke.js";
@@ -1710,6 +1711,10 @@ export function apply(ctx) {
   const MODEL_RETRY_LIMIT = 8;
   const attachmentsDir = path.join(ctx.dataDir, "v2", "attachments");
   fs.mkdirSync(attachmentsDir, { recursive: true });
+  try {
+    registerImagePairTool(ctx, { listPartners, getMetas: partnerAttachmentMetas,
+      getMessages: (agentId) => store.getThread(agentId).messages, saveCollection: writeCollectionMeta });
+  } catch (error) { diagnostics({ event: "image-pair.tool.unavailable", code: String(error?.code ?? "unavailable") }); }
 
   /**
    * 硬盘还剩多少：给图片留出 1GB 余量，不跟她聊天抢地盘。
@@ -2095,15 +2100,14 @@ export function apply(ctx) {
   }
 
   /** 这位伙伴手边的旧图候选：收藏优先，普通图按最近的挑。 */
-  function oldImageCandidates(agentId, { limit = OLD_IMAGE_CANDIDATE_LIMIT, keyword = "" } = {}) {
+  function oldImageContext(agentId, { limit = OLD_IMAGE_CANDIDATE_LIMIT, keyword = "" } = {}) {
     try { refreshImageCollections(agentId); } catch { /* 扫不动就不给旧图，不挡聊天 */ }
-    return selectOldImageCandidates({
-      messages: store.getThread(agentId).messages,
-      metas: partnerAttachmentMetas(agentId),
-      agentId,
-      limit,
-      keyword,
-    });
+    const messages = store.getThread(agentId).messages;
+    const metas = partnerAttachmentMetas(agentId);
+    return [
+      formatOldImageCandidates(selectOldImageCandidates({ messages, metas, agentId, limit, keyword })),
+      formatImagePairPrompt(activeImagePairs(metas, messages), messages),
+    ].filter(Boolean).join("\n\n");
   }
 
   /** 表情许可：与挑图那条路用同一套规矩，不能因为是旧图就绕过「别发表情」。 */
@@ -2160,7 +2164,9 @@ export function apply(ctx) {
     if (!requestsResend(String(recentUser?.text ?? ""))) {
       const usedRecently = rows.slice(-6).some((row) => row?.role === "assistant" && !row.recalled
         && (row?.attachment?.id === id || row?.imageReuse?.attachmentId === id));
-      if (usedRecently) return { ok: false, reason: "recent-duplicate" };
+      if (usedRecently && !isFreshPairReply(activeImagePairs(partnerAttachmentMetas(agentId), rows), rows, id)) {
+        return { ok: false, reason: "recent-duplicate" };
+      }
     }
     const rest = { ...stored };
     delete rest.data;
@@ -3755,7 +3761,7 @@ export function apply(ctx) {
     const imagePromptText = chatImagePrompt({ enabled: imageEnabled, hasReference: Boolean(photoReferenceId), tier: store.getPartnerSettings(agentId).imageTier, shareOnly: Boolean(photoShare) });
     // 旧图候选：主动开口时也能翻自己以前发过的图与收藏，不只生图那一条路。
     const proactiveKeyword = keywordTokens(String([...store.getThread(agentId).messages].reverse().find((row) => row.role === "user")?.text ?? ""));
-    const oldImageText = formatOldImageCandidates(oldImageCandidates(agentId, { keyword: proactiveKeyword }));
+    const oldImageText = oldImageContext(agentId, { keyword: proactiveKeyword });
     // 照片依据真到模型手上：上下文里没有那两行，就把这段最近聊天明写进照片提示词。
     const photoShareText = photoShare ? photoSharePrompt({ hasReference: Boolean(photoReferenceId), context: photoContextKnown ? null : photoContext }) : "";
     if (photoShare) diagnostics({ event: "proactive.photo.context", agentId, inHistory: photoContextKnown, age: photoContext ? Date.now() - Date.parse(photoContext.at ?? "") : null });
@@ -6702,7 +6708,7 @@ export function apply(ctx) {
     const imagePromptText = chatImagePrompt({ enabled: imageEnabled, hasReference: hasImageReference, tier: store.getPartnerSettings(agentId).imageTier });
     // 旧图候选：这位伙伴手边的旧图与收藏，只给一小把，不把整个图库塞进去。
     const oldImageKeyword = keywordTokens(String(threadMessages.find((row) => row.id === replyTargetId)?.text ?? ""));
-    const oldImageText = formatOldImageCandidates(oldImageCandidates(agentId, { keyword: oldImageKeyword }));
+    const oldImageText = oldImageContext(agentId, { keyword: oldImageKeyword });
     const systemPromptBase = buildSystemPrompt({
       ruleProfile: agentId === compactReplyPilotId ? "compact-v1" : "legacy",
       partnerId: agentId,

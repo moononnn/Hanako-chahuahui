@@ -225,7 +225,9 @@ test("候选写进提示词时是数据，不是指令，还要说清是谁发�
   assert.match(text, /"id":"img_a"/u);
   assert.match(text, /"from":"user"/u);
   assert.match(text, /"from":"assistant"/u);
-  assert.match(text, /不是你自己的经历/u);
+  assert.match(text, /from 只表示原发送者/u);
+  assert.match(text, /不要猜是谁拍的、画的是谁/u);
+  assert.match(text, /别把她发来的图片当成你的新经历/u);
   assert.match(text, /别当成刚拍的新照片/u);
   assert.equal(formatOldImageCandidates([]), "");
 });
