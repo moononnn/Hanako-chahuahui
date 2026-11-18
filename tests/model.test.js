@@ -186,14 +186,8 @@ test("utility：没有 text 的回包也不能当成成功", async () => {
 
 test("utility：主入口统一传诊断，仅延长后台任务，前台搜索仍有短时限", async () => {
   const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-  const start = source.indexOf("  const askCheap =");
-  assert.ok(start >= 0);
   const diagnostics = () => {};
-  const end = source.indexOf("\n  });", start);
-  assert.ok(end > start);
-  const ask = vm.runInNewContext(source.slice(start, end + "\n  });".length) + "\naskCheap;", {
-    ctx: {}, askUtility: (_ctx, input) => input, diagnostics,
-  });
+  const ask = buildAskCheap({ diagnostics });
   for (const timeoutMs of [10000, 20000]) {
     const input = await ask("简短任务", "测试", 180, { timeoutMs });
     assert.equal(input.timeoutMs, timeoutMs);
@@ -205,6 +199,69 @@ test("utility：主入口统一传诊断，仅延长后台任务，前台搜索�
   // 2026-10-20：探索问句那步从 180 抬到 800（180 被思考吃干净，整天取不到料），契约跟着改。
   assert.match(source, /rawPlan = await askCheap\(spec\.systemPrompt, spec\.userText, 800, \{ timeoutMs: 60_000 \}\)/);
   assert.match(source, /ask: \(prompt, text\) => askCheap\(prompt, text, 180, \{ timeoutMs: 10_000 \}\)/);
+});
+
+/** 2026-11-17：后台小事改成「先走茶话会自己的轻量模型，用不了才降级宿主 utility」。 */
+const askCheapSource = (() => {
+  const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  const bodyStart = source.indexOf("  const askCheap = async");
+  const end = source.indexOf("\n  };\n", bodyStart);
+  const headStart = source.lastIndexOf("  let ambientCatalogCache", bodyStart);
+  if (headStart < 0 || bodyStart < 0 || end < 0) throw new Error("index.js 里找不到 askCheap 这一段");
+  return source.slice(headStart, end + "\n  };\n".length) + "\naskCheap;";
+})();
+
+const buildAskCheap = (globals = {}) => vm.runInNewContext(askCheapSource, {
+  ctx: { models: { list: async () => ({ models: [] }) } },
+  store: { getGlobalSettings: () => ({ ambientModel: null, model: null }) },
+  normalizeModelRef: (value) => (value && value.provider && value.model ? value : null),
+  generateReply: async () => ({ text: "" }),
+  askUtility: (_ctx, input) => input,
+  diagnostics: () => {},
+  describeError: (error) => ({ name: error?.name ?? "Error", message: error?.message ?? String(error), code: error?.code ?? null }),
+  ...globals,
+});
+
+test("轻量模型：有它时先走它，不碰宿主 utility", async () => {
+  const calls = [];
+  const ask = buildAskCheap({
+    ctx: { models: { list: async () => ({ models: [{ provider: "p", model: "m" }] }) } },
+    store: { getGlobalSettings: () => ({ ambientModel: null, model: { provider: "p", model: "m" } }) },
+    generateReply: async (_ctx, input) => {
+      calls.push(input);
+      return { text: "  轻量模型回来了  " };
+    },
+    askUtility: () => {
+      throw new Error("不该走宿主 utility");
+    },
+  });
+  assert.equal(await ask("系统", "用户", 120), "轻量模型回来了");
+  assert.equal(calls[0].temperature, 0.4);
+  assert.equal(calls[0].maxTokens, 800, "小事也要给思考留余量");
+  assert.deepEqual(calls[0].modelRef, { provider: "p", model: "m" });
+});
+
+test("轻量模型：额度用完或通道挂了才降级到宿主 utility", async () => {
+  const ask = buildAskCheap({
+    ctx: { models: { list: async () => ({ models: [{ provider: "p", model: "m" }] }) } },
+    store: { getGlobalSettings: () => ({ ambientModel: { provider: "p", model: "m" }, model: null }) },
+    generateReply: async () => {
+      throw Object.assign(new Error("额度用完了"), { code: "MODEL_UNAVAILABLE" });
+    },
+  });
+  const input = await ask("系统", "用户", 180, { timeoutMs: 20000 });
+  assert.equal(input.timeoutMs, 20000);
+  assert.equal(input.maxTokens, 180);
+});
+
+test("轻量模型：正文为空时也降级，不把空包当成功", async () => {
+  const ask = buildAskCheap({
+    ctx: { models: { list: async () => ({ models: [{ provider: "p", model: "m" }] }) } },
+    store: { getGlobalSettings: () => ({ ambientModel: { provider: "p", model: "m" }, model: null }) },
+    generateReply: async () => ({ text: "   " }),
+  });
+  const input = await ask("系统", "用户", 120);
+  assert.equal(input.maxTokens, 120);
 });
 
 test("模型请求到 deadline 会 cancel 并退出等待", async () => {

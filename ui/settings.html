@@ -396,6 +396,11 @@
         <small class="detail-field-note" id="global-model-note"></small>
       </article>
       <article class="setting-card">
+        <div class="card-title"><div><h3>轻量模型</h3><p>主动消息里的短句、开不开口的判断、写标题这些小活儿先交给它。它额度用完或连不上，才退回 Hana 的辅助模型。不单独指就跟上面那条默认模型。</p></div></div>
+        <div class="detail-field" id="global-ambient-model-host"></div>
+        <small class="detail-field-note" id="global-ambient-model-note"></small>
+      </article>
+      <article class="setting-card">
         <div class="card-title"><div><h3>认识伙伴</h3><p>「认真认识 ta」生成那些场景候选时用哪个模型。拿不准就别动，跟着默认走。</p></div></div>
         <div class="detail-field" id="global-recognition-model-host"></div>
         <small class="detail-field-note" id="global-recognition-model-note"></small>
@@ -1362,6 +1367,7 @@
       document.getElementById("user-name-override").value = globalSettings.userNameOverride ?? globalSettings.effectiveUserName ?? "";
       paintGlobalChoices();
       paintGlobalModel();
+      paintGlobalAmbientModel();
       paintGlobalRecognitionModel();
       paintGlobalVision();
       paintGlobalImageStorage();
@@ -1470,11 +1476,11 @@
     }
 
     /** 造一个模型下拉。调用方负责插进文档，插完再 dressSelects。 */
-    function buildModelSelect(currentKey) {
+    function buildModelSelect(currentKey, followLabel = FOLLOW_LABEL) {
       const sel = document.createElement("select");
       const follow = document.createElement("option");
       follow.value = "follow";
-      follow.textContent = FOLLOW_LABEL;
+      follow.textContent = followLabel;
       sel.appendChild(follow);
       appendModelGroups(sel, modelGroups);
       sel.value = modelCatalog.some((item) => item.key === currentKey) ? currentKey : "follow";
@@ -1726,6 +1732,37 @@
       note.textContent = !modelCatalog.length
         ? "没读到 Hana 的模型列表，先跟着主模型走。"
         : (globalSettings.model ? "" : "没指定：各伙伴都跟自己在 Hana 里配的模型；读不到才落到 Hana 主模型。");
+    }
+
+    /** 后台小事用哪条模型。默认跟茶话会默认模型，它用不了才退回宿主 utility。 */
+    function paintGlobalAmbientModel() {
+      const host = document.getElementById("global-ambient-model-host");
+      const note = document.getElementById("global-ambient-model-note");
+      if (!host) return;
+      host.replaceChildren();
+      const sel = buildModelSelect(modelKeyOf(globalSettings.ambientModel), "跟随茶话会默认模型");
+      sel.setAttribute("aria-label", "后台小事用的模型");
+      sel.addEventListener("change", async () => {
+        const key = sel.value;
+        const ok = await saveGlobal(
+          { ambientModel: modelRefFromKey(key) },
+          key === "follow" ? "轻量模型跟着默认模型走" : "轻量模型已保存",
+        );
+        // 成败都重画：成了要换文案，没成要把下拉拨回真实值。
+        paintGlobalAmbientModel();
+        if (!ok) return;
+      });
+      host.appendChild(sel);
+      dressSelects(host);
+      if (!modelCatalog.length) {
+        note.textContent = "没读到 Hana 的模型列表，现在只能退回 Hana 的辅助模型。";
+      } else if (globalSettings.ambientModel) {
+        note.textContent = "已单独指定。它用不了时自动退回 Hana 的辅助模型。";
+      } else if (globalSettings.model) {
+        note.textContent = "没单独指定：跟茶话会默认模型走，它用不了才退回 Hana 的辅助模型。";
+      } else {
+        note.textContent = "默认模型也没配，这条先用不上，还是走 Hana 的辅助模型。";
+      }
     }
 
     /** 认识伙伴用哪条模型。默认跟着上面那条；觉得候选写得不够好，可以单独指一个强一点的。 */

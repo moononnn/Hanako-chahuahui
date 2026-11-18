@@ -1200,7 +1200,7 @@ export function apply(ctx) {
   const SEARCH_ENGINE_HARD_FAIL_RE = /http-401|http-402|http-403|http-433|http-429|quota|missing-key/iu;
 
   const GLOBAL_SETTING_KEYS = new Set([
-    "model", "recognitionModel", "vision", "userNameOverride", "daybookEnabled", "workfeedEnabled",
+    "model", "recognitionModel", "ambientModel", "vision", "userNameOverride", "daybookEnabled", "workfeedEnabled",
     "globalGate", "quiet", "actionStyle", "messageAvatars", "messageRefine", "typingIndicator", "myActionTail",
     // 聊天气泡的装扮：换一套壳，认白名单里的那几套。
     "bubbleSkin",
@@ -1241,6 +1241,10 @@ export function apply(ctx) {
     // 认识用哪条：null 是跟默认那条，其余形状不对就当没设
     if (Object.prototype.hasOwnProperty.call(patch, "recognitionModel")) {
       patch.recognitionModel = normalizeModelRef(patch.recognitionModel);
+    }
+    // 后台小事用哪条：null 是跟茶话会默认模型，再没有才落到宿主 utility
+    if (Object.prototype.hasOwnProperty.call(patch, "ambientModel")) {
+      patch.ambientModel = normalizeModelRef(patch.ambientModel);
     }
     if (Object.prototype.hasOwnProperty.call(patch, "userNameOverride")) {
       const name = String(patch.userNameOverride ?? "").trim().slice(0, 40);
@@ -2970,16 +2974,73 @@ export function apply(ctx) {
   });
   for (const agentId of Object.keys(store.allPartnerSettings())) threadRebuild.resume(agentId);
 
-  // 旧调用方只给 systemPrompt/userText 时行为不变（不传 messages，askUtility 仍包一条 user）。
-  // 需要带真实聊天历史的那几路（主动开口、视频分享）在这里把 messages 转交下去。
-  const askCheap = (systemPrompt, userText, maxTokens, options = {}) => askUtility(ctx, {
-    systemPrompt,
-    userText,
-    messages: options.messages ?? null,
-    maxTokens,
-    timeoutMs: options.timeoutMs ?? 120_000,
-    diagnostics,
+  /**
+   * 后台小事的模型（2026-11-17 改）：先走茶话会自己的轻量模型，它额度用完或者通道挂了，
+   * 才降级到宿主 utility。
+   *
+   * 起因：宿主辅助模型额度耗尽那阵，主动消息整条链在无声处断掉——界面上既不报错也不出声，
+   * 排了半天才在宿主日志里看到「usage limit reached」。所以主路得握在自己手里，
+   * utility 只当最后那道兜底。
+   */
+  let ambientCatalogCache = { at: 0, rows: [] };
+  const catalogHasModel = (rows, ref) => rows.some((row) => {
+    const provider = row?.provider ?? row?.providerId ?? null;
+    const model = row?.model ?? row?.modelId ?? row?.id ?? null;
+    return provider === ref.provider && model === ref.model;
   });
+  /** 轻量模型没单独指的时候跟茶话会默认模型；两条都没有才算没得选。 */
+  const ambientModelRef = () => {
+    const global = store.getGlobalSettings();
+    return normalizeModelRef(global.ambientModel) ?? normalizeModelRef(global.model);
+  };
+
+  // 旧调用方只给 systemPrompt/userText 时行为不变（不传 messages，仍然包一条 user）。
+  // 需要带真实聊天历史的那几路（主动开口、视频分享）在这里把 messages 转交下去。
+  const askCheap = async (systemPrompt, userText, maxTokens, options = {}) => {
+    const messages = options.messages ?? null;
+    const ambient = ambientModelRef();
+    if (ambient) {
+      try {
+        if (!ambientCatalogCache.rows.length || Date.now() - ambientCatalogCache.at > 60_000) {
+          const catalog = await ctx.models.list();
+          ambientCatalogCache = { at: Date.now(), rows: Array.isArray(catalog) ? catalog : (catalog?.models ?? []) };
+        }
+        const rows = ambientCatalogCache.rows;
+        if (catalogHasModel(rows, ambient)) {
+          const result = await generateReply(ctx, {
+            systemPrompt,
+            messages: messages ?? [{ role: "user", content: String(userText ?? "") }],
+            diagnostics,
+            // 小事也要给思考留余量：预算被推理吃干净时拿到的是一段空正文。
+            maxTokens: Math.max(800, maxTokens),
+            temperature: 0.4,
+            modelRef: ambient,
+            catalog: rows,
+            retryDelaysMs: [1200],
+          });
+          const text = String(result?.text ?? "").trim();
+          if (text) {
+            diagnostics({ event: "models.ambient.ok", provider: ambient.provider, model: ambient.model, requestedMaxTokens: maxTokens });
+            return text;
+          }
+          diagnostics({ event: "models.ambient.empty", provider: ambient.provider, model: ambient.model });
+        } else {
+          diagnostics({ event: "models.ambient.missing", provider: ambient.provider, model: ambient.model });
+        }
+      } catch (error) {
+        // 额度、鉴权、通道挂了都到这里；不往上抛，交给 utility 兜底。
+        diagnostics({ event: "models.ambient.failed", provider: ambient.provider, model: ambient.model, error: describeError(error) });
+      }
+    }
+    return askUtility(ctx, {
+      systemPrompt,
+      userText,
+      messages,
+      maxTokens,
+      timeoutMs: options.timeoutMs ?? 120_000,
+      diagnostics,
+    });
+  };
 
   const memorySourceStamp = (agentId) => JSON.stringify(store.getThread(agentId).messages.map((row) =>
     [row.id, row.role, row.text, row.at, row.kind, row.recalled, row.recallMode, row.proactive, row.repliedTo]));
