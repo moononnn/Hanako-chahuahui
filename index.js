@@ -497,7 +497,7 @@ import { createImageQuota } from "./lib/image-quota.js";
 import { createImageReferences } from "./lib/image-reference.js";
 import { registerImageReferenceRoutes } from "./lib/image-reference-routes.js";
 import { createStreetViewLibrary, STREET_VIEW_CHANCE, STREET_VIEW_COOLDOWN_MS } from "./lib/street-view.js";
-import { normalizeLifeCity, normalizeStreetViewConsent, lifeCityBlockers } from "./lib/life-city.js";
+import { normalizeLifeCity, normalizeStreetViewConsent, lifeCityBlockers, cityDiscoveryQuery, cityDiscoveryResults } from "./lib/life-city.js";
 import {
   MAX_NUDGE_BUBBLES,
   nudgeDelay,
@@ -777,6 +777,16 @@ export function apply(ctx) {
    * 新闻每天的天（2026-10-20）。跟视频分开记：视频一天最多 5 条是「她想刷就刷」，
    * 新闻是主动插进来的，一天两条封顶，再多就变成推送了。
    */
+  const newCityDiscoveryEpoch = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  let cityDiscoveryEpoch = newCityDiscoveryEpoch();
+  function activeCityDiscovery() {
+    const global = store.getGlobalSettings();
+    const city = normalizeLifeCity(global.lifeCity);
+    return global.lifeCityDiscoveries === true && city ? { city, key: `${cityDiscoveryEpoch}:${city}` } : null;
+  }
+  function localNewsCurrent(row) {
+    return !row?.localKey || row.localKey === activeCityDiscovery()?.key;
+  }
   function newsQuota(now = new Date()) {
     const shared = newsShareLimit(store.getGlobalSettings().newsShareMaxPerDay);
     // __LAB_BUDGET_20261028__ 同上。
@@ -1225,7 +1235,7 @@ export function apply(ctx) {
     // 生图：一条自己的模型配置（含加密后的 Key），和朗读那条各走各的。
     "imageModel", "imageTier",
     // 生活城市：跟天气各算各的。城市她自己填；真实街景另有一个明确的授权开关。
-    "lifeCity", "lifeCityStreetView",
+    "lifeCity", "lifeCityStreetView", "lifeCityDiscoveries",
   ]);
   const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "vision", "voice", "partnerFeedEnabled", "videoSharingEnabled", "imageTier"]);
 
@@ -1290,6 +1300,7 @@ export function apply(ctx) {
       patch.lifeCity = normalizeLifeCity(patch.lifeCity);
     }
     // 真实街景：单独的授权开关，只收真布尔。没开就不去问素材服务。
+    if (Object.prototype.hasOwnProperty.call(patch, "lifeCityDiscoveries")) patch.lifeCityDiscoveries = patch.lifeCityDiscoveries === true;
     if (Object.prototype.hasOwnProperty.call(patch, "lifeCityStreetView")) {
       patch.lifeCityStreetView = normalizeStreetViewConsent(patch.lifeCityStreetView);
     }
@@ -3719,7 +3730,7 @@ export function apply(ctx) {
     const shareableVideo = interestContent && video && videoPartnerEnabled(agentId) && videoQuota() ? video : null;
     // 新闻排在观察式前面（2026-10-20）：它一天最多两条、有冷却，而观察式已经限了每日一条。
     // 这样“有话想说”的名额优先给外面正在发生的事，种子和探索发现留在账上等下一次。
-    const shareableNews = interestContent && !shareableVideo && news && newsQuota() ? news : null;
+    const shareableNews = interestContent && !shareableVideo && news && localNewsCurrent(news) && newsQuota() ? news : null;
     const shareableDiscovery = interestContent && !shareableVideo && !shareableNews ? discoveryForProactiveMessage(discovery, { exception }) : null;
     const shareableSeed = interestContent && !shareableVideo && !shareableNews ? seed ?? null : null;
     const shareableHobby = shareableSeed
@@ -4116,7 +4127,12 @@ export function apply(ctx) {
     }
     // 新闻的稿子发出去之前再核一遍：配额、伙伴开关、这条是不是还在池子里。
     // 跟视频同一个道理——中间可能已经过了一轮，天也可能已经换了。
-    if (shareableNews && (!newsQuota() || !store.getProactiveState(agentId).newsBook
+    if (shareableNews?.localKey) {
+      if (!text) return { ok: false, reason: "news-empty" };
+      bubbles = [...bubbles.filter(bubble => !/https?:\/\//iu.test(bubble)).slice(0, 3), `出处：${shareableNews.url}`];
+      if (bubbles.length < 2) return { ok: false, reason: "news-empty" };
+    }
+    if (shareableNews && (!localNewsCurrent(shareableNews) || !newsQuota() || !store.getProactiveState(agentId).newsBook
       || !normalizeNewsBook(store.getProactiveState(agentId).newsBook).items.some((row) => row.id === shareableNews.id && !row.sharedAt && !row.rejectedAt))) {
       diagnostics({ event: "news.share.stale", agentId, newsId: shareableNews.id });
       return { ok: false, reason: "news-stale" };
@@ -4175,6 +4191,11 @@ export function apply(ctx) {
       removeAttachment(preparedImage.attachment.id);
       releaseVoiceGeneration(preparedVoice);
       return { ok: false, reason: "stale" };
+    }
+    if (!localNewsCurrent(shareableNews)) {
+      if (preparedImage.attachment) removeAttachment(preparedImage.attachment.id);
+      releaseVoiceGeneration(preparedVoice);
+      return { ok: false, reason: "news-stale" };
     }
     // 这条是拿哪条由头开的口：落在已有的 proactiveContext 里，不另立一套 schema。
     // 有跟进语境时照旧用 proactiveContextFor 的那份，只多挂一个 reason；
@@ -5094,7 +5115,7 @@ export function apply(ctx) {
       const discoveryReady = followup?.read ? null : nextDiscovery(state.interestLearning, now);
       const newsReady = followup?.read || !newsQuota(now)
         ? null
-        : nextNewsItem(normalizeNewsBook(state.newsBook, now), now);
+        : nextNewsItem(state.newsBook, now, activeCityDiscovery()?.key);
       const mixHistory = recentMixGroups(state.proactiveSources);
       const mixPlan = !PROACTIVE_MIX ? null : planSourceMix({
         // 交错账还是空的时候拿聊天账兜底：头一轮就接着历史往下交替，不用等它自己攒几轮。
@@ -5148,7 +5169,7 @@ export function apply(ctx) {
       // 观察式当天已经发满时种子根本不会上，新闻不该被一个上不了的候选挤掉。
       const candidateNews = followup?.read || candidateVideo || cappedSeed || !newsQuota(now)
         ? null
-        : nextNewsItem(newsBook, now);
+        : nextNewsItem(newsBook, now, activeCityDiscovery()?.key);
       const topic = null;
       // 电脑那边此刻的动静：两边本来就是同一个伙伴，晨间第一句、睡前收尾、被薅起来都靠它落地。
       const workActivity = workfeedOn()
@@ -6247,24 +6268,33 @@ export function apply(ctx) {
     const book0 = normalizeNewsBook(store.getProactiveState(agentId).newsBook, now);
     if (!newsQuota(now)) return { fetched: false, reason: "daily-limit" };
     if (!newsFetchDue(book0, now)) return { fetched: false, reason: "not-due" };
+    const currentCity = activeCityDiscovery();
+    const state = store.getProactiveState(agentId);
+    const localQuery = currentCity && (now.getTime() - (Date.parse(state.localNewsFetchAt) || 0) >= 24 * 3600_000)
+      ? cityDiscoveryQuery(currentCity.city, now) : "";
+    const local = localQuery ? currentCity : null;
     const knowing = store.getKnowing(agentId);
-    const domain = pickDomainForNews(knowing.worldInterests, book0, { now });
+    const domain = local ? { id: "local-city", name: "同城发现" } : pickDomainForNews(knowing.worldInterests, book0, { now });
     if (!domain) return { fetched: false, reason: "no-domain" };
-    const query = newsQueryFor(domain, { now });
+    const query = localQuery || newsQueryFor(domain, { now });
     if (!query) return { fetched: false, reason: "no-query" };
     const fetcher = typeof ctx.network?.fetch === "function" ? ctx.network.fetch.bind(ctx.network) : null;
     if (!fetcher) return { fetched: false, reason: "network-unavailable" };
     try {
       await loadUserName();
       const enhancement = await searchEnhancementConfig();
+      if (local && local.key !== activeCityDiscovery()?.key) return { fetched: false, reason: "local-stale" };
+      if (local) store.setProactiveState(agentId, { localNewsFetchAt: now.toISOString() });
       const search = await searchWeb(fetcher, { query, enhancement, privateTerms: [USER_NAME] });
       bookSearchOutcome(search);
+      if (local && local.key !== activeCityDiscovery()?.key) return { fetched: false, reason: "local-stale" };
       if (!search.ok || !search.results?.length) {
-        diagnostics({ event: "news.fetch.failed", agentId, domain: domain.name, query, reason: search.reason ?? "no-results" });
+        diagnostics({ event: "news.fetch.failed", agentId, domain: domain.name, reason: search.reason ?? "no-results" });
         store.setProactiveState(agentId, { newsBook: markNewsFetched(book0, domain.id, now) });
         return { fetched: false, reason: search.reason ?? "no-results" };
       }
-      const added = addNewsItems(book0, { domain, query, results: search.results }, now);
+      const latest = store.getProactiveState(agentId).newsBook;
+      const added = addNewsItems(latest, { domain, query, results: local ? cityDiscoveryResults(search.results, local.city) : search.results, local }, now);
       store.setProactiveState(agentId, { newsBook: markNewsFetched(added.book, domain.id, now) });
       diagnostics({ event: "news.fetch.ready", agentId, domain: domain.name, query, results: search.results.length, added: added.added });
       return { fetched: true, domain: domain.name, added: added.added };
@@ -10490,6 +10520,7 @@ export function apply(ctx) {
           const body = await c.req.json();
           const wasDaybookOn = daybookOn();
           const globalPatch = normalizeGlobalSettingsPatch(body);
+          const beforeLocalKey = activeCityDiscovery()?.key;
           const beforeCity = normalizeLifeCity(store.getGlobalSettings().lifeCity);
           const beforeConsent = normalizeStreetViewConsent(store.getGlobalSettings().lifeCityStreetView);
           if (globalPatch.voiceProfiles) {
@@ -10511,6 +10542,7 @@ export function apply(ctx) {
             return c.json({ ok: false, error: { message: "搜索设置请用搜索那一页自己改" } }, 400);
           }
           store.setGlobalSettings(globalPatch);
+          if (beforeLocalKey !== activeCityDiscovery()?.key) cityDiscoveryEpoch = newCityDiscoveryEpoch();
           // 换城市、关掉授权：旧素材一律作废（临时文件也删掉），不让旧城的街景继续用着。
           const afterCity = normalizeLifeCity(store.getGlobalSettings().lifeCity);
           const afterConsent = normalizeStreetViewConsent(store.getGlobalSettings().lifeCityStreetView);

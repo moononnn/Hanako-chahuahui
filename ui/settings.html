@@ -286,6 +286,12 @@
           <small class="detail-field-note">留空就是没开。中英文都认：中文先去查经纬度，再用这座城市在 Wikimedia Commons 上的写法去找街景。</small>
         </div>
       </article>
+      <article class="setting-card" id="life-city-discoveries-card">
+        <div class="setting-copy"><h3>同城发现</h3><p>伙伴偶尔挑一条本地展讯、书店活动或街区消息来聊，消息会带原出处。搜索只用你填的城市和固定话题词，不发送聊天内容。</p></div>
+        <div class="detail-field">
+          <button class="switch" id="life-city-discoveries-switch" type="button" role="switch" aria-label="同城发现" aria-checked="false"><span class="track"><span></span></span><span class="switch-label">关闭</span></button>
+        </div>
+      </article>
       <article class="setting-card" id="life-city-street-card">
         <div class="setting-copy">
           <h3>真实街景自拍</h3>
@@ -1273,6 +1279,11 @@
     function paintLifeCity() {
       const input = document.getElementById("life-city-input");
       if (input && document.activeElement !== input) input.value = String(globalSettings.lifeCity ?? "");
+      const discoveries = document.getElementById("life-city-discoveries-switch");
+      const localOn = globalSettings.lifeCityDiscoveries === true;
+      discoveries.classList.toggle("on", localOn);
+      discoveries.setAttribute("aria-checked", String(localOn));
+      discoveries.querySelector(".switch-label").textContent = localOn ? "打开" : "关闭";
       const button = document.getElementById("life-city-street-switch");
       const on = Boolean(globalSettings.lifeCityStreetView);
       const city = String(globalSettings.lifeCity ?? "").trim();
@@ -3243,6 +3254,10 @@
       const input = document.getElementById("life-city-input");
       const value = String(input.value ?? "").trim();
       if (await saveGlobal({ lifeCity: value }, value ? `生活城市记下了：${value}` : "已清空生活城市")) paintGlobal();
+    });
+    document.getElementById("life-city-discoveries-switch").addEventListener("click", async () => {
+      const next = !globalSettings.lifeCityDiscoveries;
+      if (await saveGlobal({ lifeCityDiscoveries: next }, next ? "同城发现已打开" : "同城发现已关闭")) paintLifeCity();
     });
     document.getElementById("life-city-street-switch").addEventListener("click", async () => {
       const next = !Boolean(globalSettings.lifeCityStreetView);

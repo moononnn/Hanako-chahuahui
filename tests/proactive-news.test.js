@@ -40,6 +40,7 @@ import {
   pickDomainForNews,
   rejectNewsItem,
 } from "../lib/news-feed.js";
+import { cityDiscoveryQuery, cityDiscoveryResults } from "../lib/life-city.js";
 import { makeVideoCandidate } from "../lib/video-sharing.js";
 import { parseSeedReply } from "../lib/topic-seeds.js";
 import { readFileSync } from "node:fs";
@@ -52,6 +53,24 @@ const ROWS = [
   { title: "某剧组片场吵翻，主创当场回应", snippet: "现场视频流出，双方说法不一。", url: "https://example.com/a", publishedAt: "2026-10-19" },
   { title: "新开源模型把推理成本压到三成", snippet: "官方给了完整基准，第三方还没复现。", url: "https://example.com/b", publishedAt: "2026-10-18" },
 ];
+
+test("同城发现只留有同城证据与安全出处的结果，每轮至多收一条", () => {
+  const good = { title: "成都书店周末活动", snippet: "成都一家书店公告周末有活动。", url: "https://example.com/event" };
+  const rows = cityDiscoveryResults([good, { ...good, title: "上海书店周末活动", snippet: "仅限上海。" }, { ...good, url: "https://127.0.0.1/a" }, { ...good, url: "https://evil.example.com@source.example.com/a" }], "成都市");
+  assert.deepEqual(rows, [good]);
+  assert.match(cityDiscoveryQuery("成都", now), /^成都 (展览|书店|街区|咖啡店)/u);
+  assert.equal(cityDiscoveryQuery('成都 site:example.com', now), "");
+  const local = { key: "old:成都", city: "成都" };
+  const { book, added } = addNewsItems({}, { domain: { id: "local-city", name: "同城发现" }, results: [good, { ...good, title: "另一个成都书店活动" }], local }, now);
+  assert.equal(added, 1);
+  assert.equal(nextNewsItem(book, now), null);
+  assert.equal(nextNewsItem(book, now, "next:成都"), null);
+  assert.equal(nextNewsItem(book, now, "next:上海"), null);
+  const item = nextNewsItem(book, now, local.key);
+  assert.equal(item.url, good.url);
+  assert.match(newsText(item), /同城发现：成都[\s\S]*不要说自己到场/u);
+  assert.equal(nextNewsItem(addNewsItems(book, { domain: TECH, results: ROWS }, now).book, now).localKey, undefined);
+});
 
 /* ── 世界领域 ── */
 
