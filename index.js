@@ -497,7 +497,7 @@ import { createImageQuota } from "./lib/image-quota.js";
 import { createImageReferences } from "./lib/image-reference.js";
 import { registerImageReferenceRoutes } from "./lib/image-reference-routes.js";
 import { createStreetViewLibrary, STREET_VIEW_CHANCE, STREET_VIEW_COOLDOWN_MS } from "./lib/street-view.js";
-import { normalizeLifeCity, normalizeStreetViewConsent, lifeCityBlockers, cityDiscoveryQuery, cityDiscoveryResults } from "./lib/life-city.js";
+import { normalizeLifeCity, normalizeStreetViewConsent, lifeCityBlockers, lifePlacesPrompt, cityDiscoveryQuery, cityDiscoveryResults } from "./lib/life-city.js";
 import {
   MAX_NUDGE_BUBBLES,
   nudgeDelay,
@@ -3946,6 +3946,7 @@ export function apply(ctx) {
     try {
       // 主动来找这一路同样得报出当前佩戴结果：ta 得知道「自己现在是什么状态」才谈得上换。
       const badgeHint = badgeGuide({ current: store.getPartnerSettings(agentId).badge });
+      const places = lifePlacesPrompt(store.getGlobalSettings());
       if (ordinaryProactive || shareableVideo || videoLoginNotice) {
         // 普通主动消息与视频分享都由伙伴聊天模型出声，留足照片标记的输出空间。
         const catalog = await ctx.models.list();
@@ -3953,7 +3954,7 @@ export function apply(ctx) {
           globalRef: store.getGlobalSettings().model, agentRef: await agentDefaultModel(agentId) });
         if ((shareableVideo || videoLoginNotice) && (!videoPartnerEnabled(agentId) || threadStamp(agentId) !== videoStamp || focusCompanion.active()
           || (shareableVideo && !videoQuota()))) return { ok: false, reason: "video-stale" };
-        const systemPrompt = withNamePlate([spec.systemPrompt, badgeHint, imagePromptText, photoShareText, oldImageText].filter(Boolean).join("\n\n"), partnerName);
+        const systemPrompt = withNamePlate([spec.systemPrompt, places, badgeHint, imagePromptText, photoShareText, oldImageText].filter(Boolean).join("\n\n"), partnerName);
         const generate = async (prompt, userText, maxTokens, options = {}) => (await generateReply(ctx, {
           systemPrompt: prompt,
           messages: options.messages ?? [...proactiveMessages, { role: "user", content: userText }], diagnostics, maxTokens,
@@ -3966,7 +3967,7 @@ export function apply(ctx) {
             generate, messages: [...proactiveMessages, { role: "user", content: spec.userText }],
           });
       } else {
-        raw = await askVoice(withNamePlate([spec.systemPrompt, badgeHint, imagePromptText].filter(Boolean).join("\n\n"), partnerName), spec.userText, 300, agentId, "proactive",
+        raw = await askVoice(withNamePlate([spec.systemPrompt, places, badgeHint, imagePromptText].filter(Boolean).join("\n\n"), partnerName), spec.userText, 300, agentId, "proactive",
           { messages: [...proactiveMessages, { role: "user", content: spec.userText }] });
       }
     } catch (error) {
@@ -7108,7 +7109,7 @@ export function apply(ctx) {
         if (!seesImages) await describeImagesForDegradedModel(agentId, messages, signal);
         try {
           const out = await generateReply(ctx, {
-            systemPrompt: [system, imagePromptText, focusText, feedbackPrompt].filter(Boolean).join('\n\n'),
+            systemPrompt: [system, lifePlacesPrompt(store.getGlobalSettings()), imagePromptText, focusText, feedbackPrompt].filter(Boolean).join('\n\n'),
             messages: seesImages ? messagesWithBody : attachNativeImage(messages, agentId, { withBody: false }),
             diagnostics,
             // 图组/已有玩法留足标记空间；普通文字沿用原预算，不另开学习请求。

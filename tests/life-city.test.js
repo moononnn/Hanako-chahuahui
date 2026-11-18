@@ -7,9 +7,21 @@ import {
   hasCjk,
   lifeCityBlockers,
   lifeCityReady,
+  lifePlacesPrompt,
   normalizeLifeCity,
   normalizeStreetViewConsent,
 } from "../lib/life-city.js";
+
+test("聊天地点提示分清两边，不读实时定位或精确坐标", () => {
+  const prompt = lifePlacesPrompt({ lifeCity: "成都", weatherLocation: "河北" });
+  assert.match(prompt, /我这边[^\n]+"成都"/u);
+  assert.match(prompt, /你那边[^\n]+"河北"/u);
+  assert.match(prompt, /不要从设置推断对方的实时位置/u);
+  assert.equal(lifePlacesPrompt({}), "");
+  const coarse = lifePlacesPrompt({ lifeCity: "成都", weatherLocation: "廊坊市广阳区", weatherArea: { city: "廊坊市", district: "广阳区", latitude: 39.5 } });
+  assert.match(coarse, /廊坊市/u);
+  assert.doesNotMatch(coarse, /广阳区|39\.5/u);
+});
 
 test("生活城市：她自己填，空着就是没开", () => {
   assert.equal(normalizeLifeCity("  成都  "), "成都");
