@@ -14,13 +14,14 @@ ROOT = Path(__file__).resolve().parents[1]
 DEST = ROOT / 'ui/assets/illustrated-bubbles'
 PAD = 24
 # Coordinates refer to the alpha-cropped, 768px-wide generated artwork.
+# Keep decorative pixels wholly inside a fixed corner; only the plain edge may stretch.
 SKINS = {
- 'rabbit': dict(slices=[218,340,110,130], anchor='tr', top=27, bottom=15, ink='#735044', masks=[(443,5,528,111),(680,60,768,202)], face=(524,45,679,169)),
- 'capybara': dict(slices=[205,320,100,130], anchor='tr', top=26, bottom=15, ink='#705341', masks=[(594,0,685,48)], face=(535,50,738,165)),
- 'jellyfish': dict(slices=[270,310,105,130], anchor='tr', top=29, bottom=15, ink='#695476', masks=[(663,151,768,268)], face=(525,43,725,146)),
- 'chick': dict(slices=[205,320,105,130], anchor='tr', top=26, bottom=15, ink='#7b5c31', masks=[(514,60,569,143),(693,70,768,149)], face=(565,25,699,135)),
- 'cloud': dict(slices=[96,205,115,175], anchor='br', top=15, bottom=18, ink='#526e83', masks=[(642,246,758,312)]),
- 'letter': dict(slices=[90,150,68,155], anchor='tl', top=15, bottom=15, ink='#795944', masks=[(0,0,125,44)]),
+ 'rabbit': dict(slices=[218,340,145,145], anchor='tr', top=27, bottom=15, ink='#735044', masks=[(443,5,528,111),(680,60,768,202)], face=(524,45,679,169)),
+ 'capybara': dict(slices=[205,320,116,145], anchor='tr', top=26, bottom=15, ink='#705341', masks=[(594,0,685,48)], face=(535,50,738,165)),
+ 'jellyfish': dict(slices=[270,310,150,145], anchor='tr', top=29, bottom=15, ink='#695476', masks=[(663,151,768,268)], face=(525,43,725,146)),
+ 'chick': dict(slices=[205,320,117,145], anchor='tr', top=26, bottom=15, ink='#7b5c31', masks=[(514,60,569,143),(693,70,768,149)], face=(565,25,699,135)),
+ 'cloud': dict(slices=[112,205,115,205], anchor='br', top=15, bottom=18, ink='#526e83', masks=[(642,246,758,312)]),
+ 'letter': dict(slices=[90,150,84,155], anchor='tl', top=15, bottom=15, ink='#795944', masks=[(0,0,125,44)]),
  'pixel': dict(slices=[52,175,67,105], anchor='br', top=13, bottom=17, ink='#576747', masks=[(692,137,768,189)], glow=True),
  'aquarium': dict(slices=[52,180,69,135], anchor='br', top=13, bottom=18, ink='#45736e', masks=[(683,124,748,174)]),
 }

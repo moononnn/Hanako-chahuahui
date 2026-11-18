@@ -17,6 +17,15 @@ export const ART_SKIN_IDS = [
   "art-cloud", "art-letter", "art-pixel", "art-aquarium",
 ];
 
+test("水母月牙的金色轮廓完全留在固定右下角，两侧镜像都不会把它切进延展条", () => {
+  const manifest = JSON.parse(fs.readFileSync(new URL("./illustrated-bubbles/art-manifest.json", galleryUrl), "utf8"));
+  const { size: [width, height], slices: [top, right, bottom, left] } = manifest.find(row => row.id === "art-jellyfish");
+  // 源图的月牙在右下（自己一侧翻到左下），亮色轮廓约 x=606–737、y=300–400。
+  assert.ok(height - bottom < 300 && width - right < 606);
+  assert.ok(top + bottom < height && left + right < width);
+  assert.equal(galleryCss.match(new RegExp(`--art-slices: ${top} ${right} ${bottom} ${left};`, "gu"))?.length, 2);
+});
+
 test("新画廊八款都在清单里，分组落在已有的三个组上", () => {
   const ids = new Set(BUBBLE_SKIN_GROUPS.map((group) => group.id));
   for (const id of ART_SKIN_IDS) {
