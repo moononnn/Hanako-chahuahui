@@ -1639,6 +1639,19 @@ export function startMobileClient(doc = document, { analyzeBackground = analyzeB
     for (const box of msgs.querySelectorAll(".voice-bubble.is-playing")) box.classList.remove("is-playing");
   }
 
+  /**
+   * 街景自拍那张图的来路行：素材来自哪里、什么许可、谁拍的。
+   * 只有真的带出处的那张图才有这一行；别的图不受影响。
+   */
+  function streetViewCreditNode(message) {
+    const source = message?.streetView;
+    if (!source || !source.license) return null;
+    const node = doc.createElement("small");
+    node.className = "ch-credit";
+    node.textContent = ["情景图 · 街景参考：Wikimedia Commons", source.license, source.author].filter(Boolean).join(" · ");
+    return node;
+  }
+
   function attachmentNode(message) {
     const img = doc.createElement("img");
     img.className = "ch-img";
@@ -2620,6 +2633,9 @@ export function startMobileClient(doc = document, { analyzeBackground = analyzeB
       bubble.className = "bubble ch-media";
       bubble.__pieceText = pieces.join("\n");
       bubble.append(attachmentNode(message));
+      // 街景自拍那张图的来路行：素材来自哪里、什么许可、谁拍的。
+      const credit = streetViewCreditNode(message);
+      if (credit) bubble.append(credit);
       for (const piece of pieces) {
         const part = doc.createElement("div");
         part.className = "ch-media-text";

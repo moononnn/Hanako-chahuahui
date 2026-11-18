@@ -3694,6 +3694,9 @@
             imageNode.dataset.visionNote = String(m.visionNote ?? "");
             appendImageToBubble(lastBubble, imageNode);
             mountAttachmentImage(imageNode, m.attachment.id, current, Boolean(opts.keepBottom));
+            // 街景自拍那张图的来路：素材来自哪里、什么许可、谁拍的，写在图下面。
+            const credit = streetViewCreditNode(m);
+            if (credit) lastBubble.appendChild(credit);
           }
         } else {
           const regular = bubble("user", isBareImageMarker(m.text) ? "" : m.text, null, m.at);
@@ -5258,6 +5261,19 @@
     function appendImageToBubble(bubbleEl, imageNode) {
       if (bubbleEl?.textContent?.trim()) bubbleEl.appendChild(document.createElement("br"));
       bubbleEl?.appendChild(imageNode);
+    }
+
+    /**
+     * 街景自拍那张图的来路行：素材来自哪里、什么许可、谁拍的。
+     * 只有真的带出处的那张图才有这一行；别的图不受影响。
+     */
+    function streetViewCreditNode(message) {
+      const source = message?.streetView;
+      if (!source || !source.license) return null;
+      const node = document.createElement("small");
+      node.className = "image-credit";
+      node.textContent = ["情景图 · 街景参考：Wikimedia Commons", source.license, source.author].filter(Boolean).join(" · ");
+      return node;
     }
 
     async function send() {

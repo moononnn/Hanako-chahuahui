@@ -275,6 +275,29 @@
           </div>
         </div>
       </article>
+      <article class="setting-card" id="life-city-card">
+        <div class="setting-copy">
+          <h3>生活城市</h3>
+          <p>伙伴生活里待的那座城市。跟天气各算各的：填这里不会动天气那边。城市由你自己写，我们不读定位，写什么就是什么。</p>
+        </div>
+        <div class="detail-field user-name-field">
+          <input type="text" id="life-city-input" maxlength="40" placeholder="比如 成都，或 Chengdu">
+          <button class="soft-button" id="life-city-save" type="button">保存</button>
+          <small class="detail-field-note">留空就是没开。中英文都认：中文先去查经纬度，再用这座城市在 Wikimedia Commons 上的写法去找街景。</small>
+        </div>
+      </article>
+      <article class="setting-card" id="life-city-street-card">
+        <div class="setting-copy">
+          <h3>真实街景自拍</h3>
+          <p id="life-city-street-copy">打开后，伙伴偶尔会发一张「站在真街上」的照片。背景是 Wikimedia Commons 上的真实街景，只用明确允许自由使用的那种（CC0，或作者自己奉献的公共领域作品），每次都把出处留在照片记录里。检索时只发城市名，不发聊天内容。</p>
+        </div>
+        <div class="detail-field">
+          <button class="switch" id="life-city-street-switch" type="button" role="switch" aria-checked="false">
+            <span class="track"><span></span></span><span class="switch-label">关闭</span>
+          </button>
+          <small class="detail-field-note" id="life-city-street-note">这类素材很少，很多城市一张都找不到。找不到就不发——不会拿编出来的街景充数。</small>
+        </div>
+      </article>
     </section>
 
     <section id="panel-immersion" role="tabpanel" aria-labelledby="tab-immersion" tabindex="0" hidden>
@@ -1242,6 +1265,25 @@
       }
     }
 
+    /**
+     * 生活城市与真实街景：城市名回填、开关状态。
+     * 城市没填时，街景开关还是能按——但那只是记下她的意愿，
+     * 真正去找街景还得等城市填上（那时才会去问素材服务）。
+     */
+    function paintLifeCity() {
+      const input = document.getElementById("life-city-input");
+      if (input && document.activeElement !== input) input.value = String(globalSettings.lifeCity ?? "");
+      const button = document.getElementById("life-city-street-switch");
+      const on = Boolean(globalSettings.lifeCityStreetView);
+      const city = String(globalSettings.lifeCity ?? "").trim();
+      button.classList.toggle("on", on);
+      button.setAttribute("aria-checked", String(on));
+      button.querySelector(".switch-label").textContent = on ? "打开" : "关闭";
+      document.getElementById("life-city-street-note").textContent = city
+        ? "这类素材很少，很多城市一张都找不到。找不到就不发——不会拿编出来的街景充数。"
+        : "先在上面填一座城市，再打开这一项。不填城市就打开也不会去找街景。";
+    }
+
     function paintGlobal() {
       const avatarSwitch = document.getElementById("msg-avatars-switch");
       const avatarsOn = Boolean(globalSettings.messageAvatars);
@@ -1309,6 +1351,7 @@
       }
       // 自己的天气：三个下拉跟着设置回填。
       void paintWeatherRegion();
+      paintLifeCity();
       const workfeedSwitch = document.getElementById("workfeed-switch");
       const workfeedOn = globalSettings.workfeedEnabled !== false;
       workfeedSwitch.classList.toggle("on", workfeedOn);
@@ -3194,6 +3237,16 @@
       const input = document.getElementById("user-name-override");
       const value = String(input.value ?? "").trim();
       if (await saveGlobal({ userNameOverride: value }, value ? "茶话会里的名字已保存" : "已恢复跟随 Hana 的用户名")) paintGlobal();
+    });
+    // 生活城市与真实街景：城市她自己写，街景另有一个明确的授权开关。
+    document.getElementById("life-city-save").addEventListener("click", async () => {
+      const input = document.getElementById("life-city-input");
+      const value = String(input.value ?? "").trim();
+      if (await saveGlobal({ lifeCity: value }, value ? `生活城市记下了：${value}` : "已清空生活城市")) paintGlobal();
+    });
+    document.getElementById("life-city-street-switch").addEventListener("click", async () => {
+      const next = !Boolean(globalSettings.lifeCityStreetView);
+      if (await saveGlobal({ lifeCityStreetView: next }, next ? "真实街景自拍已打开" : "真实街景自拍已关闭")) paintGlobal();
     });
 
     async function saveQuiet() {

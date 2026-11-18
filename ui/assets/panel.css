@@ -911,6 +911,16 @@ body.slot-embedded .chat.has-bg .composer::before {
   object-fit: contain;
   background: var(--sunken);
 }
+/* 街景自拍那张图的来路行：图下面一小行，淡一点，不抢图的戏。 */
+.image-credit {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  opacity: .85;
+  overflow-wrap: anywhere;
+}
 /* 原图按她定的期限清掉之后，用当时那段描述顶在原来放图的位置。 */
 .message-image-gone {
   margin-top: 7px;
