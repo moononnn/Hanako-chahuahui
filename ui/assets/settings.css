@@ -582,7 +582,8 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 
 /* 生活城市选择弹窗：搜索栏固定在上，候选在下自己滚（窄屏也够得着搜索框）。 */
 .life-city-modal { width: min(560px, 100%); grid-template-rows: auto auto minmax(0, 1fr) auto; }
-.life-city-search-row { display: flex; align-items: center; gap: 8px; padding: 0 18px 12px; }
+.life-city-modal .modal-head { border-bottom: 0; }
+.life-city-search-row { display: flex; align-items: center; gap: 8px; padding: 4px 18px 12px; }
 .life-city-search-row input[type="search"] { flex: 1 1 auto; min-width: 0; }
 .life-city-search-row .soft-button { flex: none; white-space: nowrap; }
 .life-city-modal-body { display: grid; align-content: start; }
