@@ -278,17 +278,15 @@
       <article class="setting-card" id="life-city-card">
         <div class="setting-copy">
           <h3>生活城市</h3>
-          <p>伙伴生活里待的那座城市。跟天气各算各的：填这里不会动天气那边。城市由你自己写，我们不读定位，写什么就是什么。</p>
+          <p>伙伴生活里待的那座城市。跟天气各算各的：在下面的城市表里选一座，选中才作数。</p>
         </div>
         <div class="detail-field">
-          <input type="search" id="life-city-input" maxlength="40" aria-label="搜索生活城市" placeholder="搜城市或省份，比如成都">
+          <small class="detail-field-note" id="life-city-current" role="status">尚未设置生活城市。</small>
+          <div class="detail-actions">
+            <button class="soft-button" id="life-city-pick" type="button">选择城市</button>
+            <button class="soft-button" id="life-city-clear" type="button">清空</button>
+          </div>
         </div>
-        <div class="detail-field"><label><span>生活城市候选</span><select id="life-city-choice" aria-label="生活城市候选"></select></label></div>
-        <div class="detail-actions">
-          <button class="soft-button" id="life-city-save" type="button" disabled>保存</button>
-          <button class="soft-button" id="life-city-clear" type="button">清空</button>
-        </div>
-        <small class="detail-field-note" id="life-city-current" role="status"></small>
       </article>
       <article class="setting-card" id="life-city-discoveries-card">
         <div class="setting-copy"><h3>同城发现</h3><p>伙伴偶尔挑一条本地展讯、书店活动或街区消息来聊，消息会带原出处。搜索只用你填的城市和固定话题词，不发送聊天内容。</p></div>
@@ -713,6 +711,22 @@
     </div>
   </div>
 
+  <div class="modal-layer" id="life-city-modal" hidden>
+    <div class="modal life-city-modal" role="dialog" aria-modal="true" aria-labelledby="life-city-modal-title">
+      <div class="modal-head"><div><h2 id="life-city-modal-title">选择生活城市</h2><p class="modal-sub" id="life-city-modal-sub">先选省份，再选城市</p></div><button class="icon-button" data-close-modal="life-city-modal" aria-label="关闭">×</button></div>
+      <div class="life-city-search-row">
+        <input type="search" id="life-city-modal-search" aria-label="搜索生活城市" placeholder="搜城市或省份，比如成都">
+        <button class="soft-button" id="life-city-modal-back" type="button" hidden>← 省份</button>
+      </div>
+      <div class="modal-body life-city-modal-body">
+        <div class="life-city-list" id="life-city-modal-list" aria-label="生活城市候选"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="soft-button" id="life-city-modal-cancel" type="button">取消</button>
+      </div>
+    </div>
+  </div>
+
   <script src="./assets/beautify-select.js"></script>
   <script type="module">
     import { hana as localHana } from "./assets/sdk.js";
@@ -756,6 +770,10 @@
     let globalSettings = {};
     let lifeCityItems = null;
     let lifeCityLoading = null;
+    /** 城市表读不到时的实话；空着就是没问题。 */
+    let lifeCityError = "";
+    /** 弹窗里选到哪一省了；空着就是还在省这一层。 */
+    let lifeCityDialogProvince = "";
     // 次数和可见伙伴共用一份页面草稿，不另存参与名单。
     let videoShareDraft = null;
     let videoShareSaving = false;
@@ -1278,22 +1296,15 @@
     }
 
     /**
-     * 生活城市与真实街景：城市名回填、开关状态。
-     * 城市没填时，街景开关还是能按——但那只是记下她的意愿，
-     * 真正去找街景还得等城市填上（那时才会去问素材服务）。
+     * 生活城市与真实街景：城市从本地城市表里选，街景另有一个明确的授权开关。
+     * 城市没选时，街景开关还是能按——但那只是记下她的意愿，
+     * 真正去找街景还得等城市选上（那时才会去问素材服务）。
      */
     function paintLifeCity() {
-      const saved = String(globalSettings.lifeCity ?? "");
+      const saved = lifeCityCurrentLabel();
       document.getElementById("life-city-current").textContent = saved ? `当前：${saved}` : "尚未设置生活城市。";
       document.getElementById("life-city-clear").disabled = !saved;
-      if (!lifeCityItems && !lifeCityLoading) {
-        lifeCityLoading = api("GET", "settings/life-cities").then(data => {
-          if (!Array.isArray(data?.items)) throw new Error("城市列表不可用");
-          lifeCityItems = data.items;
-          paintLifeCityOptions(globalSettings.lifeCityCode || lifeCityItems.find(row => row.city.replace(/市$/u, "") === String(globalSettings.lifeCity ?? "").replace(/市$/u, ""))?.code || "");
-        }).catch(() => fillSelect(document.getElementById("life-city-choice"), "城市列表没读到，请重新打开设置", [], ""))
-          .finally(() => { lifeCityLoading = null; });
-      }
+      void loadLifeCityItems();
       const discoveries = document.getElementById("life-city-discoveries-switch");
       const localOn = globalSettings.lifeCityDiscoveries === true;
       discoveries.classList.toggle("on", localOn);
@@ -1307,7 +1318,7 @@
       button.querySelector(".switch-label").textContent = on ? "打开" : "关闭";
       document.getElementById("life-city-street-note").textContent = city
         ? "这类素材很少，很多城市一张都找不到。找不到就不发——不会拿编出来的街景充数。"
-        : "先在上面填一座城市，再打开这一项。不填城市就打开也不会去找街景。";
+        : "先在上面选一座城市，再打开这一项。没选城市就打开也不会去找街景。";
     }
 
     function paintGlobal() {
@@ -3264,27 +3275,180 @@
       const value = String(input.value ?? "").trim();
       if (await saveGlobal({ userNameOverride: value }, value ? "茶话会里的名字已保存" : "已恢复跟随 Hana 的用户名")) paintGlobal();
     });
-    // 生活城市与真实街景：城市她自己写，街景另有一个明确的授权开关。
-    function paintLifeCityOptions(selected = "") {
-      const query = document.getElementById("life-city-input").value.trim().replace(/\s+/gu, "");
-      const select = document.getElementById("life-city-choice");
-      const rows = (lifeCityItems ?? []).filter(row => row.name.replace(/[\s·]+/gu, "").includes(query));
-      fillSelect(select, rows.length ? "选择城市" : lifeCityItems ? "没有找到这座城市" : "正在读取城市列表", rows, selected);
-      document.getElementById("life-city-save").disabled = !select.value;
+    // 生活城市与真实街景：城市从本地城市表里选，街景另有一个明确的授权开关。
+    /** 一条候选拆成省与市：省直辖市的名字里没有间隔号，省市同名时也是一个。 */
+    function lifeCityParts(item) {
+      const name = String(item?.name ?? "").trim();
+      const city = String(item?.city ?? "").trim() || name;
+      const index = name.indexOf(" · ");
+      if (index < 0) return { province: name || city, city };
+      return { province: name.slice(0, index).trim(), city };
     }
-    document.getElementById("life-city-input").addEventListener("input", () => paintLifeCityOptions());
-    document.getElementById("life-city-choice").addEventListener("change", event => {
-      document.getElementById("life-city-save").disabled = !event.target.value;
+
+    /** 候选按省分组，保持表里的顺序。 */
+    function lifeCityGroups() {
+      const groups = new Map();
+      for (const item of lifeCityItems ?? []) {
+        const { province, city } = lifeCityParts(item);
+        if (!province || !city) continue;
+        if (!groups.has(province)) groups.set(province, []);
+        groups.get(province).push({ ...item, province, city });
+      }
+      return groups;
+    }
+
+    /** 搜索：省名、市名、整条路径都算命中；空格与间隔号不算。 */
+    function lifeCityMatches(item, query) {
+      const needle = String(query ?? "").trim().replace(/[\s·]+/gu, "");
+      if (!needle) return true;
+      const parts = lifeCityParts(item);
+      const haystack = `${parts.province}${parts.city}${String(item?.name ?? "")}`.replace(/[\s·]+/gu, "");
+      return haystack.includes(needle);
+    }
+
+    /** 当前城市显示成「省 · 市」；老数据只有城市名时退回那个名字。 */
+    function lifeCityCurrentLabel() {
+      const code = String(globalSettings.lifeCityCode ?? "");
+      const hit = (lifeCityItems ?? []).find(row => String(row?.code ?? "") === code);
+      if (hit?.name) return String(hit.name);
+      return String(globalSettings.lifeCity ?? "").trim();
+    }
+
+    /** 城市表只读一次；读不到时把话说明白，不静默空着。 */
+    function loadLifeCityItems(force = false) {
+      if (lifeCityItems) return Promise.resolve(lifeCityItems);
+      if (lifeCityLoading) return lifeCityLoading;
+      // 读失败过就不再自动重试（免得一次次自己刷）：要重试得她自己再点一次「选择城市」。
+      if (lifeCityError && !force) return Promise.resolve(null);
+      lifeCityLoading = api("GET", "settings/life-cities").then(data => {
+        if (!Array.isArray(data?.items)) throw new Error("城市列表不可用");
+        lifeCityItems = data.items;
+        lifeCityError = "";
+      }).catch(() => {
+        lifeCityError = "城市列表没读到，请重新打开设置";
+      }).finally(() => {
+        lifeCityLoading = null;
+        renderLifeCityDialog();
+        // 城市表到了就把当前城市补成「省 · 市」：先前只拿得到城市名。
+        paintLifeCity();
+      });
+      return lifeCityLoading;
+    }
+
+    function lifeCityOptionButton(label, hint, onClick) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "life-city-option";
+      const name = document.createElement("span");
+      name.className = "life-city-option-name";
+      name.textContent = label;
+      button.appendChild(name);
+      if (hint) {
+        const extra = document.createElement("span");
+        extra.className = "life-city-option-hint";
+        extra.textContent = hint;
+        button.appendChild(extra);
+      }
+      button.addEventListener("click", onClick);
+      return button;
+    }
+
+    function lifeCityEmpty(text) {
+      const node = document.createElement("p");
+      node.className = "life-city-empty";
+      node.textContent = text;
+      return node;
+    }
+
+    /** 弹窗里画候选：空搜索先选省，选了省再选城市；有搜索就跨省直接挑。 */
+    function renderLifeCityDialog() {
+      const list = document.getElementById("life-city-modal-list");
+      const back = document.getElementById("life-city-modal-back");
+      const sub = document.getElementById("life-city-modal-sub");
+      const search = document.getElementById("life-city-modal-search");
+      const query = String(search?.value ?? "").trim().replace(/\s+/gu, "");
+      if (!list) return;
+      list.replaceChildren();
+      if (lifeCityError) {
+        back.hidden = true;
+        sub.textContent = "城市列表没读到";
+        list.appendChild(lifeCityEmpty(lifeCityError));
+        return;
+      }
+      if (!lifeCityItems) {
+        back.hidden = true;
+        sub.textContent = "正在读取城市列表…";
+        list.appendChild(lifeCityEmpty("正在读取城市列表…"));
+        return;
+      }
+      const groups = lifeCityGroups();
+      if (query) {
+        // 搜到了就直接挑：跨省的结果标出完整省市，不让她猜是哪座城。
+        back.hidden = true;
+        let hits = 0;
+        for (const [province, rows] of groups) {
+          for (const row of rows) {
+            if (!lifeCityMatches(row, query)) continue;
+            hits += 1;
+            const label = province === row.city ? row.city : `${province} · ${row.city}`;
+            list.appendChild(lifeCityOptionButton(label, "", () => pickLifeCity(row.code, label)));
+          }
+        }
+        sub.textContent = hits ? `搜到 ${hits} 座城市` : "没有找到";
+        if (!hits) list.appendChild(lifeCityEmpty("没有找到这座城市，换个名字试试"));
+        return;
+      }
+      if (lifeCityDialogProvince) {
+        // 已经在省这一层了：这一层列该省的城市。
+        back.hidden = false;
+        const rows = groups.get(lifeCityDialogProvince) ?? [];
+        sub.textContent = lifeCityDialogProvince;
+        for (const row of rows) {
+          const label = row.province === row.city ? row.city : `${row.province} · ${row.city}`;
+          list.appendChild(lifeCityOptionButton(row.city, "", () => pickLifeCity(row.code, label)));
+        }
+        if (!rows.length) list.appendChild(lifeCityEmpty("这个省下面没有城市"));
+        return;
+      }
+      // 空搜索：先选省份（直辖市也在这一层）。
+      back.hidden = true;
+      sub.textContent = "先选省份，再选城市";
+      for (const [province, rows] of groups) {
+        list.appendChild(lifeCityOptionButton(province, `${rows.length} 座城市`, () => {
+          lifeCityDialogProvince = province;
+          renderLifeCityDialog();
+        }));
+      }
+    }
+
+    /** 选中一座城：走现成的设置保存管道。没存上就留在弹窗里，让她能再试一次。 */
+    async function pickLifeCity(code, label) {
+      if (!code || !lifeCityItems?.some(row => String(row?.code ?? "") === String(code))) return;
+      if (!await saveGlobal({ lifeCityCode: code }, `生活城市已保存：${label}`)) return;
+      closeModal("life-city-modal");
+      paintLifeCity();
+    }
+
+    document.getElementById("life-city-pick").addEventListener("click", () => {
+      lifeCityDialogProvince = "";
+      document.getElementById("life-city-modal-search").value = "";
+      void loadLifeCityItems(true);
+      renderLifeCityDialog();
+      openModal("life-city-modal");
+      document.getElementById("life-city-modal-search")?.focus();
     });
-    document.getElementById("life-city-save").addEventListener("click", async () => {
-      const code = document.getElementById("life-city-choice").value;
-      if (!lifeCityItems?.some(row => row.code === code)) return;
-      if (await saveGlobal({ lifeCityCode: code }, "生活城市已保存")) paintLifeCity();
+    document.getElementById("life-city-modal-search").addEventListener("input", () => {
+      lifeCityDialogProvince = "";
+      renderLifeCityDialog();
     });
+    document.getElementById("life-city-modal-back").addEventListener("click", () => {
+      lifeCityDialogProvince = "";
+      renderLifeCityDialog();
+    });
+    // 取消与 Esc 都不保存：弹窗只是让她挑一座城，没挑中就当没来过。
+    document.getElementById("life-city-modal-cancel").addEventListener("click", () => closeModal("life-city-modal"));
     document.getElementById("life-city-clear").addEventListener("click", async () => {
       if (!await saveGlobal({ lifeCityCode: null }, "已清空生活城市")) return;
-      document.getElementById("life-city-input").value = "";
-      paintLifeCityOptions();
       paintLifeCity();
     });
     document.getElementById("life-city-discoveries-switch").addEventListener("click", async () => {

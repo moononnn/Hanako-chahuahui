@@ -118,7 +118,7 @@ h1 { margin: 0; font-size: clamp(23px, 4vw, 31px); line-height: 1.25; font-weigh
   flex: none; border-radius: 999px; padding: 2px 9px; font-size: 11.5px; font-weight: 600;
   background: var(--mint); color: #fff;
 }
-input[type="time"], input[type="text"], input[type="password"], textarea { width: 100%; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--paper); color: var(--ink); padding: 9px 11px; outline: none; transition: border-color 160ms ease, box-shadow 160ms ease; }
+input[type="time"], input[type="text"], input[type="password"], input[type="search"], textarea { width: 100%; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--paper); color: var(--ink); padding: 9px 11px; outline: none; transition: border-color 160ms ease, box-shadow 160ms ease; }
 input:focus, textarea:focus { border-color: var(--mint); box-shadow: 0 0 0 3px rgba(93, 174, 142, .09); }
 textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 
@@ -578,4 +578,27 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 .weather-region-status.err { color: var(--blush, #c9737a); }
 @media (max-width: 560px) {
   .weather-region-field { grid-template-columns: 1fr; }
+}
+
+/* 生活城市选择弹窗：搜索栏固定在上，候选在下自己滚（窄屏也够得着搜索框）。 */
+.life-city-modal { width: min(560px, 100%); grid-template-rows: auto auto minmax(0, 1fr) auto; }
+.life-city-search-row { display: flex; align-items: center; gap: 8px; padding: 0 18px 12px; }
+.life-city-search-row input[type="search"] { flex: 1 1 auto; min-width: 0; }
+.life-city-search-row .soft-button { flex: none; white-space: nowrap; }
+.life-city-modal-body { display: grid; align-content: start; }
+.life-city-list { display: grid; gap: 6px; }
+.life-city-option {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  width: 100%; padding: 9px 12px; border: 1px solid var(--line-soft); border-radius: var(--r-md);
+  background: var(--paper); color: var(--ink); text-align: left; cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+.life-city-option:hover { border-color: var(--mint); background: rgba(93, 174, 142, .08); }
+.life-city-option-name { font-size: 13px; }
+.life-city-option-hint { flex: none; color: var(--ink-soft); font-size: 11.5px; }
+.life-city-empty { margin: 0; padding: 12px 2px; color: var(--ink-soft); font-size: 12.5px; }
+@media (max-width: 520px) {
+  .life-city-search-row { flex-wrap: wrap; }
+  .life-city-search-row input[type="search"] { flex-basis: 100%; }
+  .life-city-modal { max-height: min(560px, calc(100dvh - 24px)); }
 }

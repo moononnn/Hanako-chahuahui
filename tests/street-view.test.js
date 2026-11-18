@@ -291,11 +291,12 @@ test("素材库：失败后六小时内不重新探测", async t => {
   assert.equal(calls, 2);
 });
 
-test("设置页：城市自己填、授权另有一个开关，并且说清楚会请求 Wikimedia", () => {
+test("设置页：城市从本地城市表里选，授权另有一个开关，并且说清楚会请求 Wikimedia", () => {
   const html = fs.readFileSync(new URL("../ui/settings.html", import.meta.url), "utf8");
-  assert.match(html, /id="life-city-input"/);
+  assert.match(html, /id="life-city-pick"/);
   assert.match(html, /id="life-city-street-switch"/);
   assert.match(html, /Wikimedia Commons/);
-  // 城市名那栏要说清楚不读定位。
-  assert.match(html, /不读定位/);
+  // 城市不再自己手写：从城市表里选，街景那项要先有城市才生效。
+  assert.doesNotMatch(html, /id="life-city-input"/);
+  assert.match(html, /先在上面选一座城市/);
 });
