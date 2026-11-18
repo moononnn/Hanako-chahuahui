@@ -186,6 +186,22 @@ test("填了城市但没授权：不去 Commons 要素材", OPTIONS, async t => 
   assert.equal(app.net.calls.filter(url => url.includes("commons.wikimedia.org")).length, 0);
 });
 
+test("生活城市从本地候选保存，错误代码不覆盖旧设置", OPTIONS, async t => {
+  const app = await boot(t, { consent: false, city: "成都" });
+  const choices = await app.request("GET", "/settings/life-cities");
+  assert.equal(choices.status, 200);
+  const pick = choices.body.items.find(row => row.city === "成都市");
+  assert.ok(pick);
+  assert.equal((await app.request("PUT", "/settings/global", { json: { lifeCityCode: "拼错的地名" } })).status, 400);
+  assert.equal((await app.request("PUT", "/settings/global", { json: { lifeCityCode: pick.code, lifeCity: "错误地名" } })).status, 200);
+  const saved = await app.request("GET", "/settings");
+  assert.equal(saved.body.global.lifeCity, "成都市");
+  assert.equal(saved.body.global.lifeCityCode, pick.code);
+  assert.equal((await app.request("PUT", "/settings/global", { json: { lifeCityCode: null } })).status, 200);
+  const cleared = await app.request("GET", "/settings");
+  assert.equal(cleared.body.global.lifeCity, "");
+});
+
 test("关掉授权后旧素材作废：临时文件删掉，不再用旧城的街景", OPTIONS, async t => {
   const app = await boot(t);
   const uploaded = await app.request("POST", `/image/reference/${AGENT}`, { json: { image: { data: PNG.toString("base64") } } });

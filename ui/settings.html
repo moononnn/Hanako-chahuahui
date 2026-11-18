@@ -280,11 +280,15 @@
           <h3>生活城市</h3>
           <p>伙伴生活里待的那座城市。跟天气各算各的：填这里不会动天气那边。城市由你自己写，我们不读定位，写什么就是什么。</p>
         </div>
-        <div class="detail-field user-name-field">
-          <input type="text" id="life-city-input" maxlength="40" placeholder="比如 成都，或 Chengdu">
-          <button class="soft-button" id="life-city-save" type="button">保存</button>
-          <small class="detail-field-note">留空就是没开。中英文都认：中文先去查经纬度，再用这座城市在 Wikimedia Commons 上的写法去找街景。</small>
+        <div class="detail-field">
+          <input type="search" id="life-city-input" maxlength="40" aria-label="搜索生活城市" placeholder="搜城市或省份，比如成都">
         </div>
+        <div class="detail-field"><label><span>生活城市候选</span><select id="life-city-choice" aria-label="生活城市候选"></select></label></div>
+        <div class="detail-actions">
+          <button class="soft-button" id="life-city-save" type="button" disabled>保存</button>
+          <button class="soft-button" id="life-city-clear" type="button">清空</button>
+        </div>
+        <small class="detail-field-note" id="life-city-current" role="status"></small>
       </article>
       <article class="setting-card" id="life-city-discoveries-card">
         <div class="setting-copy"><h3>同城发现</h3><p>伙伴偶尔挑一条本地展讯、书店活动或街区消息来聊，消息会带原出处。搜索只用你填的城市和固定话题词，不发送聊天内容。</p></div>
@@ -750,6 +754,8 @@
     let partners = [];
     let hiddenPartners = [];
     let globalSettings = {};
+    let lifeCityItems = null;
+    let lifeCityLoading = null;
     // 次数和可见伙伴共用一份页面草稿，不另存参与名单。
     let videoShareDraft = null;
     let videoShareSaving = false;
@@ -1277,8 +1283,17 @@
      * 真正去找街景还得等城市填上（那时才会去问素材服务）。
      */
     function paintLifeCity() {
-      const input = document.getElementById("life-city-input");
-      if (input && document.activeElement !== input) input.value = String(globalSettings.lifeCity ?? "");
+      const saved = String(globalSettings.lifeCity ?? "");
+      document.getElementById("life-city-current").textContent = saved ? `当前：${saved}` : "尚未设置生活城市。";
+      document.getElementById("life-city-clear").disabled = !saved;
+      if (!lifeCityItems && !lifeCityLoading) {
+        lifeCityLoading = api("GET", "settings/life-cities").then(data => {
+          if (!Array.isArray(data?.items)) throw new Error("城市列表不可用");
+          lifeCityItems = data.items;
+          paintLifeCityOptions(globalSettings.lifeCityCode || lifeCityItems.find(row => row.city.replace(/市$/u, "") === String(globalSettings.lifeCity ?? "").replace(/市$/u, ""))?.code || "");
+        }).catch(() => fillSelect(document.getElementById("life-city-choice"), "城市列表没读到，请重新打开设置", [], ""))
+          .finally(() => { lifeCityLoading = null; });
+      }
       const discoveries = document.getElementById("life-city-discoveries-switch");
       const localOn = globalSettings.lifeCityDiscoveries === true;
       discoveries.classList.toggle("on", localOn);
@@ -3250,10 +3265,27 @@
       if (await saveGlobal({ userNameOverride: value }, value ? "茶话会里的名字已保存" : "已恢复跟随 Hana 的用户名")) paintGlobal();
     });
     // 生活城市与真实街景：城市她自己写，街景另有一个明确的授权开关。
+    function paintLifeCityOptions(selected = "") {
+      const query = document.getElementById("life-city-input").value.trim().replace(/\s+/gu, "");
+      const select = document.getElementById("life-city-choice");
+      const rows = (lifeCityItems ?? []).filter(row => row.name.replace(/[\s·]+/gu, "").includes(query));
+      fillSelect(select, rows.length ? "选择城市" : lifeCityItems ? "没有找到这座城市" : "正在读取城市列表", rows, selected);
+      document.getElementById("life-city-save").disabled = !select.value;
+    }
+    document.getElementById("life-city-input").addEventListener("input", () => paintLifeCityOptions());
+    document.getElementById("life-city-choice").addEventListener("change", event => {
+      document.getElementById("life-city-save").disabled = !event.target.value;
+    });
     document.getElementById("life-city-save").addEventListener("click", async () => {
-      const input = document.getElementById("life-city-input");
-      const value = String(input.value ?? "").trim();
-      if (await saveGlobal({ lifeCity: value }, value ? `生活城市记下了：${value}` : "已清空生活城市")) paintGlobal();
+      const code = document.getElementById("life-city-choice").value;
+      if (!lifeCityItems?.some(row => row.code === code)) return;
+      if (await saveGlobal({ lifeCityCode: code }, "生活城市已保存")) paintLifeCity();
+    });
+    document.getElementById("life-city-clear").addEventListener("click", async () => {
+      if (!await saveGlobal({ lifeCityCode: null }, "已清空生活城市")) return;
+      document.getElementById("life-city-input").value = "";
+      paintLifeCityOptions();
+      paintLifeCity();
     });
     document.getElementById("life-city-discoveries-switch").addEventListener("click", async () => {
       const next = !globalSettings.lifeCityDiscoveries;

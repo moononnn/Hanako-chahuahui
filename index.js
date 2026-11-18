@@ -49,7 +49,7 @@ import { createWeatherFetcher } from "./lib/weather.js";
 // 伙伴到底提没提这件事：宽松匹配，宁可当成提过，也不要重复扰民。
 import { didMentionWeatherEvent } from "./lib/weather-alert.js";
 // 地区下拉：省 / 市 / 区县三层，页面按层来取。
-import { regionOptions } from "./lib/weather-regions.js";
+import { regionOptions, lifeCityOptions } from "./lib/weather-regions.js";
 import { formatAdministrativeRegion, getAdministrativeRegion } from "./lib/administrative-divisions.js";
 import { dueTodosFromSnapshot, nudgeKey, nudgeSeen, pickTodoNudger, todoNudgeText } from "./lib/todo-nudge.js";
 import { hasProposal, confirmProposal, makeProposal, proposalAskText, proposeFromMessage } from "./lib/todo-propose.js";
@@ -1235,7 +1235,7 @@ export function apply(ctx) {
     // 生图：一条自己的模型配置（含加密后的 Key），和朗读那条各走各的。
     "imageModel", "imageTier",
     // 生活城市：跟天气各算各的。城市她自己填；真实街景另有一个明确的授权开关。
-    "lifeCity", "lifeCityStreetView", "lifeCityDiscoveries",
+    "lifeCity", "lifeCityCode", "lifeCityStreetView", "lifeCityDiscoveries",
   ]);
   const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "vision", "voice", "partnerFeedEnabled", "videoSharingEnabled", "imageTier"]);
 
@@ -10259,6 +10259,8 @@ export function apply(ctx) {
       });
 
       // 地区下拉：按层给选项（省 → 市 → 区县），不把整张行政区分表推给页面。
+      app.get("/settings/life-cities", (c) => c.json({ ok: true, items: lifeCityOptions() }));
+
       app.get("/settings/weather-regions", (c) => {
         try {
           const province = String(c.req.query("province") ?? "").trim();
@@ -10521,6 +10523,14 @@ export function apply(ctx) {
           const body = await c.req.json();
           const wasDaybookOn = daybookOn();
           const globalPatch = normalizeGlobalSettingsPatch(body);
+          if (Object.hasOwn(globalPatch, "lifeCityCode")) {
+            const code = globalPatch.lifeCityCode;
+            const selected = typeof code === "string" && lifeCityOptions().find(row => row.code === code);
+            if (code !== null && !selected) return c.json({ ok: false, error: { message: "请从列表选一座城市" } }, 400);
+            globalPatch.lifeCity = selected ? selected.city : "";
+          } else if (Object.hasOwn(globalPatch, "lifeCity")) {
+            globalPatch.lifeCityCode = null;
+          }
           const beforeLocalKey = activeCityDiscovery()?.key;
           const beforeCity = normalizeLifeCity(store.getGlobalSettings().lifeCity);
           const beforeConsent = normalizeStreetViewConsent(store.getGlobalSettings().lifeCityStreetView);

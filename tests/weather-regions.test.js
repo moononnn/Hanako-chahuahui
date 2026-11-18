@@ -13,6 +13,7 @@ import fs from "node:fs";
 import {
   cityOptions,
   districtOptions,
+  lifeCityOptions,
   provinceOptions,
   regionOptions,
 } from "../lib/weather-regions.js";
@@ -23,6 +24,16 @@ test("省级：表里出现过的省份，去重保序", () => {
   assert.ok(provinces.includes("四川省"));
   assert.ok(provinces.includes("北京市"));
   assert.equal(new Set(provinces).size, provinces.length, "同一个省不该出现两次");
+});
+
+test("生活城市候选：按市去重，附省份标签而不返回区县或坐标", () => {
+  const choices = lifeCityOptions();
+  const matches = choices.filter(row => row.city === "成都市");
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].name, "四川省 · 成都市");
+  assert.equal(getAdministrativeRegion(matches[0].code).city, "成都市");
+  assert.deepEqual(Object.keys(matches[0]).sort(), ["city", "code", "name"]);
+  assert.equal(choices.some(row => row.city === "武侯区"), false);
 });
 
 test("市级：跟着省走，越级要不到", () => {
