@@ -32,14 +32,14 @@ function fakeCommons() {
       return { ok: true, status: 200, url: raw, arrayBuffer: async () => bytes };
     }
     const params = new URL(raw).searchParams;
-    if (params.get("list") === "geosearch") {
-      return { ok: true, status: 200, url: raw, json: async () => ({ query: { geosearch: places.map(name => ({ title: name })) } }) };
-    }
     if (params.get("prop") === "categories" && !params.get("generator")) {
       const titles = String(params.get("titles") ?? "").split("|").filter(Boolean);
       return { ok: true, status: 200, url: raw, json: async () => ({ query: { pages: titles.map(name => ({ title: name, categories: (categories[name] ?? []).map(row => ({ title: row })) })) } }) };
     }
-    if (params.get("generator") === "search" || params.get("generator") === "categorymembers") {
+    if (params.get("generator") === "geosearch" && params.get("ggsnamespace") === "14") {
+      return { ok: true, status: 200, url: raw, json: async () => ({ query: { pages: places.map(title => ({ title })) } }) };
+    }
+    if (params.get("generator") === "search" || params.get("generator") === "categorymembers" || params.get("generator") === "geosearch") {
       return {
         ok: true, status: 200, url: raw,
         json: async () => ({

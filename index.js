@@ -4144,6 +4144,7 @@ export function apply(ctx) {
       try {
         const global = store.getGlobalSettings();
         if (normalizeLifeCity(global.lifeCity) !== normalizeLifeCity(street?.city ?? "")) return false;
+        if (String(global.lifeCityCode ?? "") !== String(street?.lifeCityCode ?? "")) return false;
         if (normalizeStreetViewConsent(global.lifeCityStreetView) !== true) return false;
         if (imageReferences.view(agentId).currentId !== street?.referenceId) return false;
         return Boolean(street?.path) && fs.existsSync(street.path);
@@ -4271,10 +4272,10 @@ export function apply(ctx) {
     // 街景自拍真的发出去了才记账：一天最多一张，别变成每日打卡。
     if (streetView && preparedImage.attachment) {
       store.setProactiveState(agentId, {
-        streetView: { usedAt: new Date(stored.at).toISOString(), city: streetView.city, title: streetView.scene?.title ?? "" },
+        streetView: { usedAt: new Date(stored.at).toISOString(), city: streetView.city, lifeCityCode: streetView.lifeCityCode, title: streetView.scene?.title ?? "", placeEvidence: streetView.scene?.placeEvidence ?? "" },
       });
       diagnostics({ event: "proactive.streetview.sent", agentId, city: streetView.city, title: streetView.scene?.title ?? "", license: streetView.scene?.license ?? "" });
-      streetViewLibrary?.release({ city: streetView.city });
+      streetViewLibrary?.release({ city: streetView.city, lifeCityCode: streetView.lifeCityCode });
     }
     recordPartnerStickerUsage(agentId, bubbles, stored.at);
     // 生理期这一段真的送出去了，这一轮就算已经关心过：没送出去（空正文、重复措辞、
@@ -4961,7 +4962,9 @@ export function apply(ctx) {
         // 城市素材与人物无关，所有伙伴共用；实际生成仍核当前参考照。
         if (streetReference) {
           const last = store.getProactiveState(agentId).streetView;
-          streetViewLibrary?.warm({ city: lifeCity, previousTitle: last?.city === lifeCity ? last.title : null });
+          streetViewLibrary?.warm({ city: lifeCity, lifeCityCode: globalSettings.lifeCityCode,
+            previousTitle: last?.city === lifeCity && String(last?.lifeCityCode ?? "") === String(globalSettings.lifeCityCode ?? "") ? last.title : null,
+            previousPlace: last?.city === lifeCity && String(last?.lifeCityCode ?? "") === String(globalSettings.lifeCityCode ?? "") ? last.placeEvidence : null });
         }
       }
 
@@ -5458,9 +5461,9 @@ export function apply(ctx) {
         const usedAt = Date.parse(String(store.getProactiveState(agentId).streetView?.usedAt ?? "") || "") || 0;
         const cooled = now.getTime() - usedAt >= STREET_VIEW_COOLDOWN_MS;
         if (cooled && Math.random() < STREET_VIEW_CHANCE) {
-          const entry = streetViewLibrary?.peek({ city: lifeCity });
+          const entry = streetViewLibrary?.peek({ city: lifeCity, lifeCityCode: globalSettings.lifeCityCode });
           if (entry) {
-            photoShare = { key: photoContext.at, source: "street", street: { city: lifeCity, referenceId: streetReference.id, path: entry.path, scene: entry.scene } };
+            photoShare = { key: photoContext.at, source: "street", street: { city: lifeCity, lifeCityCode: globalSettings.lifeCityCode, referenceId: streetReference.id, path: entry.path, scene: entry.scene } };
             diagnostics({ event: "proactive.streetview.selected", agentId, city: lifeCity, title: entry.scene?.title ?? "", license: entry.scene?.license ?? "" });
           } else {
             diagnostics({ event: "proactive.streetview.pending", agentId, city: lifeCity });
@@ -10536,8 +10539,10 @@ export function apply(ctx) {
             globalPatch.lifeCityCode = null;
           }
           const beforeLocalKey = activeCityDiscovery()?.key;
-          const beforeCity = normalizeLifeCity(store.getGlobalSettings().lifeCity);
-          const beforeConsent = normalizeStreetViewConsent(store.getGlobalSettings().lifeCityStreetView);
+          const beforeGlobal = store.getGlobalSettings();
+          const beforeCity = normalizeLifeCity(beforeGlobal.lifeCity);
+          const beforeCityCode = String(beforeGlobal.lifeCityCode ?? "");
+          const beforeConsent = normalizeStreetViewConsent(beforeGlobal.lifeCityStreetView);
           if (globalPatch.voiceProfiles) {
             const currentProfiles = store.getGlobalSettings().voiceProfiles || {};
             for (const [id, profile] of Object.entries(globalPatch.voiceProfiles)) {
@@ -10560,8 +10565,9 @@ export function apply(ctx) {
           if (beforeLocalKey !== activeCityDiscovery()?.key) cityDiscoveryEpoch = newCityDiscoveryEpoch();
           // 换城市、关掉授权：旧素材一律作废（临时文件也删掉），不让旧城的街景继续用着。
           const afterCity = normalizeLifeCity(store.getGlobalSettings().lifeCity);
+          const afterCityCode = String(store.getGlobalSettings().lifeCityCode ?? "");
           const afterConsent = normalizeStreetViewConsent(store.getGlobalSettings().lifeCityStreetView);
-          if (beforeCity !== afterCity || beforeConsent !== afterConsent) {
+          if (beforeCity !== afterCity || beforeCityCode !== afterCityCode || beforeConsent !== afterConsent) {
             streetViewLibrary?.release();
             diagnostics({ event: "streetview.released", city: afterCity, consent: afterConsent });
           }

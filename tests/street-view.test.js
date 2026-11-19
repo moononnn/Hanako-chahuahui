@@ -18,6 +18,7 @@ import {
   verifyStreetScene,
   createStreetViewLibrary,
 } from "../lib/street-view.js";
+import { listAdministrativeRegions } from "../lib/administrative-divisions.js";
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jhAAAAABJRU5ErkJggg==", "base64");
 
@@ -35,8 +36,9 @@ function fakeNetwork({ city = "Chengdu", lat = 30.67, lon = 104.07, places = [],
     }
     const parsed = new URL(raw);
     const params = parsed.searchParams;
-    if (params.get("list") === "geosearch") {
-      return { ok: true, status: 200, url: raw, json: async () => ({ query: { geosearch: places.map(title => ({ title })) } }) };
+    if (params.get("generator") === "geosearch") {
+      const pages = params.get("ggsnamespace") === "14" ? places.map(title => ({ title })) : files;
+      return { ok: true, status: 200, url: raw, json: async () => ({ query: { pages } }) };
     }
     if (params.get("prop") === "categories" && !params.get("generator")) {
       const titles = String(params.get("titles") ?? "").split("|").filter(Boolean);
@@ -203,12 +205,91 @@ test("素材库：找到就用，临时文件落在应用数据目录里，换�
   assert.ok(entry.path.startsWith(path.join(dataDir, "v2", "street-view")), "临时文件必须在应用数据目录里");
   assert.ok(fs.existsSync(entry.path));
   // 缓存里能再取到同一份，不必重新找。
-  assert.equal(lib.peek({ city: "成都", referenceId: "ref_1" }).scene.title, entry.scene.title);
+  assert.equal(lib.peek({ city: "成都", referenceId: "ref_1", previousTitle: entry.scene.title }).scene.title, entry.scene.title, "单张素材时不能因软排除在每轮驱逐缓存");
   // 换城市：旧结果作废，临时文件删掉。
   lib.release({ city: "成都" });
   assert.equal(lib.peek({ city: "成都", referenceId: "ref_1" }), null);
   assert.equal(fs.existsSync(entry.path), false);
   fs.rmSync(dataDir, { recursive: true, force: true });
+});
+
+test("多城市召回：有限行政区中心只召回文件，候选分类独立证明城市与街景", async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "street-view-city-seeds-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const all = listAdministrativeRegions();
+  for (const [city, english] of [["成都市", "Chengdu"], ["乐山市", "Leshan"]]) {
+    const regions = all.filter(row => row.city === city);
+    assert.ok(regions.length > 1, `${city} 有多个可采样区县中心`);
+    const seenCoords = [];
+    const file = filePage();
+    const street = `Category:Streets in ${english}`;
+    const net = fakeNetwork({ city: english, places: [street], files: [file], categories: { [file.title]: [street] } });
+    const lib = createStreetViewLibrary({ dataDir, fetchImpl: async url => {
+      const parsed = new URL(url);
+      if (parsed.searchParams.get("generator") === "geosearch" && parsed.searchParams.get("ggsnamespace") === "6") {
+        seenCoords.push(parsed.searchParams.get("ggscoord"));
+      }
+      return net.fetchImpl(url);
+    } });
+    const entry = await lib.resolve({ city, lifeCityCode: regions[0].code, referenceId: "seed" });
+    assert.ok(entry, `${city} 的文件分类须同时证明地点和街景`);
+    assert.ok(seenCoords.length > 1 && seenCoords.length <= 5, "最多使用五个中心种子做文件召回");
+    assert.ok(seenCoords.includes(`${regions[0].latitude}|${regions[0].longitude}`), "选中的区县中心优先");
+    assert.equal(lib.peek({ city, lifeCityCode: "different-code", referenceId: "seed" }), null, "缓存按行政区代码区分");
+    lib.release();
+  }
+});
+
+test("无行政区代码时仍以地理编码中心召回，并保留该中心分类提示", async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "street-view-geocode-seed-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const file = filePage();
+  const street = "Category:Streets in Chengdu";
+  const net = fakeNetwork({ city: "Chengdu", lat: 30.67, lon: 104.07, places: [street], files: [file], categories: { [file.title]: [street] } });
+  const geosearchCoords = [];
+  const lib = createStreetViewLibrary({ dataDir, fetchImpl: async url => {
+    const parsed = new URL(url);
+    if (parsed.searchParams.get("generator") === "geosearch") geosearchCoords.push([parsed.searchParams.get("ggsnamespace"), parsed.searchParams.get("ggscoord")]);
+    return net.fetchImpl(url);
+  } });
+  const entry = await lib.resolve({ city: "成都" });
+  assert.ok(entry);
+  assert.ok(geosearchCoords.some(([namespace, coord]) => namespace === "6" && coord === "30.67|104.07"));
+  assert.ok(geosearchCoords.some(([namespace, coord]) => namespace === "14" && coord === "30.67|104.07"));
+});
+
+test("一个中心点 geosearch 遇 429 时跳过该点，继续其余点与分类检索", async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "street-view-geo-429-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const regions = listAdministrativeRegions().filter(row => row.city === "成都市");
+  const file = filePage();
+  const street = "Category:Streets in Chengdu";
+  const net = fakeNetwork({ city: "Chengdu", places: [street], files: [file], categories: { [file.title]: [street] } });
+  let fileGeoCalls = 0;
+  const lib = createStreetViewLibrary({ dataDir, fetchImpl: async url => {
+    const parsed = new URL(url);
+    if (parsed.searchParams.get("generator") === "geosearch" && parsed.searchParams.get("ggsnamespace") === "6" && ++fileGeoCalls === 1) {
+      return { ok: false, status: 429, url: String(url) };
+    }
+    return net.fetchImpl(url);
+  } });
+  const entry = await lib.resolve({ city: "成都市", lifeCityCode: regions[0].code });
+  assert.ok(entry, "单个区县中心限流不应中止余下候选验证");
+  assert.ok(fileGeoCalls > 1 && fileGeoCalls <= 5);
+});
+
+test("附近城市分类仅用于推断检索别名，不能证明候选文件属于该城", async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "street-view-nearby-not-proof-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const file = filePage();
+  const net = fakeNetwork({
+    city: "Chengdu",
+    places: ["Category:Streets in Chengdu"],
+    files: [file],
+    categories: { [file.title]: ["Category:Streets in Leshan"] },
+  });
+  const lib = createStreetViewLibrary({ dataDir, fetchImpl: net.fetchImpl });
+  assert.equal(await lib.resolve({ city: "成都" }), null, "候选文件自身分类没有成都地点证据，不能用近邻分类替代");
 });
 
 test("素材库：换参考照后，旧的那份街景连临时文件一起作废", async () => {
@@ -238,15 +319,18 @@ test("街景补搜保留合规街巷，有备选时避开上次发送的原照",
   const a = filePage();
   const b = filePage({ title: "File:Jinli Street.jpg" });
   const street = "Category:Streets in Chengdu";
-  const net = fakeNetwork({ places: [street], files: [a], categories: { [a.title]: [street], [b.title]: [street] } });
+  const net = fakeNetwork({ places: [street], files: [a], categories: {
+    [a.title]: ["Category:Old Town in Chengdu", street],
+    [b.title]: ["Category:Jinli in Chengdu", street],
+  } });
   const lib = createStreetViewLibrary({ dataDir, random: () => 0, fetchImpl: async url => {
     const reply = await net.fetchImpl(url);
     const query = new URL(url).searchParams.get("gsrsearch");
     return query?.includes("pedestrian") ? { ...reply, json: async () => ({ query: { pages: [b] } }) } : reply;
   } });
   assert.equal((await lib.resolve({ city: "成都" })).scene.title, a.title);
-  lib.release({ city: "成都" });
-  assert.equal((await lib.resolve({ city: "成都", previousTitle: a.title })).scene.title, b.title);
+  lib.release({ city: "成都" }); // 模拟发出后释放城市缓存
+  assert.equal((await lib.warm({ city: "成都", previousTitle: a.title, previousPlace: "Category:Old Town in Chengdu" })).scene.title, b.title, "优先轮换街区标签，不同街区缺失时再用标题回退");
 });
 
 test("素材库：没有可用素材时不硬凑，也不报错", async () => {
