@@ -4274,6 +4274,7 @@ export function apply(ctx) {
         streetView: { usedAt: new Date(stored.at).toISOString(), city: streetView.city, title: streetView.scene?.title ?? "" },
       });
       diagnostics({ event: "proactive.streetview.sent", agentId, city: streetView.city, title: streetView.scene?.title ?? "", license: streetView.scene?.license ?? "" });
+      streetViewLibrary?.release({ city: streetView.city });
     }
     recordPartnerStickerUsage(agentId, bubbles, stored.at);
     // 生理期这一段真的送出去了，这一轮就算已经关心过：没送出去（空正文、重复措辞、
@@ -4958,7 +4959,10 @@ export function apply(ctx) {
       if (streetConsent && !streetBlockers.length && settings.proactiveEnabled !== false && chatImageServiceReady && imageQuota?.available(agentId) === true) {
         try { streetReference = imageReferences.current(agentId); } catch { /* 参考照读不到就不出镜 */ }
         // 城市素材与人物无关，所有伙伴共用；实际生成仍核当前参考照。
-        if (streetReference) streetViewLibrary?.warm({ city: lifeCity });
+        if (streetReference) {
+          const last = store.getProactiveState(agentId).streetView;
+          streetViewLibrary?.warm({ city: lifeCity, previousTitle: last?.city === lifeCity ? last.title : null });
+        }
       }
 
       // 自省：记录攒够了就自己看一遍，看出规律就改排点与话题的习惯

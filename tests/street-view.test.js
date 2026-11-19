@@ -232,6 +232,23 @@ test("素材库：换参考照后，旧的那份街景连临时文件一起作�
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
+test("街景补搜保留合规街巷，有备选时避开上次发送的原照", async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "street-view-rotate-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const a = filePage();
+  const b = filePage({ title: "File:Jinli Street.jpg" });
+  const street = "Category:Streets in Chengdu";
+  const net = fakeNetwork({ places: [street], files: [a], categories: { [a.title]: [street], [b.title]: [street] } });
+  const lib = createStreetViewLibrary({ dataDir, random: () => 0, fetchImpl: async url => {
+    const reply = await net.fetchImpl(url);
+    const query = new URL(url).searchParams.get("gsrsearch");
+    return query?.includes("pedestrian") ? { ...reply, json: async () => ({ query: { pages: [b] } }) } : reply;
+  } });
+  assert.equal((await lib.resolve({ city: "成都" })).scene.title, a.title);
+  lib.release({ city: "成都" });
+  assert.equal((await lib.resolve({ city: "成都", previousTitle: a.title })).scene.title, b.title);
+});
+
 test("素材库：没有可用素材时不硬凑，也不报错", async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "street-view-empty-"));
   const net = fakeNetwork({

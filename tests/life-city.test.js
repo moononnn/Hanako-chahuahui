@@ -65,6 +65,17 @@ test("地理编码：中文用中文那一套，英文用英文那一套", async
   assert.match(asked[1], /name=Chengdu/);
 });
 
+test("城市选择器的市后缀没有命中时，用简称重查", async () => {
+  const queries = [];
+  const result = await geocodeLifeCity("成都市", async url => {
+    const name = new URL(url).searchParams.get("name");
+    queries.push(name);
+    return name === "成都" ? { results: [{ name, latitude: 30.67, longitude: 104.07 }] } : {};
+  });
+  assert.deepEqual(queries, ["成都市", "成都"]);
+  assert.equal(result.name, "成都");
+});
+
 test("地理编码查不到就返回空，不报错", async () => {
   assert.equal(await geocodeLifeCity("成都", async () => ({ results: [] })), null);
   assert.equal(await geocodeLifeCity("成都", null), null);
