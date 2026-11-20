@@ -135,6 +135,15 @@ test("选中一座城才保存；没存上弹窗不关，取消与 Esc 都不保
   assert.match(html, /document\.addEventListener\("keydown", \(event\) => \{ if \(event\.key === "Escape"\) document\.querySelectorAll\("\.modal-layer:not\(\[hidden\]\)"\)/);
 });
 
+test("城市插画开关默认独立关闭，只复用同城发现来源且与真实街景分开", () => {
+  const card = html.slice(html.indexOf('id="life-city-illustrations-card"'), html.indexOf('id="life-city-street-card"'));
+  assert.match(card, /id="life-city-illustrations-switch"[^>]*aria-checked="false"/);
+  assert.match(card, /不会为插画另发搜索/u);
+  assert.match(card, /不代表到访或亲眼见过/u);
+  assert.match(html, /saveGlobal\(\{ lifeCityIllustrations: next \}/);
+  assert.match(html, /id="life-city-street-switch"/);
+});
+
 test("设置卡只留当前值、选择城市与清空；不再让她自己写字", () => {
   const card = html.slice(html.indexOf('id="life-city-card"'), html.indexOf('id="life-city-discoveries-card"'));
   assert.match(card, /id="life-city-pick"/);

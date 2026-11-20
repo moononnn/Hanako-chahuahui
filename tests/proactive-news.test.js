@@ -60,7 +60,7 @@ test("同城发现只留有同城证据与安全出处的结果，每轮至多�
   assert.deepEqual(rows, [good]);
   assert.match(cityDiscoveryQuery("成都", now), /^成都 (展览|书店|街区|咖啡店)/u);
   assert.equal(cityDiscoveryQuery('成都 site:example.com', now), "");
-  const local = { key: "old:成都", city: "成都" };
+  const local = { key: "old:成都", city: "成都", code: "510100" };
   const { book, added } = addNewsItems({}, { domain: { id: "local-city", name: "同城发现" }, results: [good, { ...good, title: "另一个成都书店活动" }], local }, now);
   assert.equal(added, 1);
   assert.equal(nextNewsItem(book, now), null);
@@ -68,6 +68,8 @@ test("同城发现只留有同城证据与安全出处的结果，每轮至多�
   assert.equal(nextNewsItem(book, now, "next:上海"), null);
   const item = nextNewsItem(book, now, local.key);
   assert.equal(item.url, good.url);
+  assert.equal(item.localCityCode, local.code);
+  assert.equal(normalizeNewsBook(book, now).items[0].localCityCode, local.code);
   assert.match(newsText(item), /同城发现：成都[\s\S]*不要说自己到场/u);
   assert.equal(nextNewsItem(addNewsItems(book, { domain: TECH, results: ROWS }, now).book, now).localKey, undefined);
 });

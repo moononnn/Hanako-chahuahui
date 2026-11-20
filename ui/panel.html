@@ -3695,7 +3695,7 @@
             appendImageToBubble(lastBubble, imageNode);
             mountAttachmentImage(imageNode, m.attachment.id, current, Boolean(opts.keepBottom));
             // 街景自拍那张图的来路：素材来自哪里、什么许可、谁拍的，写在图下面。
-            const credit = streetViewCreditNode(m);
+            const credit = streetViewCreditNode(m) || cityIllustrationCreditNode(m);
             if (credit) lastBubble.appendChild(credit);
           }
         } else {
@@ -5272,7 +5272,25 @@
       if (!source || !source.license) return null;
       const node = document.createElement("small");
       node.className = "image-credit";
-      node.textContent = ["情景图 · 街景参考：Wikimedia Commons", source.license, source.author].filter(Boolean).join(" · ");
+      node.textContent = ["情景图 · 真实街景：Wikimedia Commons", source.license, source.author].filter(Boolean).join(" · ");
+      return node;
+    }
+
+    function cityIllustrationCreditNode(message) {
+      const source = message?.cityIllustration;
+      if (!source?.title || !source?.url) return null;
+      let url;
+      try { url = new URL(source.url); } catch { return null; }
+      if (url.protocol !== "https:" || url.username || url.password || url.port) return null;
+      const node = document.createElement("small");
+      node.className = "image-credit";
+      node.append(document.createTextNode(`城市插画 · ${String(source.city ?? "")} · 参考来源：`));
+      const link = document.createElement("a");
+      link.href = url.href;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = String(source.title).slice(0, 160);
+      node.appendChild(link);
       return node;
     }
 

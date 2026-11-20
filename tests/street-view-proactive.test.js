@@ -71,7 +71,7 @@ function fakeCommons() {
   return { fetchImpl, calls };
 }
 
-async function boot(t, { answer = PHOTO, city = "成都", consent = true } = {}) {
+async function boot(t, { answer = PHOTO, city = "成都", consent = true, discoveries = false, cityIllustrations = false, cityFixture = false } = {}) {
   const mediaCalls = [], prompts = [], net = fakeCommons();
   const app = await bootChahuahui({ seed(store, ctx) {
     const far = new Date(Date.now() + 7 * HOUR);
@@ -79,7 +79,8 @@ async function boot(t, { answer = PHOTO, city = "成都", consent = true } = {})
     store.setGlobalSettings({
       rhythmProactiveEnabled: true, imageTier: "less", quiet: { start: clock(far.getHours()), end: clock(far.getHours() + 1) },
       weatherEnabled: false, workfeedEnabled: false, rhythmEnabled: false,
-      lifeCity: city, lifeCityStreetView: consent,
+      lifeCity: city, lifeCityCode: "city-test-code", lifeCityStreetView: consent,
+      lifeCityDiscoveries: discoveries, lifeCityIllustrations: cityIllustrations,
       // 测试里要连续跑两轮主动（第一轮备素材，第二轮才发照片），所以把间隔放开。
       globalGate: { minGapMinutes: 0, maxPerDay: 24 },
     });
@@ -89,7 +90,13 @@ async function boot(t, { answer = PHOTO, city = "成都", consent = true } = {})
     });
     const knowing = store.getKnowing(AGENT);
     store.saveKnowing(AGENT, { ...knowing, personality: { surface: { tags: ["俏皮"], signals: [] }, inner: { tags: [], signals: [] } }, relationship: { ...knowing.relationship, familiarity: { ...knowing.relationship.familiarity, turns: 120, activeDays: 50 }, intimacy: { ...knowing.relationship.intimacy, score: 18 } }, worldInterests: [{ id: "wi_craft", name: "手作", domains: ["手作"], sources: ["B站"], createdAt: time(0), updatedAt: time(0) }] });
-    store.setProactiveState(AGENT, { nextDueAt: time(-HOUR), lastSentAt: time(-HOUR), interestLearning: { curiosity: { startedAt: time(0), thresholdMs: 7 * 24 * HOUR } }, topicSeeds: { lastGrowAt: time(0), seeds: [] }, newsBook: { lastFetchAt: time(0), lastDomainId: "", items: [], history: [] } });
+    const sourceAt = new Date();
+    const illustrationFixture = cityFixture ? [{ id: "local_fixture", domainId: "local-city", domainName: "同城发现", localCity: city,
+      localCityCode: "city-test-code", title: `${city}街区的巷道与院落`,
+      snippet: `${city}街区导览介绍了窄巷和青砖院落的布局。`,
+      url: "https://example.org/chengdu/lanes", publishedAt: sourceAt.toISOString(),
+      createdAt: sourceAt.toISOString(), expiresAt: new Date(sourceAt.getTime() + 24 * HOUR).toISOString(), sharedAt: sourceAt.toISOString() }] : [];
+    store.setProactiveState(AGENT, { nextDueAt: time(-HOUR), lastSentAt: time(-HOUR), interestLearning: { curiosity: { startedAt: time(0), thresholdMs: 7 * 24 * HOUR } }, topicSeeds: { lastGrowAt: time(0), seeds: [] }, localNewsFetchAt: cityFixture ? time(48 * HOUR) : null, newsBook: cityFixture ? { lastFetchAt: time(48 * HOUR), items: illustrationFixture, history: [] } : discoveries ? { items: [], history: [] } : { lastFetchAt: time(0), lastDomainId: "", items: [], history: [] } });
     store.appendMessage(AGENT, { role: "user", text: "今天想喝热咖啡", at: time(-2 * HOUR) });
     store.appendMessage(AGENT, { role: "assistant", text: "我一会儿也去冲一杯", at: time(-2 * HOUR + 1000) });
     ctx.network.fetch = net.fetchImpl;
@@ -128,6 +135,64 @@ async function waitForStreetFile(dataDir, timeoutMs = 4000) {
   }
   return null;
 }
+
+test("城市插画复用当前同城来源：提示清楚标为插画、仅传角色参考照并保留出处", OPTIONS, async t => {
+  const app = await boot(t, { consent: false, discoveries: true, cityIllustrations: true, cityFixture: true });
+  const uploaded = await app.request("POST", `/image/reference/${AGENT}`, { json: { image: { data: PNG.toString("base64") } } });
+  await app.request("PUT", `/image/reference/${AGENT}`, { json: { referenceId: uploaded.body.reference.history[0].id } });
+  let searches = 0;
+  app.ctx.network.fetch = async url => {
+    if (String(url).startsWith("https://www.bing.com/search")) searches++;
+    return { ok: false, status: 429, text: async () => "" };
+  };
+  app.setAnswer(PHOTO);
+  await app.tick(0.1);
+  const [message] = app.photos();
+  assert.ok(message, "应保留原有主动照片候选");
+  assert.equal(message.photoScene.source, "city-illustration", fs.readFileSync(path.join(app.dataDir, "v2", "diagnostics.jsonl"), "utf8"));
+  assert.equal(message.cityIllustration.label, "城市插画");
+  assert.equal(message.cityIllustration.city, "成都");
+  assert.equal(message.cityIllustration.url, "https://example.org/chengdu/lanes");
+  assert.equal(message.streetView, undefined, "城市插画不得冒充真实街景");
+  assert.equal(app.mediaCalls.length, 1);
+  const refs = app.mediaCalls[0].input.referenceImages;
+  assert.equal(refs.length, 1, JSON.stringify(app.mediaCalls[0].input));
+  assert.ok(refs[0].path.includes("image-references"), "只传角色参考照，不传城市素材图");
+  assert.match(app.mediaCalls[0].input.prompt, /【城市插画】/u);
+  assert.match(app.mediaCalls[0].input.prompt, /不代表你到过/u);
+  assert.match(app.mediaCalls[0].input.prompt, /https:\/\/example\.org\/chengdu\/lanes/u);
+  assert.ok(app.prompts.some(req => req.systemPrompt.includes("【城市插画】")));
+  const meta = JSON.parse(fs.readFileSync(path.join(app.dataDir, "v2", "attachments", `${message.attachment.id}.json`), "utf8"));
+  assert.equal(meta.source.kind, "city-illustration");
+  assert.equal(meta.source.url, message.cityIllustration.url);
+  assert.equal(searches, 0, "插画不触发额外搜索，只复用现有同城发现缓存");
+});
+
+test("城市插画关闭时仍走普通主动照片，不复用城市来源", OPTIONS, async t => {
+  const app = await boot(t, { consent: false, discoveries: true, cityIllustrations: false, cityFixture: true });
+  const uploaded = await app.request("POST", `/image/reference/${AGENT}`, { json: { image: { data: PNG.toString("base64") } } });
+  await app.request("PUT", `/image/reference/${AGENT}`, { json: { referenceId: uploaded.body.reference.history[0].id } });
+  app.setAnswer(PHOTO);
+  await app.tick(0.1);
+  const [message] = app.photos();
+  assert.ok(message);
+  assert.equal(message.photoScene.source, "scene");
+  assert.equal(message.cityIllustration, undefined);
+  assert.equal(app.mediaCalls[0].input.referenceImages.length, 1);
+});
+
+test("仅打开城市插画但未授权同城发现时，不触发搜索或选用城市素材", OPTIONS, async t => {
+  const app = await boot(t, { consent: false, discoveries: false, cityIllustrations: true });
+  let searches = 0;
+  app.ctx.network.fetch = async url => {
+    if (String(url).startsWith("https://www.bing.com/search")) searches++;
+    return { ok: false, status: 429, text: async () => "" };
+  };
+  await app.tick(0.99);
+  assert.equal(searches, 0);
+  assert.equal(app.store.getGlobalSettings().lifeCityIllustrations, true);
+  assert.equal(app.store.getGlobalSettings().lifeCityDiscoveries, false);
+});
 
 test("真实街景自拍：人物在前、已核过的真实街景在后，来路留在消息与附件上", OPTIONS, async t => {
   const app = await boot(t);

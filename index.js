@@ -182,6 +182,7 @@ import {
   rejectNewsItem,
 } from "./lib/news-feed.js";
 import { cleanVoice, farewellSpec, hasOpenHook, inspectVoice, isAbstractOnlyProactive, isLowSignalProactive, isNighttimeSleepQuestion, isNoReply, isStickerOnlyReply, isUsableVoice, nightSpec, proactiveSpec, stirredSpec } from "./lib/compose.js";
+import { cityIllustrationPrompt, pickCityIllustration } from "./lib/city-illustration.js";
 import { formatSearchContext, isSafeSearchQuery } from "./lib/topic-search.js";
 import { searchVideos, fetchPopularVideos, collectVideoMaterials, readVideoCredential, writeVideoCredential, clearVideoCredential } from "./lib/video-source.js";
 import { packMaterials } from "./lib/video-materials.js";
@@ -782,7 +783,8 @@ export function apply(ctx) {
   function activeCityDiscovery() {
     const global = store.getGlobalSettings();
     const city = normalizeLifeCity(global.lifeCity);
-    return global.lifeCityDiscoveries === true && city ? { city, key: `${cityDiscoveryEpoch}:${city}` } : null;
+    const code = String(global.lifeCityCode ?? "");
+    return global.lifeCityDiscoveries === true && city ? { city, code, key: `${cityDiscoveryEpoch}:${city}:${code}` } : null;
   }
   function localNewsCurrent(row) {
     return !row?.localKey || row.localKey === activeCityDiscovery()?.key;
@@ -1235,7 +1237,7 @@ export function apply(ctx) {
     // 生图：一条自己的模型配置（含加密后的 Key），和朗读那条各走各的。
     "imageModel", "imageTier",
     // 生活城市：跟天气各算各的。城市她自己填；真实街景另有一个明确的授权开关。
-    "lifeCity", "lifeCityCode", "lifeCityStreetView", "lifeCityDiscoveries",
+    "lifeCity", "lifeCityCode", "lifeCityStreetView", "lifeCityDiscoveries", "lifeCityIllustrations",
   ]);
   const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "vision", "voice", "partnerFeedEnabled", "videoSharingEnabled", "imageTier"]);
 
@@ -1301,6 +1303,7 @@ export function apply(ctx) {
     }
     // 真实街景：单独的授权开关，只收真布尔。没开就不去问素材服务。
     if (Object.prototype.hasOwnProperty.call(patch, "lifeCityDiscoveries")) patch.lifeCityDiscoveries = patch.lifeCityDiscoveries === true;
+    if (Object.prototype.hasOwnProperty.call(patch, "lifeCityIllustrations")) patch.lifeCityIllustrations = patch.lifeCityIllustrations === true;
     if (Object.prototype.hasOwnProperty.call(patch, "lifeCityStreetView")) {
       patch.lifeCityStreetView = normalizeStreetViewConsent(patch.lifeCityStreetView);
     }
@@ -2389,7 +2392,7 @@ export function apply(ctx) {
     return "生成一张自拍情景图。第一张参考图是唯一的人物外貌和画风参考；保持脸、发型、眼睛、配饰与原本的画风。第二张参考图只管地点：沿用相同的街道走向、建筑轮廓与路面，不照搬路人。人物自然站在取景一侧，保留可辨认的街巷纵深，像手机前置镜头随手拍的一张。不增加虚构店招、文字或水印。";
   }
 
-  async function prepareChatImage(agentId, request, { stillCurrent = () => true, signal = null, street = null } = {}) {
+  async function prepareChatImage(agentId, request, { stillCurrent = () => true, signal = null, street = null, illustration = null } = {}) {
     if (!request) return { attachment: null, fallback: "" };
     if (!stillCurrent() || signal?.aborted) return { attachment: null, stale: true };
     if (!imageQuota?.available(agentId)) return { attachment: null, fallback: "这会儿先不拍，陪你聊会儿。" };
@@ -2398,6 +2401,7 @@ export function apply(ctx) {
     catch { return { attachment: null, fallback: "参考照这会儿没能读到，先不拍自己。" }; }
     if (request.self && !reference) return { attachment: null, fallback: "还没定好我的参考照，这回先不拍自己。" };
     if (street && (!request.self || !street.path || !fs.existsSync(street.path))) return { attachment: null, stale: true };
+    if (illustration && (!request.self || !reference)) return { attachment: null, stale: true };
     const streetScene = street;
     let reservation;
     try { reservation = imageQuota.reserve(agentId); }
@@ -2413,16 +2417,18 @@ export function apply(ctx) {
       const choice = normalizeImageModelPatch(store.getGlobalSettings().imageModel);
       const prefix = streetScene
         ? streetScenePromptPrefix()
-        : request.self
-          ? "画面人物必须保持参考照中的同一角色、外貌特征和画风；按场景自然构图，可露脸、背影或局部，遵循画面描述，不因参考照强制露脸，不加文字水印。"
-          : "只呈现下面的物件、食物或风景，不出现人物或陌生人的自拍。";
+        : illustration
+          ? cityIllustrationPrompt(illustration)
+          : request.self
+            ? "画面人物必须保持参考照中的同一角色、外貌特征和画风；按场景自然构图，可露脸、背影或局部，遵循画面描述，不因参考照强制露脸，不加文字水印。"
+            : "只呈现下面的物件、食物或风景，不出现人物或陌生人的自拍。";
       // 参考图顺序：角色在前、已验证的真实街景在后。
       const referencePaths = [
         ...(reference ? [reference.path] : []),
         ...(streetScene ? [streetScene.path] : []),
       ];
       const result = await generateChatImage(ctx, {
-        prompt: streetScene ? prefix : [prefix, request.prompt].join("\n"),
+        prompt: streetScene || illustration ? prefix : [prefix, request.prompt].join("\n"),
         referencePaths, provider: choice.provider || undefined, model: choice.model || undefined,
       }, reservation, () => stillCurrent() && !signal?.aborted && store.getGlobalSettings().imageTier !== "off" && store.getPartnerSettings(agentId).imageTier !== "off" && (!reference || imageReferences.view(agentId).currentId === reference.id) && (!streetScene || fs.existsSync(streetScene.path)));
       // 成功就算一次，即便等待期间旧稿作废或附件写入失败。
@@ -2432,10 +2438,18 @@ export function apply(ctx) {
       if (!stillCurrent() || signal?.aborted || changed || store.getGlobalSettings().imageTier === "off" || store.getPartnerSettings(agentId).imageTier === "off") return { attachment: null, stale: true };
       if (streetScene && !fs.existsSync(streetScene.path)) return { attachment: null, stale: true };
       if (!detectImageType(result.bytes)) throw new Error("生成结果不是可用图片");
-      const saved = saveAttachment({ name: "聊天照片", mimeType: detectImageType(result.bytes), data: result.bytes.toString("base64"), agentId });
+      const saved = saveAttachment({ name: illustration ? "城市插画" : "聊天照片", mimeType: detectImageType(result.bytes), data: result.bytes.toString("base64"), agentId });
       const { data, ...attachment } = saved;
       recordAttachmentDescription(attachment.id, { title: "伙伴分享的照片", description: request.prompt, via: "generated" });
       // 街景素材的来路要留着：这张图的背景是哪张真实街景、谁拍的、什么许可，都记在附件上。
+      if (illustration) {
+        recordAttachmentSource(attachment.id, {
+          kind: "city-illustration",
+          city: normalizeLifeCity(illustration.city),
+          title: illustration.title,
+          url: illustration.url,
+        });
+      }
       if (streetScene) {
         const source = {
           kind: "wikimedia-commons",
@@ -3938,9 +3952,11 @@ export function apply(ctx) {
     // 照片依据真到模型手上：上下文里没有那两行，就把这段最近聊天明写进照片提示词。
     // 街景自拍换一套提示词：这一轮要的是「人在真实的街上拍的这张」。
     const streetView = photoShare?.source === "street" ? photoShare.street ?? null : null;
+    const cityIllustration = photoShare?.source === "city-illustration" ? photoShare.illustration ?? null : null;
     const photoShareText = streetView
       ? streetViewPhotoPrompt({ city: streetView.city })
-      : photoShare ? photoSharePrompt({ hasReference: Boolean(photoReferenceId), context: photoContextKnown ? null : photoContext }) : "";
+      : cityIllustration ? cityIllustrationPrompt(cityIllustration)
+        : photoShare ? photoSharePrompt({ hasReference: Boolean(photoReferenceId), context: photoContextKnown ? null : photoContext }) : "";
     if (photoShare) diagnostics({ event: "proactive.photo.context", agentId, inHistory: photoContextKnown, age: photoContext ? Date.now() - Date.parse(photoContext.at ?? "") : null });
     let raw = "";
     try {
@@ -4033,7 +4049,7 @@ export function apply(ctx) {
     // 照片候选不是硬性出图（2026-11-15）：模型给了普通文字就按普通主动发出去，
     // 别因为“这一轮本来想拍照”把整轮丢掉——那是白等一场。只有协议写坏才当这一轮不成：
     // 坏标记不能当正文发，也不能触发生图。
-    if (streetView && photoRequest && !photoRequest.self) return { ok: false, reason: "photo-declined" };
+    if ((streetView || cityIllustration) && photoRequest && !photoRequest.self) return { ok: false, reason: "photo-declined" };
     if (photoShare && photoRequest && chatPhoto.status === "invalid") {
       diagnostics({ event: "proactive.photo.skipped", agentId, reason: "invalid-marker" });
       return { ok: false, reason: "photo-declined" };
@@ -4139,6 +4155,23 @@ export function apply(ctx) {
       return { ok: false, reason: "news-stale" };
     }
 
+    const cityIllustrationStillCurrent = (source) => {
+      try {
+        const global = store.getGlobalSettings();
+        const localCity = activeCityDiscovery();
+        const candidate = pickCityIllustration({
+          enabled: global.lifeCityIllustrations === true,
+          authorized: global.lifeCityDiscoveries === true,
+          hasReference: imageReferences.view(agentId).currentId === photoReferenceId,
+          city: global.lifeCity,
+          cityCode: global.lifeCityCode,
+          localKey: localCity?.key,
+          items: normalizeNewsBook(store.getProactiveState(agentId).newsBook).items,
+        });
+        return Boolean(candidate && candidate.url === source?.url && candidate.title === source?.title
+          && String(global.lifeCityCode ?? "") === String(source?.cityCode ?? ""));
+      } catch { return false; }
+    };
     // 街景那一路还要多核几道：城市没换、授权没关、参考照没换、素材还在。
     const streetStillCurrent = (street) => {
       try {
@@ -4159,12 +4192,13 @@ export function apply(ctx) {
           && global.imageTier !== "off" && partner.imageTier !== "off"
           && gate.ok && !gate.exception
           && (!photoRequest?.self || imageReferences.view(agentId).currentId === photoReferenceId)
-          && (!streetView || streetStillCurrent(streetView));
+          && (!streetView || streetStillCurrent(streetView))
+          && (!cityIllustration || cityIllustrationStillCurrent(cityIllustration));
       } catch { return false; }
     };
     // 先过正文、去重和语义关再花额度。失败不投递空头配文，也不重试原生图请求。
     // 旧图与生图撞上时旧图优先：不真的生图。
-    const preparedImage = await prepareChatImage(agentId, photoRequest, { stillCurrent: photoStillCurrent, street: streetView });
+    const preparedImage = await prepareChatImage(agentId, photoRequest, { stillCurrent: photoStillCurrent, street: streetView, illustration: cityIllustration });
     if (preparedImage.stale) return { ok: false, reason: "stale" };
     if (photoRequest && !preparedImage.attachment) return { ok: false, reason: "image-unavailable" };
     const replyAttachment = preparedImage.attachment ?? oldImagePrepared.attachment ?? null;
@@ -4225,7 +4259,13 @@ export function apply(ctx) {
       proactive: true,
       form: "word",
       proactiveKind: kind,
-      ...(photoShare && photoRequest ? { proactiveExpression: "photo", photoScene: streetView ? { key: photoShare.key, source: "street", city: streetView.city } : photoShare } : {}),
+      ...(photoShare && photoRequest ? { proactiveExpression: "photo", photoScene: streetView
+        ? { key: photoShare.key, source: "street", city: streetView.city }
+        : cityIllustration ? { key: photoShare.key, source: "city-illustration", city: cityIllustration.city }
+          : photoShare } : {}),
+      ...(cityIllustration && preparedImage.attachment ? { cityIllustration: {
+        city: cityIllustration.city, title: cityIllustration.title, url: cityIllustration.url, label: "城市插画",
+      } } : {}),
       // 街景自拍：真实街景那张图的来路跟着这条消息一起留着（谁拍的、什么许可、在哪）。
       ...(streetView && preparedImage.attachment ? {
         streetView: {
@@ -5421,7 +5461,8 @@ export function apply(ctx) {
       // 依据看照片专用那份 photoContext：ta 中间主动说过几句，不该把最近那轮面对面聊天抹掉。
       const photoRecent3 = thread.messages.filter(row => row.role === "assistant" && !row.recalled && isSpeechMessage(row))
         .slice(-3).some(row => row.attachment?.description);
-      const photoSceneUsed = thread.messages.some(row => !row.recalled && row.photoScene?.key === photoContext?.at && row.photoScene?.source === "scene");
+      const photoSceneUsed = thread.messages.some(row => !row.recalled && row.photoScene?.key === photoContext?.at
+        && ["scene", "city-illustration", "street"].includes(row.photoScene?.source));
       const photoEnabled = chatImageServiceReady && imageQuota?.available(agentId) === true;
       const photoBlocked = !reasonEligible || greetingOnly || Boolean(seed || discovery);
       const photoExcludedBy = [
@@ -5452,6 +5493,31 @@ export function apply(ctx) {
         blocked: photoBlocked,
         recentPhoto: photoRecent3 || photoSceneUsed,
       }) ? { key: photoContext.at, source: "scene" } : null;
+      let cityIllustration = null;
+      if (photoShare && globalSettings.lifeCityIllustrations === true) {
+        const localCity = activeCityDiscovery();
+        let hasReference = false;
+        try { hasReference = Boolean(imageReferences.current(agentId)?.id); } catch { /* 没角色参考照就沿用普通照片候选 */ }
+        const illustrationItems = normalizeNewsBook(state.newsBook, now).items;
+        cityIllustration = pickCityIllustration({
+          enabled: globalSettings.lifeCityIllustrations === true,
+          authorized: globalSettings.lifeCityDiscoveries === true,
+          hasReference,
+          city: lifeCity,
+          cityCode: globalSettings.lifeCityCode,
+          localKey: localCity?.key,
+          items: illustrationItems,
+          now: now.getTime(),
+        });
+        diagnostics({ event: "proactive.photo.city-illustration.checked", enabled: globalSettings.lifeCityIllustrations === true,
+          authorized: globalSettings.lifeCityDiscoveries === true, hasReference, city: lifeCity,
+          cityCode: String(globalSettings.lifeCityCode ?? ""), localKeyReady: Boolean(localCity?.key), items: illustrationItems.length,
+          selected: Boolean(cityIllustration) });
+        if (cityIllustration) {
+          photoShare = { key: photoContext.at, source: "city-illustration", illustration: cityIllustration };
+          diagnostics({ event: "proactive.photo.city-illustration.selected", agentId, city: lifeCity, title: cityIllustration.title });
+        }
+      }
       diagnostics({ event: "proactive.photo.considered", agentId, tier: settings.imageTier, selected: Boolean(photoShare), excludedBy: photoExcludedBy });
       if (photoShare) diagnostics({ event: "proactive.photo.selected", agentId, tier: settings.imageTier });
       // 真实街景自拍（低频）：只在「这一轮本来会发照片」的时候搭一段车，
@@ -5464,6 +5530,7 @@ export function apply(ctx) {
           const entry = streetViewLibrary?.peek({ city: lifeCity, lifeCityCode: globalSettings.lifeCityCode });
           if (entry) {
             photoShare = { key: photoContext.at, source: "street", street: { city: lifeCity, lifeCityCode: globalSettings.lifeCityCode, referenceId: streetReference.id, path: entry.path, scene: entry.scene } };
+            cityIllustration = null;
             diagnostics({ event: "proactive.streetview.selected", agentId, city: lifeCity, title: entry.scene?.title ?? "", license: entry.scene?.license ?? "" });
           } else {
             diagnostics({ event: "proactive.streetview.pending", agentId, city: lifeCity });
@@ -12685,6 +12752,14 @@ export function apply(ctx) {
             city: String(message.streetView.city ?? ""),
             license: String(message.streetView.license ?? ""),
             author: String(message.streetView.author ?? ""),
+          }
+          : null,
+        cityIllustration: message?.cityIllustration?.url
+          ? {
+            city: String(message.cityIllustration.city ?? ""),
+            title: String(message.cityIllustration.title ?? ""),
+            url: String(message.cityIllustration.url ?? ""),
+            label: "城市插画",
           }
           : null,
         recalled: false,

@@ -1648,7 +1648,25 @@ export function startMobileClient(doc = document, { analyzeBackground = analyzeB
     if (!source || !source.license) return null;
     const node = doc.createElement("small");
     node.className = "ch-credit";
-    node.textContent = ["情景图 · 街景参考：Wikimedia Commons", source.license, source.author].filter(Boolean).join(" · ");
+    node.textContent = ["情景图 · 真实街景：Wikimedia Commons", source.license, source.author].filter(Boolean).join(" · ");
+    return node;
+  }
+
+  function cityIllustrationCreditNode(message) {
+    const source = message?.cityIllustration;
+    if (!source?.title || !source?.url) return null;
+    let url;
+    try { url = new URL(source.url); } catch { return null; }
+    if (url.protocol !== "https:" || url.username || url.password || url.port) return null;
+    const node = doc.createElement("small");
+    node.className = "ch-credit";
+    node.append(doc.createTextNode(`城市插画 · ${String(source.city ?? "")} · 参考来源：`));
+    const link = doc.createElement("a");
+    link.href = url.href;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = String(source.title).slice(0, 160);
+    node.appendChild(link);
     return node;
   }
 
@@ -2634,7 +2652,7 @@ export function startMobileClient(doc = document, { analyzeBackground = analyzeB
       bubble.__pieceText = pieces.join("\n");
       bubble.append(attachmentNode(message));
       // 街景自拍那张图的来路行：素材来自哪里、什么许可、谁拍的。
-      const credit = streetViewCreditNode(message);
+      const credit = streetViewCreditNode(message) || cityIllustrationCreditNode(message);
       if (credit) bubble.append(credit);
       for (const piece of pieces) {
         const part = doc.createElement("div");
