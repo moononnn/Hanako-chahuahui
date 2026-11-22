@@ -5,6 +5,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { bootChahuahui, reopenThread } from "./helpers/app-harness.js";
 
+// 催一次主动巡檢这条路由是内测口子，正式包里会剥掉；那条用例按形态 skip。
+const HAS_DEV_ROUTE = /const DEV_TOOLS = true;/.test(fs.readFileSync(new URL("../index.js", import.meta.url), "utf8"));
+const TICK_OPTIONS = { skip: HAS_DEV_ROUTE ? false : "正式包不含手动主动巡檢路由" };
+
 const A = "img_pair_a", B = "img_pair_b", AGENT = "nova", HOUR = 3600000;
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jhAAAAABJRU5ErkJggg==", "base64");
 // 两份合法PNG文件字节不同，第二份增加PNG解码器允许忽略的尾字节；不拿此用例冒充视觉识别。
@@ -71,7 +75,7 @@ test("正式工具绑定后A接B、B接A，再次A仍能接B：复用原件且�
   for (const [id, data] of bytes) assert.deepEqual(fs.readFileSync(path.join(dir, `${id}.bin`)), data);
 });
 
-test("主动可用任一张邀接梗，仍走正常调度且不生图", async (t) => {
+test("主动可用任一张邀接梗，仍走正常调度且不生图", TICK_OPTIONS, async (t) => {
   for (const id of [A, B]) {
     const app = await boot(t); app.answer(id);
     const random = Math.random; Math.random = () => 0.99;

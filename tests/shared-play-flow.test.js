@@ -7,6 +7,11 @@ import assert from "node:assert/strict";
 import { bootChahuahui, reopenThread } from "./helpers/app-harness.js";
 import { DAILY_SYSTEM, PROFILE_SYSTEM, SEGMENT_SYSTEM } from "../lib/summarize.js";
 
+// 有的用例要手动催一次主动巡检：这条路由是内测口子，正式包里会被剥掉。
+// 那几则只能按形态 skip，不拿 404 当失败；其他断言照跑。
+const HAS_DEV_ROUTE = /const DEV_TOOLS = true;/.test(fs.readFileSync(new URL("../index.js", import.meta.url), "utf8"));
+const TICK_OPTIONS = { skip: HAS_DEV_ROUTE ? false : "正式包不含手动主动巡检路由" };
+
 /**
  * 共享小玩法的端到端隔离测试（2026-11-16）。
  *
@@ -280,7 +285,7 @@ test("学会之后，后续普通回复能从共享玩法里把原图再甩出�
   assert.equal(app.media.length, 0);
 });
 
-test("主动那一轮也能从共享玩法里拿图，不另造联系动机", async (t) => {
+test("主动那一轮也能从共享玩法里拿图，不另造联系动机", TICK_OPTIONS, async (t) => {
   const app = await boot(t);
   // 这一轮前面没有回复（主动闸还占着），所以玩法是直接写进记忆的。
   seedPlay(app, {
@@ -300,7 +305,7 @@ test("主动那一轮也能从共享玩法里拿图，不另造联系动机", as
   assert.equal(app.media.length, 0);
 });
 
-test("真学到的那条玩法，能在之后的主动那一轮被取用", async (t) => {
+test("真学到的那条玩法，能在之后的主动那一轮被取用", TICK_OPTIONS, async (t) => {
   const first = await boot(t);
   // 真学：走一轮正常聊天，让它把这条玩法记下来
   first.reply((request, a) => {
@@ -638,7 +643,7 @@ for (const [name, chosen] of [["坚持旧版", CAT], ["喜欢新版", BAG], ["�
   });
 }
 
-test("与用户意见相反的偏爱可跨重启延续到主动原图投递", async (t) => {
+test("与用户意见相反的偏爱可跨重启延续到主动原图投递", TICK_OPTIONS, async (t) => {
   const first = await boot(t);
   await learnForPreference(first, "preference_proactive");
   first.reply(() => `新图我也收，但我偏爱旧版。${playTag([preferenceUpdate(first, CAT)])}`);

@@ -4,6 +4,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { bootChahuahui, reopenThread } from "./helpers/app-harness.js";
 
+// 催一次主动巡檢这条路由是内测口子，正式包里会剥掉；那几则按形态 skip。
+const HAS_DEV_ROUTE = /const DEV_TOOLS = true;/.test(fs.readFileSync(new URL("../index.js", import.meta.url), "utf8"));
+const TICK_OPTIONS = { skip: HAS_DEV_ROUTE ? false : "正式包不含手动主动巡檢路由" };
+
 const AGENT = "nova";
 const HOUR = 3600_000;
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jhAAAAABJRU5ErkJggg==", "base64");
@@ -55,7 +59,7 @@ async function waitFor(app, predicate, what = "消息") {
   throw new Error(`等待${what}超时`);
 }
 
-test("主动开口也能重发旧图：只进气泡，不挂附件，不生图", async t => {
+test("主动开口也能重发旧图：只进气泡，不挂附件，不生图", TICK_OPTIONS, async t => {
   const app = await boot(t);
   const random = Math.random;
   Math.random = () => 0.99; // 默认落在有聊天凭据的关系由头
@@ -74,7 +78,7 @@ test("主动开口也能重发旧图：只进气泡，不挂附件，不生图",
   assert.match(prompt, /img_stick_1/);
 });
 
-test("旧图发不出去时，主动那条宁可不说，也不发空头图", async t => {
+test("旧图发不出去时，主动那条宁可不说，也不发空头图", TICK_OPTIONS, async t => {
   const app = await boot(t, { answer: '[旧图:{"id":"img_not_here","as":"sticker"}]' });
   const random = Math.random;
   Math.random = () => 0.99;
@@ -88,7 +92,7 @@ test("旧图发不出去时，主动那条宁可不说，也不发空头图", as
   assert.equal(app.mediaCalls.length, 0, "也不许补调生图");
 });
 
-test("主动那轮旧图与生图同轮：发旧图，不生图，也不丢整轮", async t => {
+test("主动那轮旧图与生图同轮：发旧图，不生图，也不丢整轮", TICK_OPTIONS, async t => {
   const app = await boot(t, { answer: `${OLD}[生图:{"prompt":"窗边一杯咖啡","self":false}]` });
   const random = Math.random;
   Math.random = () => 0.99;
