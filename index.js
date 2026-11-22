@@ -494,7 +494,7 @@ import {
   listHostImageProviders,
   mimeOfImageBytes,
 } from "./lib/host-image.js";
-import { normalizeImageTier, chatImagePrompt, parseChatImage, pickPhotoShare, pickPhotoOpportunity, photoSharePrompt, streetViewPhotoPrompt, shouldDegradePhotoShare, photoShareBlockers, imageSceneExclusions } from "./lib/chat-image.js";
+import { normalizeImageTier, chatImagePrompt, parseChatImage, pickPhotoShare, pickPhotoOpportunity, pickReasonPhoto, hasImagePromise, photoSharePrompt, streetViewPhotoPrompt, shouldDegradePhotoShare, photoShareBlockers, imageSceneExclusions } from "./lib/chat-image.js";
 import { createImageQuota } from "./lib/image-quota.js";
 import { createImageReferences } from "./lib/image-reference.js";
 import { registerImageReferenceRoutes } from "./lib/image-reference-routes.js";
@@ -2402,7 +2402,7 @@ export function apply(ctx) {
     catch { return { attachment: null, fallback: "参考照这会儿没能读到，先不拍自己。" }; }
     if (request.self && !reference) return { attachment: null, fallback: "还没定好我的参考照，这回先不拍自己。" };
     if (street && (!request.self || !street.path || !fs.existsSync(street.path))) return { attachment: null, stale: true };
-    if (illustration && (!request.self || !reference)) return { attachment: null, stale: true };
+    // 城市插画两种都行：self=true 带且只带一张角色参考照，self=false 零参考图只画街景。
     const streetScene = street;
     let reservation;
     try { reservation = imageQuota.reserve(agentId); }
@@ -2419,7 +2419,7 @@ export function apply(ctx) {
       const prefix = streetScene
         ? streetScenePromptPrefix()
         : illustration
-          ? cityIllustrationPrompt(illustration)
+          ? cityIllustrationPrompt(illustration, { self: request.self })
           : request.self
             ? "画面人物必须保持参考照中的同一角色、外貌特征和画风；按场景自然构图，可露脸、背影或局部，遵循画面描述，不因参考照强制露脸，不加文字水印。"
             : "只呈现下面的物件、食物或风景，不出现人物或陌生人的自拍。";
@@ -3956,8 +3956,8 @@ export function apply(ctx) {
     const cityIllustration = photoShare?.source === "city-illustration" ? photoShare.illustration ?? null : null;
     const photoShareText = streetView
       ? streetViewPhotoPrompt({ city: streetView.city })
-      : cityIllustration ? cityIllustrationPrompt(cityIllustration)
-        : photoShare ? photoSharePrompt({ hasReference: Boolean(photoReferenceId), context: photoContextKnown ? null : photoContext }) : "";
+      : cityIllustration ? cityIllustrationPrompt(cityIllustration, { self: Boolean(photoReferenceId) })
+        : photoShare ? photoSharePrompt({ hasReference: Boolean(photoReferenceId), context: photoContextKnown ? null : photoContext, standalone: !photoContext }) : "";
     if (photoShare) diagnostics({ event: "proactive.photo.context", agentId, inHistory: photoContextKnown, age: photoContext ? Date.now() - Date.parse(photoContext.at ?? "") : null });
     let raw = "";
     try {
@@ -4050,7 +4050,7 @@ export function apply(ctx) {
     // 照片候选不是硬性出图（2026-11-15）：模型给了普通文字就按普通主动发出去，
     // 别因为“这一轮本来想拍照”把整轮丢掉——那是白等一场。只有协议写坏才当这一轮不成：
     // 坏标记不能当正文发，也不能触发生图。
-    if ((streetView || cityIllustration) && photoRequest && !photoRequest.self) return { ok: false, reason: "photo-declined" };
+    if (streetView && photoRequest && !photoRequest.self) return { ok: false, reason: "photo-declined" };
     if (photoShare && photoRequest && chatPhoto.status === "invalid") {
       diagnostics({ event: "proactive.photo.skipped", agentId, reason: "invalid-marker" });
       return { ok: false, reason: "photo-declined" };
@@ -4163,7 +4163,6 @@ export function apply(ctx) {
         const candidate = pickCityIllustration({
           enabled: global.lifeCityIllustrations === true,
           authorized: global.lifeCityDiscoveries === true,
-          hasReference: imageReferences.view(agentId).currentId === photoReferenceId,
           city: global.lifeCity,
           cityCode: global.lifeCityCode,
           localKey: localCity?.key,
@@ -4201,7 +4200,12 @@ export function apply(ctx) {
     // 旧图与生图撞上时旧图优先：不真的生图。
     const preparedImage = await prepareChatImage(agentId, photoRequest, { stillCurrent: photoStillCurrent, street: streetView, illustration: cityIllustration });
     if (preparedImage.stale) return { ok: false, reason: "stale" };
-    if (photoRequest && !preparedImage.attachment) return { ok: false, reason: "image-unavailable" };
+    // 生图没成：已经写好的正文若本身就是完整一段、也没预告这张图，就当普通主动发出去；
+    // 说过「给你看看」这类空头承诺的仍旧整条不发（2026-11-23）。
+    const textOnlyAfterImage = Boolean(photoRequest) && !preparedImage.attachment
+      && Boolean(String(text ?? "").trim()) && !hasImagePromise(text);
+    if (photoRequest && !preparedImage.attachment && !textOnlyAfterImage) return { ok: false, reason: "image-unavailable" };
+    if (textOnlyAfterImage) diagnostics({ event: "proactive.photo.text-only", agentId });
     const replyAttachment = preparedImage.attachment ?? oldImagePrepared.attachment ?? null;
     let preparedVoice = await prepareVoice(agentId, text, { kind: "proactive", hasPhoto: Boolean(replyAttachment) });
     if (preparedVoice.reason === "cancelled") {
@@ -4260,7 +4264,7 @@ export function apply(ctx) {
       proactive: true,
       form: "word",
       proactiveKind: kind,
-      ...(photoShare && photoRequest ? { proactiveExpression: "photo", photoScene: streetView
+      ...(photoShare && photoRequest && !textOnlyAfterImage ? { proactiveExpression: "photo", photoScene: streetView
         ? { key: photoShare.key, source: "street", city: streetView.city }
         : cityIllustration ? { key: photoShare.key, source: "city-illustration", city: cityIllustration.city }
           : photoShare } : {}),
@@ -5488,6 +5492,22 @@ export function apply(ctx) {
       // 依据看照片专用那份 photoContext：ta 中间主动说过几句，不该把最近那轮面对面聊天抹掉。
       // photoRecent3 / photoSceneUsed / photoEnabled / photoOpportunity 都在上面算过（优先机会要用）。
       const photoBlocked = !reasonEligible || greetingOnly || Boolean(seed || discovery);
+      // 由头照片（2026-11-23）：由头先站住，照片只是这轮的表达方式。
+      // 以前照片只认最近那轮面对面聊天，没聊过的日子一张都发不出来；这里只补“由头在、聊天依据不在”这一种。
+      // 落点、间隔、日上限、静默时段、额度全在别处；带图后最近三句也算近期发过，不会连着刷。
+      const reasonPhoto = !photoContext && pickReasonPhoto({
+        enabled: photoEnabled,
+        tier: settings.imageTier,
+        reason: reasonForSend,
+        blocked: photoBlocked,
+        recentPhoto: photoRecent3 || photoSceneUsed,
+        lastAt: store.getProactiveState(agentId).reasonPhoto?.at ?? null,
+        now: now.getTime(),
+      });
+      if (reasonPhoto) {
+        store.setProactiveState(agentId, { reasonPhoto: { at: now.toISOString(), kind: reasonForSend?.kind ?? "" } });
+        diagnostics({ event: "proactive.photo.reason", agentId, tier: settings.imageTier, kind: reasonForSend?.kind ?? "" });
+      }
       const photoExcludedBy = [
         ...imageSceneExclusions({
           exception: Boolean(gate.exception),
@@ -5503,19 +5523,21 @@ export function apply(ctx) {
         ...photoShareBlockers({
           enabled: photoEnabled,
           tier: settings.imageTier,
-          hasContext: Boolean(photoContext),
+          // 由头照片本来就不要聊天依据，诊断里不该再报 no-context。
+          hasContext: Boolean(photoContext) || reasonPhoto,
           blocked: photoBlocked,
           recentPhoto: photoRecent3,
           sceneUsed: photoSceneUsed,
         }),
       ];
-      let photoShare = (photoOpportunity || pickPhotoShare({
+      const photoSceneKey = photoContext?.at ?? (reasonPhoto ? `reason:${reasonForSend?.kind ?? ""}` : null);
+      let photoShare = (photoOpportunity || reasonPhoto || pickPhotoShare({
         enabled: photoEnabled,
         tier: settings.imageTier,
         hasContext: Boolean(photoContext),
         blocked: photoBlocked,
         recentPhoto: photoRecent3 || photoSceneUsed,
-      })) && !photoBlocked && photoContext ? { key: photoContext.at, source: "scene" } : null;
+      })) && !photoBlocked && photoSceneKey ? { key: photoSceneKey, source: "scene" } : null;
       let cityIllustration = null;
       if (photoShare && globalSettings.lifeCityIllustrations === true) {
         const localCity = activeCityDiscovery();
@@ -5525,7 +5547,6 @@ export function apply(ctx) {
         cityIllustration = pickCityIllustration({
           enabled: globalSettings.lifeCityIllustrations === true,
           authorized: globalSettings.lifeCityDiscoveries === true,
-          hasReference,
           city: lifeCity,
           cityCode: globalSettings.lifeCityCode,
           localKey: localCity?.key,
@@ -5537,7 +5558,7 @@ export function apply(ctx) {
           cityCode: String(globalSettings.lifeCityCode ?? ""), localKeyReady: Boolean(localCity?.key), items: illustrationItems.length,
           selected: Boolean(cityIllustration) });
         if (cityIllustration) {
-          photoShare = { key: photoContext.at, source: "city-illustration", illustration: cityIllustration };
+          photoShare = { key: photoSceneKey, source: "city-illustration", illustration: cityIllustration };
           diagnostics({ event: "proactive.photo.city-illustration.selected", agentId, city: lifeCity, title: cityIllustration.title });
         }
       }
@@ -5552,7 +5573,7 @@ export function apply(ctx) {
         if (cooled && Math.random() < STREET_VIEW_CHANCE) {
           const entry = streetViewLibrary?.peek({ city: lifeCity, lifeCityCode: globalSettings.lifeCityCode });
           if (entry) {
-            photoShare = { key: photoContext.at, source: "street", street: { city: lifeCity, lifeCityCode: globalSettings.lifeCityCode, referenceId: streetReference.id, path: entry.path, scene: entry.scene } };
+            photoShare = { key: photoSceneKey, source: "street", street: { city: lifeCity, lifeCityCode: globalSettings.lifeCityCode, referenceId: streetReference.id, path: entry.path, scene: entry.scene } };
             cityIllustration = null;
             diagnostics({ event: "proactive.streetview.selected", agentId, city: lifeCity, title: entry.scene?.title ?? "", license: entry.scene?.license ?? "" });
           } else {

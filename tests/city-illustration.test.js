@@ -39,10 +39,12 @@ test("城市插画只选当前授权、当前城市缓存里的有出处资料",
   assert.equal(selected.snippet, ITEM.snippet);
 });
 
-test("关闭插画、关闭同城搜索授权或没有角色参考照时不选插画", () => {
-  for (const patch of [{ enabled: false }, { authorized: false }, { hasReference: false }]) {
+test("关闭插画、关闭同城搜索授权时不选插画；没角色参考照仍可选（self=false 零参考图）", () => {
+  for (const patch of [{ enabled: false }, { authorized: false }]) {
     assert.equal(pickCityIllustration(base(patch)), null);
   }
+  // 2026-11-23：插画不再要求先有角色参考照，没参考照就用 self=false 只画街景。
+  assert.equal(pickCityIllustration(base({ hasReference: false }))?.url, ITEM.url);
 });
 
 test("切城/切城市编码后旧来源失效，过期或非 HTTPS 来源也跳过", () => {
