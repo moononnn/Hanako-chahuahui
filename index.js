@@ -294,6 +294,7 @@ import {
   renameStickerGroup,
   reorderStickers,
 } from "./lib/sticker-library.js";
+import { COLLECT_TARGET, collectStickerImage } from "./lib/sticker-collect.js";
 import { ensureStickerThumb, startThumbWarmup } from "./lib/sticker-thumb.js";
 import { contentHash, isReusableAttachment, touchAttachmentMeta } from "./lib/attachment-hash.js";
 import { writeJsonAtomic } from "./lib/persistence.js";
@@ -11354,6 +11355,33 @@ export function apply(ctx) {
             }
           }
           return c.json({ ok: true, imported: imported.length, duplicates: imported.filter((item) => item.duplicate).length });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 500);
+        }
+      });
+
+      // 聊天里的一张图收进表情包：装了表情包就递过去（它自己会认图），顺手在茶话会留一张；
+      // 没装 / 没启用 / 递不过去就只留茶话会这边，不打扰她。
+      app.post("/library/collect-sticker", async (c) => {
+        try {
+          const body = await c.req.json();
+          const agentId = String(body?.agentId ?? "").trim();
+          const attachmentId = String(body?.attachmentId ?? "").trim();
+          if (!agentId || !attachmentId) return c.json({ ok: false, error: { message: "缺少伙伴或图片" } }, 400);
+          const result = await collectStickerImage({
+            dataDir: ctx.dataDir,
+            agentId,
+            attachment: attachmentId,
+            readAttachment,
+            forward: async (tmpPath) => {
+              const answer = await ctx.bus.request(COLLECT_TARGET, { sourcePath: tmpPath }, { timeout: 20_000 });
+              if (!answer?.ok) throw new Error(answer?.error || "表情包没收下");
+              return answer;
+            },
+          });
+          if (!result.ok) return c.json({ ok: false, error: { message: "这张图已经不在了，可能刚被清理" } }, 404);
+          diagnostics({ event: "sticker.collect", agentId, attachmentId, forwardedOk: result.forwardedOk, duplicate: result.duplicate });
+          return c.json(result);
         } catch (error) {
           return c.json({ ok: false, error: describeError(error) }, 500);
         }

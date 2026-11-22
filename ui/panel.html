@@ -1261,6 +1261,54 @@
       placeStickerMenu(event);
     }
 
+    /* 聊天里的图片：右键收进表情包。 */
+    const imageCollectMenu = document.createElement("div");
+    imageCollectMenu.className = "sticker-menu";
+    imageCollectMenu.hidden = true;
+    document.body.appendChild(imageCollectMenu);
+
+    function closeImageCollectMenu() { imageCollectMenu.hidden = true; }
+
+    function placeImageCollectMenu(event) {
+      const margin = 8;
+      const box = imageCollectMenu.getBoundingClientRect();
+      const left = Math.max(margin, Math.min(event.clientX, window.innerWidth - box.width - margin));
+      const top = Math.max(margin, Math.min(event.clientY, window.innerHeight - box.height - margin));
+      imageCollectMenu.style.left = `${Math.round(left)}px`;
+      imageCollectMenu.style.top = `${Math.round(top)}px`;
+    }
+
+    function openImageCollectMenu(event, img) {
+      const attachmentId = String(img?.dataset?.attachmentId || "").trim();
+      if (!attachmentId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const owner = String(img?.dataset?.attachmentOwner || current || "").trim();
+      imageCollectMenu.replaceChildren(
+        stickerMenuButton("收进表情包", () => void collectChatImage(owner, attachmentId)),
+      );
+      imageCollectMenu.hidden = false;
+      imageCollectMenu.style.left = "-9999px";
+      imageCollectMenu.style.top = "-9999px";
+      placeImageCollectMenu(event);
+    }
+
+    async function collectChatImage(owner, attachmentId) {
+      closeImageCollectMenu();
+      setStatus("正在收进表情包…");
+      try {
+        const result = await api("POST", "library/collect-sticker", { agentId: owner, attachmentId });
+        // 面板开着就顺手刷新，新收的图立刻能看见。
+        if (!el.stickerPicker.hidden) await loadStickerLibrary();
+        const fwd = result?.forwarded;
+        setStatus(fwd?.ok
+          ? (fwd?.duplicate ? "这张已经在「表情包」里了" : "已收进「表情包」")
+          : "已收进茶话会（没装表情包）");
+      } catch (error) {
+        setStatus(`没存上：${error.message}`);
+      }
+    }
+
     el.stickerGrid.addEventListener("contextmenu", (event) => {
       const cell = stickerCellOf(event.target);
       if (!cell?.dataset.stickerId) return;
@@ -1270,6 +1318,7 @@
     el.stickerGrid.addEventListener("scroll", closeStickerMenu, { passive: true });
     document.addEventListener("pointerdown", (event) => {
       if (!stickerMenu.hidden && !stickerMenu.contains(event.target)) closeStickerMenu();
+      if (!imageCollectMenu.hidden && !imageCollectMenu.contains(event.target)) closeImageCollectMenu();
     });
     window.addEventListener("resize", closeStickerMenu);
 
@@ -3221,10 +3270,14 @@
         closeMessageActions();
         closeMessageFeed();
         closeStickerMenu();
+        closeImageCollectMenu();
       }
     });
     el.stream.addEventListener("contextmenu", (event) => {
       if (event.defaultPrevented) return;
+      // 图片优先：图和它所在的那一行都能触发右键，先认图才不会被行的菜单抢走。
+      const img = event.target.closest?.("img.message-image");
+      if (img) { openImageCollectMenu(event, img); return; }
       const row = event.target.closest?.(".row.ta");
       if (!row?.__feedMessage) return;
       event.preventDefault();
@@ -3233,10 +3286,12 @@
     el.stream.addEventListener("scroll", () => {
       closeMessageActions();
       closeMessageFeed();
+      closeImageCollectMenu();
     }, { passive: true });
     window.addEventListener("resize", () => {
       closeMessageActions();
       closeMessageFeed();
+      closeImageCollectMenu();
     });
 
     /*
