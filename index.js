@@ -493,7 +493,7 @@ import {
   listHostImageProviders,
   mimeOfImageBytes,
 } from "./lib/host-image.js";
-import { normalizeImageTier, chatImagePrompt, parseChatImage, pickPhotoShare, photoSharePrompt, streetViewPhotoPrompt, shouldDegradePhotoShare, photoShareBlockers, imageSceneExclusions } from "./lib/chat-image.js";
+import { normalizeImageTier, chatImagePrompt, parseChatImage, pickPhotoShare, pickPhotoOpportunity, photoSharePrompt, streetViewPhotoPrompt, shouldDegradePhotoShare, photoShareBlockers, imageSceneExclusions } from "./lib/chat-image.js";
 import { createImageQuota } from "./lib/image-quota.js";
 import { createImageReferences } from "./lib/image-reference.js";
 import { registerImageReferenceRoutes } from "./lib/image-reference-routes.js";
@@ -5384,6 +5384,32 @@ export function apply(ctx) {
         continue;
       }
 
+      // 照片优先机会（2026-11-20 实机：15 条主动零附件，其中 7 条被视频整轮挤掉）。
+      // 视频候选一占位，照片连概率都不参与；视频攒着一条接一条，照片永远轮不到。
+      // 这里给照片一次低频插队：只在照片本来就拍得了、别的护栏也没挡时，把这一轮的视频让回去
+      // （候选只是被看一眼，没标记，下一轮照发）。落点、间隔、日上限、静默时段、额度一律不动。
+      const photoRecent3 = thread.messages.filter(row => row.role === "assistant" && !row.recalled && isSpeechMessage(row))
+        .slice(-3).some(row => row.attachment?.description);
+      const photoSceneUsed = thread.messages.some(row => !row.recalled && row.photoScene?.key === photoContext?.at
+        && ["scene", "city-illustration", "street"].includes(row.photoScene?.source));
+      const photoEnabled = chatImageServiceReady && imageQuota?.available(agentId) === true;
+      const photoOpportunity = Boolean(video) && !news && pickPhotoOpportunity({
+        enabled: photoEnabled,
+        tier: settings.imageTier,
+        hasContext: Boolean(photoContext),
+        // 待办、收尾、醒来回声、已读未回、夜间例外、登录提示、公共事件各有各的护栏，一个都不越。
+        hardBlocked: Boolean(todoHere || farewellSend || wakeEcho || followup || gate.exception || videoLoginNotice || publicEvent),
+        recentPhoto: photoRecent3,
+        sceneUsed: photoSceneUsed,
+        lastAt: store.getProactiveState(agentId).photoOpportunity?.at ?? null,
+        now: now.getTime(),
+      });
+      if (photoOpportunity) {
+        store.setProactiveState(agentId, { photoOpportunity: { at: now.toISOString() } });
+        diagnostics({ event: "proactive.photo.opportunity", agentId, tier: settings.imageTier, releasedVideo: true });
+        video = null;
+      }
+
       // 关系式由头（2026-10-12）：长期兴趣之外，再给「没事也想找她」留几条路。
       // 只在这一轮已经过了门、且没有更高优先级的由头时才挑：
       //   · 到点待办、醒来回声、已读未回跟进、睡前收尾、夜间例外——一个都不动
@@ -5459,11 +5485,7 @@ export function apply(ctx) {
       const reasonForSend = greetingOnly ? null : reason;
       // 照片是表达候选，不另造联系动机；只占普通关系式落点，不抢素材或机动消息。
       // 依据看照片专用那份 photoContext：ta 中间主动说过几句，不该把最近那轮面对面聊天抹掉。
-      const photoRecent3 = thread.messages.filter(row => row.role === "assistant" && !row.recalled && isSpeechMessage(row))
-        .slice(-3).some(row => row.attachment?.description);
-      const photoSceneUsed = thread.messages.some(row => !row.recalled && row.photoScene?.key === photoContext?.at
-        && ["scene", "city-illustration", "street"].includes(row.photoScene?.source));
-      const photoEnabled = chatImageServiceReady && imageQuota?.available(agentId) === true;
+      // photoRecent3 / photoSceneUsed / photoEnabled / photoOpportunity 都在上面算过（优先机会要用）。
       const photoBlocked = !reasonEligible || greetingOnly || Boolean(seed || discovery);
       const photoExcludedBy = [
         ...imageSceneExclusions({
@@ -5486,13 +5508,13 @@ export function apply(ctx) {
           sceneUsed: photoSceneUsed,
         }),
       ];
-      let photoShare = pickPhotoShare({
+      let photoShare = (photoOpportunity || pickPhotoShare({
         enabled: photoEnabled,
         tier: settings.imageTier,
         hasContext: Boolean(photoContext),
         blocked: photoBlocked,
         recentPhoto: photoRecent3 || photoSceneUsed,
-      }) ? { key: photoContext.at, source: "scene" } : null;
+      })) && !photoBlocked && photoContext ? { key: photoContext.at, source: "scene" } : null;
       let cityIllustration = null;
       if (photoShare && globalSettings.lifeCityIllustrations === true) {
         const localCity = activeCityDiscovery();
