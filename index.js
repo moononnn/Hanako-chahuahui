@@ -494,7 +494,7 @@ import {
   listHostImageProviders,
   mimeOfImageBytes,
 } from "./lib/host-image.js";
-import { normalizeImageTier, chatImagePrompt, parseChatImage, pickPhotoShare, pickPhotoOpportunity, pickReasonPhoto, hasImagePromise, photoSharePrompt, streetViewPhotoPrompt, shouldDegradePhotoShare, photoShareBlockers, imageSceneExclusions } from "./lib/chat-image.js";
+import { normalizeImageTier, chatImagePrompt, parseChatImage, pickPhotoShare, pickPhotoOpportunity, pickReasonPhoto, pickPhotoFallback, PHOTO_FALLBACK_SCENES, hasImagePromise, photoSharePrompt, streetViewPhotoPrompt, shouldDegradePhotoShare, photoShareBlockers, imageSceneExclusions } from "./lib/chat-image.js";
 import { createImageQuota } from "./lib/image-quota.js";
 import { createImageReferences } from "./lib/image-reference.js";
 import { registerImageReferenceRoutes } from "./lib/image-reference-routes.js";
@@ -4003,7 +4003,7 @@ export function apply(ctx) {
     const oldImage = parseOldImageProtocol(extractSharedPlay(raw, playContext.book, [], []).text);
     const chatPhoto = parseChatImage(oldImage.text);
     // 旧图与生图撞上时旧图优先：只要出现过旧图标记（哪怕是坏的），这一轮就不生图。
-    const photoRequest = oldImage.status !== "none" ? null : chatPhoto.request;
+    let photoRequest = oldImage.status !== "none" ? null : chatPhoto.request;
     diagnostics({ event: "chat.image.parsed", agentId, source: "proactive", status: chatPhoto.status });
     diagnostics({ event: "chat.oldimage.parsed", agentId, source: "proactive", status: oldImage.status });
     // 旧图这一关先过：坏协议、发不出去的旧图，整轮安全收手——
@@ -4198,6 +4198,25 @@ export function apply(ctx) {
     };
     // 先过正文、去重和语义关再花额度。失败不投递空头配文，也不重试原生图请求。
     // 旧图与生图撞上时旧图优先：不真的生图。
+    // 漏标记兜底（2026-11-23）：候选已选中、文字关都过了，模型却只写自然文字、漏了标记。
+    // 只给 affection/contact 补一张固定无人物随手情景照，24 小时一次，同一条生图与额度通路；
+    // 放在所有文字关之后：被语义关拦下的轮次不白耗这次机会，固定场景也不进同画面去重。
+    if (!photoRequest && pickPhotoFallback({
+      enabled: imageEnabled,
+      scene: photoShare?.source === "scene",
+      marker: chatPhoto.status,
+      oldImage: oldImage.status,
+      text,
+      reasonKind: reason?.kind,
+      blocked: Boolean(exception || followup || wakeEcho || String(todoNudge ?? "").trim()
+        || shareableVideo || shareableNews || videoLoginNotice || greetingOnly),
+      lastAt: store.getProactiveState(agentId).photoFallback?.at ?? null,
+      now: Date.now(),
+    })) {
+      photoRequest = { prompt: PHOTO_FALLBACK_SCENES[reason.kind], self: false };
+      store.setProactiveState(agentId, { photoFallback: { at: new Date().toISOString(), kind: reason.kind } });
+      diagnostics({ event: "proactive.photo.fallback", agentId, kind: reason.kind });
+    }
     const preparedImage = await prepareChatImage(agentId, photoRequest, { stillCurrent: photoStillCurrent, street: streetView, illustration: cityIllustration });
     if (preparedImage.stale) return { ok: false, reason: "stale" };
     // 生图没成：已经写好的正文若本身就是完整一段、也没预告这张图，就当普通主动发出去；

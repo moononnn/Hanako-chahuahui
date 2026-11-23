@@ -88,15 +88,17 @@ test("生活照片候选即使有参考也可不出镜，沿原通道落库并�
   assert.equal(sources[0].group, "relational");
   assert.equal(app.mediaCalls[0].input.referenceImages, undefined);
 });
-test("生活照片候选可以放弃、协议写坏或改用普通文字，都不花生图额度", OPTIONS, async t => {
-  for (const answer of ["[不回]", "咖啡我还是喜欢不加糖的。", '[生图:{坏json}]']) {
+test("生活照片候选可以放弃、协议写坏或明确拒绝出图，都不花生图额度", OPTIONS, async t => {
+  // 2026-11-23：可独立成立的自然文字现在会被漏标记兜底接住（见 photo-fallback.test.js）；
+  // “放弃出图”的语义落在明确拒绝、[不回] 与坏协议上，这里验后者。
+  for (const answer of ["[不回]", "今天就不发图了，咖啡我还是喜欢不加糖的。", '[生图:{坏json}]']) {
     await t.test(answer, async t => {
       const app = await boot(t, { answer });
       await app.tick(0.1);
       assert.ok(app.prompts.some(req => req.systemPrompt.includes("【生活照片分享】")));
       assert.equal(app.mediaCalls.length, 0);
       const rows = reopenThread(app.dataDir, AGENT).filter(row => row.proactive);
-      if (answer === "咖啡我还是喜欢不加糖的。") {
+      if (answer === "今天就不发图了，咖啡我还是喜欢不加糖的。") {
         // 候选不是硬性出图：模型给了普通文字就照常发出去，但不能把它记成一张照片。
         assert.equal(rows.length, 1);
         assert.equal(rows[0].attachment, undefined);
