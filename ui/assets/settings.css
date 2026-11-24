@@ -64,9 +64,34 @@ h1 { margin: 0; font-size: clamp(23px, 4vw, 31px); line-height: 1.25; font-weigh
 .tea-mark { width: 64px; height: 64px; flex: none; display: grid; place-items: center; border-radius: var(--r-lg); background: var(--mint-soft); }
 .tea-mark svg { width: 36px; height: 36px; fill: none; stroke: var(--mint-deep); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 
-.tabs { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; padding: 5px; margin-bottom: 30px; border: 1px solid var(--line-soft); border-radius: var(--r-lg); background: rgba(255, 253, 248, .72); }
-.tab { border: 0; border-radius: var(--r-md); padding: 10px 6px; color: var(--ink-soft); background: transparent; cursor: pointer; white-space: nowrap; transition: color 160ms ease, background 160ms ease, box-shadow 160ms ease, transform 120ms var(--ease-out); }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 5px; margin-bottom: 26px; border: 1px solid var(--line-soft); border-radius: var(--r-lg); background: rgba(255, 253, 248, .72); }
+.tab { border: 0; border-radius: 999px; padding: 6px 12px; font-size: 12.5px; color: var(--ink-soft); background: transparent; cursor: pointer; white-space: nowrap; transition: color 160ms ease, background 160ms ease, box-shadow 160ms ease, transform 120ms var(--ease-out); }
 .tab.on { color: var(--mint-deep); background: var(--surface); box-shadow: 0 4px 14px rgba(75, 99, 82, .09); font-weight: 700; }
+
+/* ── 设置目录：九类摆成一张手帐索引卡 ──
+   首屏就是这张目录，不另开侧栏：进来先看「有哪九类」，点一类才进那一页。
+   面板编号和分类按钮一处没改，进去以后还是原来那些细卡。 */
+.settings-index { margin-bottom: 26px; }
+.index-head { margin: 0 3px 12px; }
+.index-head h2 { margin: 0; color: var(--mint-deep); font-size: 16px; font-weight: 700; }
+.index-head p { margin: 2px 0 0; color: var(--ink-soft); font-size: 12.5px; }
+.index-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.index-card {
+  display: flex; flex-direction: column; gap: 7px; min-width: 0;
+  padding: 15px 16px; border: 1px solid var(--line-soft); border-radius: var(--r-xl);
+  background: linear-gradient(180deg, rgba(255, 253, 248, .98), rgba(251, 248, 241, .92));
+  box-shadow: 0 8px 22px rgba(92, 78, 55, .05);
+}
+.index-card h3 { margin: 0; color: var(--ink); font-size: 14.5px; font-weight: 650; }
+.index-card > p { margin: 0; color: var(--ink-soft); font-size: 12.5px; overflow-wrap: anywhere; }
+.index-links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.index-link {
+  max-width: 100%; border: 1px solid var(--line-soft); border-radius: 999px; padding: 4px 10px;
+  background: var(--mint-soft); color: var(--mint-deep); font-size: 12px; line-height: 1.5;
+  text-align: left; overflow-wrap: anywhere; cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+.index-link:hover { border-color: var(--mint); background: #d9ebe3; }
 
 .section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin: 0 3px 11px; }
 .section-head.roomy { margin-top: 30px; }
@@ -400,7 +425,8 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
   .wrap { width: min(100% - 22px, 820px); padding-top: 20px; }
   .tea-mark { display: none; }
   /* 六格排一行在窄屏太挤，换两行 */
-  .tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .tabs { gap: 5px; padding: 4px; }
+  .tab { padding: 5px 10px; font-size: 12px; }
   .detail-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .style-picks { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .switch-grid { grid-template-columns: 1fr; }
@@ -411,6 +437,13 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
   .partner-hero { align-items: flex-start; }
   .partner-hero .remove-link { margin-left: auto; }
   .setting-card { padding: 16px; }
+}
+
+/* 窄窗（手机上开设置页）：目录一列排开，长词自己折，不横着溢出去。 */
+@media (max-width: 520px) {
+  .index-grid { grid-template-columns: 1fr; }
+  .index-card { padding: 14px; }
+  .index-head { margin-left: 0; margin-right: 0; }
 }
 
 /* ── 和小花聊聊：先体检，聊着改，点「确认修改」才落盘；旧版存着，能退回来 ── */

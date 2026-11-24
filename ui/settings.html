@@ -70,6 +70,7 @@
       </div>
       <div class="settings-head-actions">
         <button class="soft-button back-chat" id="back-to-chat" type="button">← 返回聊天</button>
+        <button class="soft-button" id="settings-index-back" type="button" hidden>← 设置目录</button>
         <div class="tea-mark" aria-hidden="true">
         <svg viewBox="0 0 24 24">
           <path d="M5 9.5h11l-1.3 6.9a2 2 0 0 1-1.97 1.6H8.27a2 2 0 0 1-1.97-1.6L5 9.5Z"/>
@@ -79,6 +80,102 @@
         </div>
       </div>
     </header>
+
+    <section id="settings-index" class="settings-index" aria-labelledby="settings-index-title">
+      <div class="index-head">
+        <h2 id="settings-index-title">设置目录</h2>
+        <p>九类摆在这儿，按平时改的顺序排。点一类进去，里面再按细项分。</p>
+      </div>
+      <div class="index-grid">
+        <article class="index-card" data-group="appearance">
+          <h3>外观与称呼</h3>
+          <p>聊天窗长什么样、你在这儿叫什么、伙伴的小动作。</p>
+          <div class="index-links">
+            <button class="index-link" type="button" data-tab-target="chat" data-anchor="msg-avatars-switch">消息头像与动效</button>
+            <button class="index-link" type="button" data-tab-target="chat" data-anchor="bubble-skin-picker">气泡装扮</button>
+            <button class="index-link" type="button" data-tab-target="chat" data-anchor="user-name-override">我在茶话会里叫什么</button>
+          </div>
+        </article>
+        <article class="index-card" data-group="sound">
+          <h3>声音</h3>
+          <p>来消息时响什么，伙伴说话时念成什么样。</p>
+          <div class="index-links">
+            <button class="index-link" type="button" data-tab-target="sound" data-anchor="msg-sound-switch">新消息提示音</button>
+            <button class="index-link" type="button" data-tab-target="sound" data-anchor="msg-sound-profile-cell">音量与默认音色</button>
+            <button class="index-link" type="button" data-tab-target="voice" data-anchor="voice-switch">伙伴语音消息</button>
+            <button class="index-link" type="button" data-tab-target="voice" data-anchor="voice-model-card">朗读模型</button>
+          </div>
+        </article>
+        <article class="index-card" data-group="partners">
+          <h3>伙伴</h3>
+          <p>选一位伙伴，看 ta 的联系习惯、动作和记忆。</p>
+          <div class="index-links">
+            <button class="index-link" type="button" data-tab-target="partners" data-anchor="partner-list">选择一位伙伴</button>
+            <button class="index-link" type="button" data-tab-target="partners" data-anchor="msg-refine-switch">修整伙伴回复</button>
+          </div>
+        </article>
+        <article class="index-card" data-group="proactive">
+          <h3>主动联系</h3>
+          <p>管大家什么时候来、别一次挤上来。</p>
+          <div class="index-links">
+            <button class="index-link" type="button" data-tab-target="proactive" data-anchor="rhythm-proactive-switch">允许伙伴主动来找你</button>
+            <button class="index-link" type="button" data-tab-target="proactive" data-anchor="quiet-time-row">安静时间</button>
+            <button class="index-link" type="button" data-tab-target="proactive" data-anchor="gate-gap-options">别一起扑上来</button>
+            <button class="index-link" type="button" data-tab-target="proactive" data-anchor="video-share-card">B站视频分享</button>
+          </div>
+        </article>
+        <article class="index-card" data-group="immersion">
+          <h3>城市与日常</h3>
+          <p>伙伴待在哪座城市、知道点你这边今天的事。</p>
+          <div class="index-links">
+            <button class="index-link" type="button" data-tab-target="immersion" data-anchor="life-city-card">生活城市</button>
+            <button class="index-link" type="button" data-tab-target="immersion" data-anchor="life-city-discoveries-card">同城发现</button>
+            <button class="index-link" type="button" data-tab-target="immersion" data-anchor="life-city-illustrations-card">城市插画</button>
+            <button class="index-link" type="button" data-tab-target="immersion" data-anchor="life-city-street-card">真实街景自拍</button>
+            <button class="index-link" type="button" data-tab-target="immersion" data-anchor="own-weather-save">天气与日常感知</button>
+          </div>
+        </article>
+        <article class="index-card" data-group="image">
+          <h3>照片与表情</h3>
+          <p>聊天照片的额度与自查；表情怎么找灵感、怎么记住用法。</p>
+          <div class="index-links">
+            <button class="index-link" type="button" data-tab-target="image" data-anchor="image-global-tier">照片额度</button>
+            <button class="index-link" type="button" data-tab-target="image" data-anchor="image-review-card">生成后自查</button>
+            <button class="index-link" type="button" data-tab-target="image" data-anchor="image-model-card">生图模型</button>
+            <button class="index-link" type="button" data-tab-target="image" data-anchor="background-share-card">后台备稿</button>
+            <button class="index-link" type="button" data-tab-target="image" data-anchor="sticker-inspiration-card">自制表情灵感</button>
+            <button class="index-link" type="button" data-tab-target="image" data-anchor="sticker-usage-sync-card">表情用法同步</button>
+          </div>
+        </article>
+        <article class="index-card" data-group="model">
+          <h3>模型与服务</h3>
+          <p>聊天用哪个模型、伙伴自己上网走哪条路。</p>
+          <div class="index-links">
+            <button class="index-link" type="button" data-tab-target="model" data-anchor="global-model-host">默认与轻量模型</button>
+            <button class="index-link" type="button" data-tab-target="model" data-anchor="global-vision-host">辅助识图模型</button>
+            <button class="index-link" type="button" data-tab-target="search" data-anchor="search-engine-key-field">搜索引擎</button>
+            <button class="index-link" type="button" data-tab-target="image" data-anchor="image-model-card">生图模型（在照片与表情里）</button>
+            <button class="index-link" type="button" data-tab-target="voice" data-anchor="voice-model-card">朗读模型（在声音里）</button>
+          </div>
+        </article>
+        <article class="index-card" data-group="usage">
+          <h3>数据与用量</h3>
+          <p>伙伴在后台花掉多少；她发过来的图留多久。</p>
+          <div class="index-links">
+            <button class="index-link" type="button" data-tab-target="usage" data-anchor="usage-tiles">用量账本</button>
+            <button class="index-link" type="button" data-tab-target="usage" data-anchor="global-image-retention-host">图片存储</button>
+          </div>
+        </article>
+        <article class="index-card" data-group="mobile">
+          <h3>手机</h3>
+          <p>同一个 Wi-Fi 下，用手机接着聊。</p>
+          <div class="index-links">
+            <button class="index-link" type="button" data-tab-target="mobile" data-anchor="mobile-switch">允许手机连进来</button>
+            <button class="index-link" type="button" data-tab-target="mobile" data-anchor="mobile-port">端口与地址</button>
+          </div>
+        </article>
+      </div>
+    </section>
 
     <nav class="tabs" aria-label="设置分类" role="tablist">
       <button class="tab on" id="tab-chat" data-tab="chat" role="tab" aria-selected="true" aria-controls="panel-chat">聊天显示</button>
@@ -105,15 +202,6 @@
             <p>打开后，伙伴头像在左边，你的头像在右边。</p>
           </div>
           <button class="switch" id="msg-avatars-switch" type="button" role="switch" aria-checked="false">
-            <span class="track"><span></span></span><span class="switch-label">不显示</span>
-          </button>
-        </article>
-        <article class="setting-card compact">
-          <div class="setting-copy">
-            <h3>修整伙伴回复</h3>
-            <p>打开后，悬停在伙伴气泡上可以重新生成、调整或删除最新一轮回复。默认关闭，不影响平常聊天。</p>
-          </div>
-          <button class="switch" id="msg-refine-switch" type="button" role="switch" aria-checked="false">
             <span class="track"><span></span></span><span class="switch-label">不显示</span>
           </button>
         </article>
@@ -248,7 +336,10 @@
 
     <section id="panel-image" role="tabpanel" aria-labelledby="tab-image" tabindex="0" hidden>
       <div class="section-head">
-        <div><h2>生图</h2><p>茶话会自己的一条生图通路。用的就是你 Hana 里已经登录的那个账号，不用为它另买一份额度。</p></div>
+        <div><h2>照片与表情</h2><p>聊天照片出多少、要不要先自查；表情怎么找灵感、怎么记住用法。生图走的是你 Hana 里已经登录的那个账号，不用为它另买一份额度。</p></div>
+      </div>
+      <div class="section-head roomy">
+        <div><h2>照片与生图</h2><p>照片的额度、自查和备稿。</p></div>
       </div>
       <article class="setting-card">
         <div class="setting-copy"><h3>聊天照片的每日总上限</h3><p>所有伙伴一起用的额度。默认关闭；打开后还需在具体伙伴里选择档位。</p></div>
@@ -298,11 +389,21 @@
           <button class="switch" id="background-share-switch" type="button" role="switch" aria-checked="false">
             <span class="track"><span></span></span><span class="switch-label">关闭</span>
           </button>
-          <small class="detail-field-note" id="background-share-note">每位伙伴最多留 6 件未发草稿，照片和自制表情共用；发出后可以补新的。备出来的稿子只在 ta 自己想说的时候才发，不会硬塞给你，也不会进共享图库。自制表情可以从你们聊过的表情里找灵感。</small>
+          <small class="detail-field-note" id="background-share-note">每位伙伴最多留 6 件未发草稿，照片和自制表情共用；发出后可以补新的。备出来的稿子只在 ta 自己想说的时候才发，不会硬塞给你，也不会进共享图库。自制表情可以从你们聊过的表情里找灵感，见下面「表情」一节。</small>
+        </div>
+      </article>
+      <div class="section-head roomy">
+        <div><h2>表情</h2><p>从聊天表情找灵感、把纠正过的用法告诉图库。</p></div>
+      </div>
+      <article class="setting-card" id="sticker-inspiration-card">
+        <div class="setting-copy">
+          <h3>从聊天表情找灵感</h3>
+          <p>开启后，伙伴自己挑本对话里你发过、茶话会本地可读的表情。挑中的图才会送到已配置的生图服务作为动作参考，普通聊天照片不会自动参与。</p>
+        </div>
+        <div class="detail-field">
           <button class="switch" id="sticker-inspiration-switch" type="button" role="switch" aria-label="从聊天表情找灵感" aria-checked="false">
             <span class="track"><span></span></span><span class="switch-label">关闭</span>
           </button>
-          <small class="detail-field-note">从聊天表情找灵感：开启后，伙伴自己挑本对话里你发过、茶话会本地可读的表情。挑中的图才会送到已配置的生图服务作为动作参考，普通聊天照片不会自动参与。</small>
         </div>
       </article>
       <article class="setting-card" id="sticker-usage-sync-card">
@@ -317,6 +418,15 @@
           <small class="detail-field-note">只同步共享图库里的表情，而且要说得清是哪一张、什么用法；普通照片和你本地独有的图不推。你说「只留这里」「不要同步」就不推。同步失败不影响聊天：这条纠正本地照样记得，手动同步的入口也还在。</small>
         </div>
       </article>
+    </section>
+
+    <section id="panel-immersion" role="tabpanel" aria-labelledby="tab-immersion" tabindex="0" hidden>
+      <div class="section-head">
+        <div><h2>沉浸感</h2><p>让伙伴多知道一点你这边今天的事。装了对应的插件才有这一项。</p></div>
+      </div>
+      <div class="section-head roomy">
+        <div><h2>城市</h2><p>伙伴待在哪座城市、要不要知道点你那边的日常。</p></div>
+      </div>
       <article class="setting-card" id="life-city-card">
         <div class="setting-copy">
           <h3>生活城市</h3>
@@ -354,11 +464,8 @@
           <small class="detail-field-note" id="life-city-street-note">这类素材很少，很多城市一张都找不到。找不到就不发——不会拿编出来的街景充数。</small>
         </div>
       </article>
-    </section>
-
-    <section id="panel-immersion" role="tabpanel" aria-labelledby="tab-immersion" tabindex="0" hidden>
-      <div class="section-head">
-        <div><h2>沉浸感</h2><p>让伙伴多知道一点你这边今天的事。装了对应的插件才有这一项。</p></div>
+      <div class="section-head roomy">
+        <div><h2>天气与日常感知</h2><p>天气、今天的日子、你和伙伴最近在做的事。</p></div>
       </div>
       <div class="switch-grid">
         <article class="setting-card compact">
@@ -490,13 +597,6 @@
         <div class="detail-actions"><button class="soft-button" id="global-vision-test" type="button">测试识图</button></div>
         <small class="detail-field-note" id="global-vision-note"></small>
       </article>
-      <article class="setting-card">
-        <div class="card-title"><div><h3>图片存储</h3><p>她发过来的图存在本机。留多久你定；到期的不会自己消失，你按一下才清。旁白里还会单列一类「已不在聊天记录里」的：聊天账每本只存两千条，老消息被挤出去之后，图还占着地方但已经没人在用它。删的都是原图本体，聊天里那段话照旧在。</p></div></div>
-        <div class="detail-field" id="global-image-retention-host"></div>
-        <small class="detail-field-note" id="global-image-storage-note"></small>
-        <div class="detail-actions"><button class="soft-button" id="global-image-cleanup" type="button">清理过期图片</button></div>
-        <small class="detail-field-note" id="global-image-cleanup-note"></small>
-      </article>
     </section>
 
     <section id="panel-usage" role="tabpanel" aria-labelledby="tab-usage" tabindex="0" hidden>
@@ -527,6 +627,16 @@
       <article class="setting-card">
         <div class="card-title"><div><h3>最近的请求</h3><p>最近六次是怎么花的。</p></div></div>
         <div class="usage-rows" id="usage-recent"></div>
+      </article>
+      <div class="section-head roomy">
+        <div><h2>图片与留存</h2><p>她发过来的图存在本机，留多久你定。</p></div>
+      </div>
+      <article class="setting-card">
+        <div class="card-title"><div><h3>图片存储</h3><p>她发过来的图存在本机。留多久你定；到期的不会自己消失，你按一下才清。旁白里还会单列一类「已不在聊天记录里」的：聊天账每本只存两千条，老消息被挤出去之后，图还占着地方但已经没人在用它。删的都是原图本体，聊天里那段话照旧在。</p></div></div>
+        <div class="detail-field" id="global-image-retention-host"></div>
+        <small class="detail-field-note" id="global-image-storage-note"></small>
+        <div class="detail-actions"><button class="soft-button" id="global-image-cleanup" type="button">清理过期图片</button></div>
+        <small class="detail-field-note" id="global-image-cleanup-note"></small>
       </article>
     </section>
 
@@ -629,6 +739,18 @@
         <button class="soft-button" id="new-local-entry" type="button">新增茶话会角色</button>
         <button class="soft-button" id="removed-entry" type="button" hidden>已移出的伙伴</button>
       </div>
+      <div class="section-head roomy">
+        <div><h2>伙伴表达</h2><p>伙伴的回复长什么样、能不能改。整屋只这一处，改了对所有伙伴都算数。</p></div>
+      </div>
+      <article class="setting-card compact">
+        <div class="setting-copy">
+          <h3>修整伙伴回复</h3>
+          <p>打开后，悬停在伙伴气泡上可以重新生成、调整或删除最新一轮回复。默认关闭，不影响平常聊天。</p>
+        </div>
+        <button class="switch" id="msg-refine-switch" type="button" role="switch" aria-checked="false">
+          <span class="track"><span></span></span><span class="switch-label">不显示</span>
+        </button>
+      </article>
       <div class="partner-grid" id="partner-list"></div>
       <div id="partner-body"></div>
     </section>
@@ -780,7 +902,7 @@
     import { hana as localHana } from "./assets/sdk.js";
     import { PROFILES, DEFAULT_PROFILE_ID, ensureAudio, normalizeSettings, play as playMessageSound } from "./assets/message-sound.js";
     import { mountMobileSettings } from "./assets/mobile-settings.js";
-    import { mountPartnerImageSettings } from "./assets/image-settings.js?v=20261110.3";
+    import { mountPartnerImageSettings } from "./assets/image-settings.js?v=20261124.1";
 
     // 嵌在聊天卡里时复用外层宿主桥；单独打开时仍保留原来的 SDK 兜底。
     const hana = window.parent !== window && window.parent.__chahuahuiHana ? window.parent.__chahuahuiHana : localHana;
@@ -798,7 +920,7 @@
 
     // 这一页自己的版本号：后端读同一个文件里的这一行，两边对不上就说明她眼前是旧的。
     // （以前用文件哈希当戳，但那个值是后端给的，页面旧了它照样显示新值，等于没测。）
-    const UI_BUILD = "20261110.3";
+    const UI_BUILD = "20261124.1";
 
     const el = {
       status: document.getElementById("status"),
@@ -932,8 +1054,18 @@
       mobile: "在同一个 Wi-Fi 下用手机接着聊。默认关着，密码只在这台电脑上看得到。",
     };
 
+    // 设置目录：九类摆成一张手帐索引卡，不另开侧栏。
+    // 面板编号、分类按钮的 id 与 data-tab 一处没改，老的跳转和入口照旧能用。
+    const indexNode = document.getElementById("settings-index");
+    const tabsNode = document.querySelector("nav.tabs");
+    const indexBack = document.getElementById("settings-index-back");
+
     function setTab(name) {
       if (name !== "proactive") stopVideoQr();
+      // 进了某一栏就把目录收起来：分类按钮这时才是「在哪一栏」的提示。
+      if (indexNode) indexNode.hidden = true;
+      if (tabsNode) tabsNode.hidden = false;
+      if (indexBack) indexBack.hidden = false;
       for (const [key, node] of Object.entries(el.panels)) node.hidden = key !== name;
       document.querySelectorAll(".tab").forEach((b) => {
         const active = b.dataset.tab === name;
@@ -946,6 +1078,40 @@
       if (name === "usage") void loadUsage();
       if (name === "mobile") void mobilePanel?.refresh();
     }
+
+    // ── 设置目录 ──
+    /** 回到目录：所有面板收起来，只留这一页索引。 */
+    function showIndex() {
+      if (!indexNode) return;
+      stopVideoQr();
+      for (const node of Object.values(el.panels)) node.hidden = true;
+      indexNode.hidden = false;
+      if (tabsNode) tabsNode.hidden = true;
+      if (indexBack) indexBack.hidden = true;
+      // 目录页没有「当前面板」，分类按钮就全都不亮。
+      document.querySelectorAll(".tab").forEach((b) => {
+        b.classList.remove("on");
+        b.setAttribute("aria-selected", "false");
+      });
+      el.sub.textContent = "九类设置摆在这儿，按平时改的顺序排。点一类进去，里面再按细项分。";
+    }
+
+    /** 打开某一栏，顺便滚到那一项；滚不到就只开栏。 */
+    function openSetting(tab, anchor) {
+      if (!tab || !el.panels[tab]) return;
+      setTab(tab);
+      if (!anchor) return;
+      const node = document.getElementById(anchor);
+      if (!node) return;
+      node.scrollIntoView({ block: "start" });
+    }
+
+    indexNode?.addEventListener("click", (event) => {
+      const link = event.target.closest(".index-link");
+      if (!link) return;
+      openSetting(link.dataset.tabTarget, link.dataset.anchor || "");
+    });
+    indexBack?.addEventListener("click", () => showIndex());
 
     // ── 用量那一页 ──
     // 只读宿主账本：拿不到就说拿不到，不把空白画成一排零。
@@ -1546,18 +1712,24 @@
       button.classList.toggle("on", on);
       button.setAttribute("aria-checked", String(on));
       button.querySelector(".switch-label").textContent = on ? "打开" : "关闭";
+      const hint = document.getElementById("background-share-hint");
+      if (hint) hint.hidden = globalSettings.imageReviewEnabled === true;
+    }
+
+    /** 从聊天表情找灵感：默认关；它跟备稿不是一回事，单独画。 */
+    function paintStickerInspiration() {
       const inspiration = document.getElementById("sticker-inspiration-switch");
+      if (!inspiration) return;
       const active = globalSettings.stickerInspirationEnabled === true;
       inspiration.classList.toggle("on", active);
       inspiration.setAttribute("aria-checked", String(active));
       inspiration.querySelector(".switch-label").textContent = active ? "打开" : "关闭";
-      const hint = document.getElementById("background-share-hint");
-      if (hint) hint.hidden = globalSettings.imageReviewEnabled === true;
     }
 
     function paintImageModel() {
       paintImageReview();
       paintBackgroundShare();
+      paintStickerInspiration();
       const tierHost = document.getElementById("image-global-tier");
       if (tierHost) choiceGroup(tierHost, [["off", "关闭"], ["less", "少一些"], ["normal", "适中"], ["more", "多一些"]], globalSettings.imageTier || "off", async value => {
         for (const button of tierHost.querySelectorAll("button")) button.disabled = true;
@@ -2975,7 +3147,7 @@
     });
     document.getElementById("sticker-inspiration-switch").addEventListener("click", async () => {
       const next = globalSettings.stickerInspirationEnabled !== true;
-      if (await saveGlobal({ stickerInspirationEnabled: next }, next ? "已开启聊天表情灵感" : "已关闭聊天表情灵感")) paintBackgroundShare();
+      if (await saveGlobal({ stickerInspirationEnabled: next }, next ? "已开启聊天表情灵感" : "已关闭聊天表情灵感")) paintStickerInspiration();
     });
     document.getElementById("sticker-usage-sync-switch").addEventListener("click", async () => {
       const next = globalSettings.stickerUsageSyncEnabled !== true;
@@ -5616,6 +5788,8 @@
     async function boot() {
       try {
         hana.ready?.({ ok: true });
+        // 先摆目录：进来第一眼是九类索引，进去以后还是原来那些面板。
+        showIndex();
         // 地区三个下拉也套手帐风的外壳（原生 select 只留值和事件）。
         dressSelects(document);
         await reloadSettings();
