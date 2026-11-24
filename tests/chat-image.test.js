@@ -132,6 +132,20 @@ test("跨伙伴共用总额度，预占在await前同步生效", t => {
   partners.two.imageTier = "off";
   assert.equal(quota.available("two"), false);
 });
+test("多一些档每位伙伴 8 次，所有伙伴合计 32 次", t => {
+  const { quota, partners } = setup(t, "more", "more");
+  for (const id of ["one", "two", "three", "four", "five"]) partners[id] = { imageTier: "more" };
+  for (const id of ["one", "two", "three", "four"]) {
+    for (let i = 0; i < 8; i++) {
+      const reservation = quota.reserve(id);
+      assert.ok(reservation);
+      quota.settle(reservation, "success");
+    }
+    assert.equal(quota.reserve(id), null);
+  }
+  assert.equal(quota.usage("five").globalUsed, 32);
+  assert.equal(quota.reserve("five"), null);
+});
 test("明确失败释放，成功和未知不能重试绕过限额，重启仍占位", t => {
   const { quota, dir, options } = setup(t);
   const first = quota.reserve("one"); quota.settle(first, "failed");
