@@ -1809,6 +1809,7 @@
     async function stickerBubble(row, line, stickerId) {
       const img = document.createElement("img");
       img.className = "sticker loading";
+      img.dataset.chatSticker = stickerId;
       img.alt = "表情包";
       // 插在最前面：图在前、时间在后，她那边的 row-reverse 才会把时间甩到左边去
       line.prepend(img);
@@ -3301,6 +3302,38 @@
     });
     el.stream.addEventListener("contextmenu", (event) => {
       if (event.defaultPrevented) return;
+      const sticker = event.target.closest?.("img.sticker[data-chat-sticker]");
+      if (sticker) {
+        event.preventDefault();
+        const agentId = current;
+        const stickerId = sticker.dataset.chatSticker;
+        imageCollectMenu.replaceChildren(stickerMenuButton("同步纠正到表情包", async () => {
+          closeImageCollectMenu();
+          try {
+            const preview = await api("POST", "library/sticker-correction", { agentId, stickerId });
+            if (current !== agentId || !preview?.meaning) return;
+            const title = document.createElement("div");
+            title.className = "sticker-menu-title";
+            title.textContent = preview.meaning;
+            imageCollectMenu.replaceChildren(title,
+              stickerMenuButton("确认同步这张", async () => {
+                closeImageCollectMenu();
+                if (current !== agentId) return;
+                try {
+                  await api("POST", "library/sticker-correction", { agentId, stickerId, expectedMeaning: preview.meaning });
+                  setStatus("这张表情的用法已同步");
+                } catch (error) { setStatus(`没同步：${error.message}`); }
+              }),
+              stickerMenuButton("取消", closeImageCollectMenu),
+            );
+            imageCollectMenu.hidden = false;
+            placeImageCollectMenu(event);
+          } catch (error) { setStatus(`没同步：${error.message}`); }
+        }));
+        imageCollectMenu.hidden = false;
+        placeImageCollectMenu(event);
+        return;
+      }
       // 图片优先：图和它所在的那一行都能触发右键，先认图才不会被行的菜单抢走。
       const img = event.target.closest?.("img.message-image");
       if (img) { openImageCollectMenu(event, img); return; }

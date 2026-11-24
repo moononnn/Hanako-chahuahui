@@ -12021,6 +12021,28 @@ export function apply(ctx) {
 
       // 「允许作为表情动作参考」：她按一下就算授权，可以撤回。
       // 只认这位伙伴自己的附件：本地读得到、属主对得上，才谈得上授权；不接 URL，不跨 App 扫。
+      app.post("/library/sticker-correction", async (c) => {
+        try {
+          const { agentId, stickerId, expectedMeaning } = await c.req.json();
+          if (!isValidPartnerId(agentId) || typeof stickerId !== "string" || !/^[\w-]{1,120}$/u.test(stickerId)) {
+            return c.json({ ok: false, error: { message: "表情参数不合法" } }, 400);
+          }
+          const index = await readCatalog(ctx);
+          const catalog = index ? buildCatalog(index, agentId) : null;
+          const id = readStickerLibrary(ctx.dataDir).stickers.find(row => row.id === stickerId)?.sourceId || stickerId;
+          const learned = learnedStickerCatalog(agentId, catalog);
+          const meaning = learned?.byId.has(id) ? store.readMemory(agentId).stickerCorrections.find(row => row.id === id)?.meaning : undefined;
+          if (!meaning) return c.json({ ok: false, error: { message: "这张共享表情没有可同步的纠正" } }, 404);
+          if (expectedMeaning === undefined) return c.json({ ok: true, meaning });
+          if (expectedMeaning !== meaning) return c.json({ ok: false, error: { message: "用法已变化，请重新确认" } }, 409);
+          const result = await ctx.bus.request("app:biaoqingbao-app/sticker/adopt-usage", { stickerId: id, meaning }, { timeout: 10_000 });
+          if (result?.ok !== true) return c.json({ ok: false, error: { message: result?.error || "表情包应用没有确认采纳" } }, 502);
+          return c.json({ ok: true });
+        } catch (error) {
+          return c.json({ ok: false, error: { message: describeError(error) } }, 502);
+        }
+      });
+
       app.get("/library/reference-use/:agentId/:attachmentId", (c) => {
         const agentId = String(c.req.param("agentId") ?? "").trim();
         const attachmentId = String(c.req.param("attachmentId") ?? "").trim();
