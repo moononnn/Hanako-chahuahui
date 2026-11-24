@@ -125,6 +125,16 @@ body.slot-embedded .slot-band-title {
   line-height: 1.5;
 }
 
+/* 设置打开时，只给外沿露出的聊天加一层磨砂，不滤设置本身。 */
+.shell:has(> .settings-view:not([hidden]))::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 39;
+  border-radius: inherit;
+  background: rgba(247, 244, 236, .78);
+  backdrop-filter: blur(9px);
+}
 /* 设置从聊天页打开，仍留在同一张茶话会卡里；iframe 只复用现有设置页，不另造一套表单。 */
 .settings-view {
   position: absolute;

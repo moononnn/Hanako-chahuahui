@@ -72,11 +72,19 @@ test('目录只是导航：老入口、setTab 副作用和面板懒加载都还�
   assert.match(settings, /indexNode\.hidden = true;/);
   assert.match(settings, /indexBack\.addEventListener\("click", showIndex\)/);
   assert.match(settings, /showIndex\(\);/, '打开设置先落在目录上');
-  assert.match(settings, /const UI_BUILD = "20261124\.2"/, '设置页版本戳要升，页面旧了才看得出来');
+  assert.match(settings, /const UI_BUILD = "20261124\.3"/, '设置页版本戳要升，页面旧了才看得出来');
 });
 
 test('目录在窄窗仍是单列整行，子页不摆分类条', () => {
   assert.match(settingsCss, /\.index-list \{[^}]*display: grid;/s);
   assert.match(settingsCss, /\.index-list \.index-link \{[^}]*width: 100%;[^}]*min-height: 44px;/s);
   assert.doesNotMatch(settings, /<nav class="tabs"/);
+  assert.equal([...settings.matchAll(/class="index-icon"[^>]*aria-hidden="true"/g)].length, 9);
+  assert.match(settingsCss, /\.index-list \.index-link \{[^}]*font-weight: 400;/s);
+});
+
+test('磨砂只在设置打开时出现，且位于设置面板下方', () => {
+  const panelCss = fs.readFileSync(new URL('../ui/assets/panel.css', import.meta.url), 'utf8');
+  assert.match(panelCss, /\.shell:has\(> \.settings-view:not\(\[hidden\]\)\)::after \{[^}]*inset: 0;[^}]*z-index: 39;[^}]*backdrop-filter: blur\(/s);
+  assert.match(panelCss, /\.settings-view \{[^}]*z-index: 40;/s);
 });

@@ -74,25 +74,25 @@
       <section class="index-group">
         <h2>聊天体验</h2>
         <div class="index-list">
-          <button class="index-link" type="button" data-tab-target="chat"><span>外观与称呼</span><span class="index-arrow" aria-hidden="true"></span></button>
-          <button class="index-link" type="button" data-tab-target="sound"><span>提示音与语音</span><span class="index-arrow" aria-hidden="true"></span></button>
+          <button class="index-link" type="button" data-tab-target="chat"><svg class="index-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 20h16M7 16l8-12 3 2-8 12-4 1z"/></svg><span>外观与称呼</span><span class="index-arrow" aria-hidden="true"></span></button>
+          <button class="index-link" type="button" data-tab-target="sound"><svg class="index-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 9h4l5-4v14l-5-4H4z M16 9a4 4 0 0 1 0 6m2-8a7 7 0 0 1 0 10"/></svg><span>提示音与语音</span><span class="index-arrow" aria-hidden="true"></span></button>
         </div>
       </section>
       <section class="index-group">
         <h2>伙伴与日常</h2>
         <div class="index-list">
-          <button class="index-link" type="button" data-tab-target="partners"><span>伙伴设置</span><span class="index-arrow" aria-hidden="true"></span></button>
-          <button class="index-link" type="button" data-tab-target="proactive"><span>主动联系</span><span class="index-arrow" aria-hidden="true"></span></button>
-          <button class="index-link" type="button" data-tab-target="immersion"><span>城市与天气</span><span class="index-arrow" aria-hidden="true"></span></button>
-          <button class="index-link" type="button" data-tab-target="image"><span>照片与表情</span><span class="index-arrow" aria-hidden="true"></span></button>
+          <button class="index-link" type="button" data-tab-target="partners"><svg class="index-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="8" r="3"/><path d="M5 20v-2a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v2"/></svg><span>伙伴设置</span><span class="index-arrow" aria-hidden="true"></span></button>
+          <button class="index-link" type="button" data-tab-target="proactive"><svg class="index-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16v12H9l-5 4z M8 10h8m-8 3h5"/></svg><span>主动联系</span><span class="index-arrow" aria-hidden="true"></span></button>
+          <button class="index-link" type="button" data-tab-target="immersion"><svg class="index-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 18h11a3 3 0 1 0-.6-5.9 5 5 0 0 0-9.5.5A3 3 0 1 0 7 18z M5 9a3 3 0 0 1 5-3"/></svg><span>城市与天气</span><span class="index-arrow" aria-hidden="true"></span></button>
+          <button class="index-link" type="button" data-tab-target="image"><svg class="index-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="9" cy="9" r="1.5"/><path d="m5 17 4-4 3 3 3-4 4 5"/></svg><span>照片与表情</span><span class="index-arrow" aria-hidden="true"></span></button>
         </div>
       </section>
       <section class="index-group">
         <h2>应用管理</h2>
         <div class="index-list">
-          <button class="index-link" type="button" data-tab-target="model"><span>模型与搜索</span><span class="index-arrow" aria-hidden="true"></span></button>
-          <button class="index-link" type="button" data-tab-target="usage"><span>存储与用量</span><span class="index-arrow" aria-hidden="true"></span></button>
-          <button class="index-link" type="button" data-tab-target="mobile"><span>手机连接</span><span class="index-arrow" aria-hidden="true"></span></button>
+          <button class="index-link" type="button" data-tab-target="model"><svg class="index-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 5 5 M8 10.5h5m-2.5-2.5v5"/></svg><span>模型与搜索</span><span class="index-arrow" aria-hidden="true"></span></button>
+          <button class="index-link" type="button" data-tab-target="usage"><svg class="index-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M7 15h2m2 0v-3m3 3V9m3 6v-4"/></svg><span>存储与用量</span><span class="index-arrow" aria-hidden="true"></span></button>
+          <button class="index-link" type="button" data-tab-target="mobile"><svg class="index-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="7" y="3" width="10" height="18" rx="2"/><path d="M11 18h2"/></svg><span>手机连接</span><span class="index-arrow" aria-hidden="true"></span></button>
         </div>
       </section>
     </section>
@@ -803,7 +803,7 @@
     import { hana as localHana } from "./assets/sdk.js";
     import { PROFILES, DEFAULT_PROFILE_ID, ensureAudio, normalizeSettings, play as playMessageSound } from "./assets/message-sound.js";
     import { mountMobileSettings } from "./assets/mobile-settings.js";
-    import { mountPartnerImageSettings } from "./assets/image-settings.js?v=20261124.2";
+    import { mountPartnerImageSettings } from "./assets/image-settings.js?v=20261124.3";
 
     // 嵌在聊天卡里时复用外层宿主桥；单独打开时仍保留原来的 SDK 兜底。
     const hana = window.parent !== window && window.parent.__chahuahuiHana ? window.parent.__chahuahuiHana : localHana;
@@ -821,7 +821,7 @@
 
     // 这一页自己的版本号：后端读同一个文件里的这一行，两边对不上就说明她眼前是旧的。
     // （以前用文件哈希当戳，但那个值是后端给的，页面旧了它照样显示新值，等于没测。）
-    const UI_BUILD = "20261124.2";
+    const UI_BUILD = "20261124.3";
 
     const el = {
       status: document.getElementById("status"),
