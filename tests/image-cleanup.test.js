@@ -27,10 +27,12 @@ test("清理是纯本地活：不调任何模型、不分批、也不会跑过�
 });
 
 test("孤儿要跟着一起清：没有消息认领的图不等到期", () => {
-  assert.match(app, /planCleanup\(listAttachmentMetas\(\), \{ days, referencedIds: store\.referencedAttachmentIds\(\) \}, now\)/);
+  assert.match(app, /planCleanup\(listAttachmentMetas\(\), \{ days, referencedIds: pendingShareAttachmentIds\(store\) \}, now\)/);
   assert.match(app, /orphanCount: plan\.orphanCount/);
   // 引用名单从聊天账里现数，不在附件元数据里另存一份（那份迟早会忘）。
   assert.match(app, /referencedAttachmentIds\(\)/);
+  // 待分享的稿子还没发过、没有消息认领：清理时也得护住，不然队列里只剩一张空壳。
+  assert.match(app, /storeRef\.listPendingShares/);
 });
 
 test("两个文件成对处理：只删 .bin 会让占用报假，只删 .json 会留下永久孤儿", () => {

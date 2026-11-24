@@ -494,9 +494,24 @@ import {
   listHostImageProviders,
   mimeOfImageBytes,
 } from "./lib/host-image.js";
-import { normalizeImageTier, chatImagePrompt, parseChatImage, pickPhotoShare, pickPhotoOpportunity, pickReasonPhoto, pickPhotoFallback, PHOTO_FALLBACK_SCENES, hasImagePromise, photoSharePrompt, streetViewPhotoPrompt, shouldDegradePhotoShare, photoShareBlockers, imageSceneExclusions } from "./lib/chat-image.js";
+import { normalizeImageTier, chatImagePrompt, parseChatImage, pickPhotoShare, pickPhotoOpportunity, pickReasonPhoto, hasImagePromise, photoSharePrompt, streetViewPhotoPrompt, shouldDegradePhotoShare, photoShareBlockers, imageSceneExclusions } from "./lib/chat-image.js";
 import { createImageQuota } from "./lib/image-quota.js";
 import { imageReviewPrompt, parseImageReviewVerdict, shouldRepaintAfterReview } from "./lib/image-review.js";
+import {
+  PENDING_SHARE_BACKOFF_MS,
+  PENDING_SHARE_CAP,
+  PENDING_SHARE_FILL_GAP_MS,
+  dropStalePendingShares,
+  formatPendingShareCandidates,
+  pendingSharePrompt,
+  pickPendingShareSource,
+  stickerDraftPrompt,
+} from "./lib/pending-shares.js";
+import {
+  normalizeReferenceUse,
+  pickReferenceUseSources,
+  referenceUseAllowed,
+} from "./lib/image-reference-use.js";
 import { createImageReferences } from "./lib/image-reference.js";
 import { registerImageReferenceRoutes } from "./lib/image-reference-routes.js";
 import { createStreetViewLibrary, STREET_VIEW_CHANCE, STREET_VIEW_COOLDOWN_MS } from "./lib/street-view.js";
@@ -1237,7 +1252,7 @@ export function apply(ctx) {
     // 图片留多久：30 / 45 / 60 / 90 天，或 0 = 永久不删。
     "imageRetentionDays",
     // 生图：一条自己的模型配置（含加密后的 Key），和朗读那条各走各的。
-    "imageModel", "imageTier", "imageReviewEnabled",
+    "imageModel", "imageTier", "imageReviewEnabled", "backgroundSharePrepEnabled",
     // 生活城市：跟天气各算各的。城市她自己填；真实街景另有一个明确的授权开关。
     "lifeCity", "lifeCityCode", "lifeCityStreetView", "lifeCityDiscoveries", "lifeCityIllustrations",
   ]);
@@ -1259,6 +1274,8 @@ export function apply(ctx) {
     if (Object.prototype.hasOwnProperty.call(patch, "imageTier")) patch.imageTier = normalizeImageTier(patch.imageTier);
     // 生图二次检查：独立开关，只认真布尔，默认关。
     if (Object.prototype.hasOwnProperty.call(patch, "imageReviewEnabled")) patch.imageReviewEnabled = patch.imageReviewEnabled === true;
+    // 后台备稿：独立开关，只认真布尔，默认关。
+    if (Object.prototype.hasOwnProperty.call(patch, "backgroundSharePrepEnabled")) patch.backgroundSharePrepEnabled = patch.backgroundSharePrepEnabled === true;
     if (Object.prototype.hasOwnProperty.call(patch, "myActionTail")) {
       patch.myAction = { text: actionTemplateFromTail(patch.myActionTail) };
       delete patch.myActionTail;
@@ -1791,7 +1808,7 @@ export function apply(ctx) {
   function purgeExpiredImages(now = Date.now()) {
     const days = store.getGlobalSettings().imageRetentionDays;
     if (!days) return { removed: 0, bytes: 0, skipped: 0, orphanCount: 0, expiredCount: 0, keepsForever: true };
-    const plan = planCleanup(listAttachmentMetas(), { days, referencedIds: store.referencedAttachmentIds() }, now);
+    const plan = planCleanup(listAttachmentMetas(), { days, referencedIds: pendingShareAttachmentIds(store) }, now);
     let removed = 0;
     let bytes = 0;
     let skipped = 0;
@@ -2004,6 +2021,40 @@ export function apply(ctx) {
     } catch { return null; }
   }
 
+  /** 「允许作为表情动作参考」的标记写回元数据。独立于收藏：两个标记各管各的。 */
+  function writeReferenceUseMeta(agentId, id, allowed) {
+    const safeId = String(id).replace(/[^a-zA-Z0-9_-]/g, "_");
+    const metaPath = path.join(attachmentsDir, `${safeId}.json`);
+    try {
+      const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+      // 属主不符不写：不能把别人的图授权给自己用。
+      if (String(meta.agentId ?? "") !== String(agentId ?? "")) return null;
+      const next = { ...meta, referenceUse: { allowed: allowed === true, at: allowed === true ? new Date().toISOString() : null } };
+      writeJsonAtomic(metaPath, next);
+      return next;
+    } catch { return null; }
+  }
+
+  /** 这张图是不是还没发出去的私藏稿子（待分享队列里的）。 */
+  function isPendingShareDraft(agentId, id) {
+    if (!id) return false;
+    try {
+      return ownAttachmentMeta(agentId, id)?.pendingDraft === true;
+    } catch { return true; }
+  }
+
+  /**
+   * 清理图片时得认下这些稿子。
+   *
+   * 待分享的稿子还没发过，没有消息认领它——不护住的话，会被当孤儿收走，
+   * 队列里就成了一张空壳。
+   */
+  function pendingShareAttachmentIds(storeRef = store) {
+    const ids = new Set(storeRef.referencedAttachmentIds());
+    for (const row of storeRef.listPendingShares?.() ?? []) ids.add(String(row.attachmentId ?? ""));
+    return ids;
+  }
+
   /** 谁发的这条消息：user 是她，assistant 是伙伴自己。查不到就说不知道。 */
   function roleOfRow(row) {
     const role = String(row?.role ?? "");
@@ -2169,6 +2220,22 @@ export function apply(ctx) {
     }
   }
 
+  /**
+   * 待分享稿子的源状态：她撤回了授权、或源话被撤回，当场作废。
+   *
+   * 只看这位伙伴自己的附件；没授权过的图不进这张表。
+   */
+  function pendingShareSourceStates(metas = [], messages = []) {
+    const states = {};
+    for (const meta of Array.isArray(metas) ? metas : []) {
+      if (!meta?.id) continue;
+      const allowed = referenceUseAllowed(meta);
+      const recalled = Boolean(imageSourceRecalled(meta, messages));
+      if (allowed || recalled) states[meta.id] = { allowed, recalled };
+    }
+    return states;
+  }
+
   /** 表情许可：与挑图那条路用同一套规矩，不能因为是旧图就绕过「别发表情」。 */
   function stickerPolicyFor(agentId, currentContext = {}) {
     const knowing = store.getKnowing(agentId);
@@ -2189,10 +2256,16 @@ export function apply(ctx) {
    * 属主、字节还在、没被撤回、在本伙伴历史或已收藏，四条都得过。
    * 当表情发的还必须是收作表情的那几张，且不违反她定下的表情许可。
    */
-  function prepareOldImage(agentId, request, { messages = [], playBook = [], allowRequestedOriginal = false } = {}) {
+  function prepareOldImage(agentId, request, { messages = [], playBook = [], allowRequestedOriginal = false, pendingIds = null } = {}) {
     if (!request) return { ok: false, reason: "none" };
     const id = String(request.id ?? "");
     const as = request.as === "sticker" ? "sticker" : "image";
+    // 待分享队列：id → 稿子种类（日常照还是自制表情）。种类对不上就不许换通道发。
+    const pendingKind = (() => {
+      if (!pendingIds) return "";
+      if (typeof pendingIds.get === "function") return String(pendingIds.get(id) ?? "");
+      return pendingIds.has?.(id) ? "photo" : "";
+    })();
     const meta = ownAttachmentMeta(agentId, id);
     if (!meta) return { ok: false, reason: "missing" };
     if (meta.collection?.recalledSource) return { ok: false, reason: "recalled" };
@@ -2222,13 +2295,15 @@ export function apply(ctx) {
     if (removed && !(as === "image" && explicitlyAsked)) return { ok: false, reason: "not-collected" };
     if (as === "sticker") {
       const inferred = playBook.some((entry) => entry.state !== "stopped" && entry.imageIds.includes(id));
-      if (!collected && !inferred) return { ok: false, reason: "not-collected" };
+      // 自制表情草稿：还没发过的，只能当表情发（as=sticker），不许当普通图挂出去。
+      if (!collected && !inferred && pendingKind !== "sticker") return { ok: false, reason: "not-collected" };
       const policy = stickerPolicyFor(agentId);
       if (policy.hardBlocked) return { ok: false, reason: "policy" };
       if (policy.restrictToSpecific && !policy.allowedIds.map(String).includes(id)) return { ok: false, reason: "policy" };
       if (policy.deniedIds.map(String).includes(id)) return { ok: false, reason: "policy" };
     } else if (!inHistory && !collected) {
-      return { ok: false, reason: "unknown" };
+      // 待分享队列里的稿子：还没发过，所以不在旧图候选里，但可以由这一轮取用。
+      if (!(as === "image" && pendingKind === "photo")) return { ok: false, reason: "unknown" };
     }
     // 同一张别连着刷：她明确要你再发一次，才可以再发同一张。
     if (!requestsResend(askText) && !(stopped && explicitlyAsked)) {
@@ -2270,7 +2345,7 @@ export function apply(ctx) {
       if (!name.endsWith(".json")) continue;
       try {
         const meta = JSON.parse(fs.readFileSync(path.join(attachmentsDir, name), "utf8"));
-        if (!isReusableAttachment(meta, { hash, agentId, mimeType })) continue;
+        if (meta.pendingDraft || !isReusableAttachment(meta, { hash, agentId, mimeType })) continue;
         // 元数据在、文件没了就不算命中：否则她会拿到一条点开是空白的记录。
         if (!fs.existsSync(attachmentPath(meta.id))) continue;
         return meta;
@@ -2326,7 +2401,7 @@ export function apply(ctx) {
     return false;
   }
 
-  function saveAttachment({ name, mimeType, data, agentId }) {
+  function saveAttachment({ name, mimeType, data, agentId, pendingDraft = false }) {
     const claimedType = String(mimeType ?? "").toLowerCase();
     if (!ATTACHMENT_TYPES.has(claimedType)) throw new Error("只支持 PNG、JPG、GIF 和 WebP 图片");
     const raw = String(data ?? "").replace(/^data:[^,]+,/, "");
@@ -2342,7 +2417,7 @@ export function apply(ctx) {
     // 同一份文件发第二遍：复用原件，只在消息里留一条新的时间。
     // 先查复用再查总量：复用的不占新空间，不能因为“满了”就把一个旧图发不出去。
     const hash = contentHash(bytes);
-    const existing = findAttachmentByHash(hash, agentId, cleanType);
+    const existing = pendingDraft ? null : findAttachmentByHash(hash, agentId, cleanType);
     if (existing) {
       const touched = touchAttachment(existing);
       return { ...touched, data: bytes, reused: true };
@@ -2357,7 +2432,7 @@ export function apply(ctx) {
     const binTemp = `${binPath}.tmp_${process.pid}_${Date.now()}`;
     const metaTemp = `${metaPath}.tmp_${process.pid}_${Date.now()}`;
     const now = new Date().toISOString();
-    const meta = { id: safeId, agentId: String(agentId ?? ""), name: String(name ?? "图片").trim().slice(0, 120) || "图片", mimeType: cleanType, size: bytes.length, at: now, hash, lastSeenAt: now, occurrences: 1 };
+    const meta = { id: safeId, agentId: String(agentId ?? ""), name: String(name ?? "图片").trim().slice(0, 120) || "图片", mimeType: cleanType, size: bytes.length, at: now, hash, lastSeenAt: now, occurrences: 1, ...(pendingDraft ? { pendingDraft: true } : {}) };
     try {
       fs.writeFileSync(binTemp, bytes);
       fs.renameSync(binTemp, binPath);
@@ -2397,12 +2472,23 @@ export function apply(ctx) {
   }
 
   /**
+   * 自制表情那一路：两张参考图各管一头。
+   *
+   * 第一张是她明确授权的动作参考（只取神态与动作），第二张是当前角色的参考照（只取外貌与画风）。
+   * 顺序不能反：反了就会把别人的神态安到 ta 自己脸上。
+   */
+  function stickerPromptPrefix() {
+    return "生成一张静态表情图（单张，不动不闪）。第一张参考图只管神态与动作：沿用它的表情、姿势和手部动作，不照搬它的人物身份、背景与画风。第二张参考图只管当前角色的外貌：保持脸、发型、眼睛、配饰与原本的画风。画面居中、干净、适合当表情用。不加文字水印，不加边框签名。";
+  }
+
+  /**
    * 给审图模型的构图意图：只有固定类别说明。
    *
    * 刻意不用模型写的那句画面描述：它可能夹着聊天里的细节，而审图走的是另一家供应商，
    * 那边不该拿到这些。普通图只按 self 分两种固定说法；城市插画与真实街景各用一条固定说明。
    */
-  function imageReviewIntent({ request, illustration = false, streetScene = null }) {
+  function imageReviewIntent({ request, illustration = false, streetScene = null, stickerScene = false }) {
+    if (stickerScene) return "一张静态表情图：角色做出参考图里的神态动作";
     if (streetScene) return "真实街景自拍：人物在前，已核过出处的真实街景在后";
     if (illustration) return "城市插画：按同城公开文字材料画的城市街景";
     return request?.self
@@ -2481,10 +2567,10 @@ export function apply(ctx) {
    * 返回 { bytes, stale }：bytes 为空表示这张不发（文字照发）；
    * stale 表示这一轮已经被取消或作废，整条作罢。
    */
-  async function reviewedImageBytes(agentId, { bytes, generationInput, stillValid, request, illustration = false, streetScene = null }) {
+  async function reviewedImageBytes(agentId, { bytes, generationInput, stillValid, request, illustration = false, streetScene = null, stickerScene = false }) {
     if (store.getGlobalSettings().imageReviewEnabled !== true) return { bytes, stale: false };
-    const intent = imageReviewIntent({ request, illustration, streetScene });
-    const kind = illustration ? "city-illustration" : streetScene ? "street" : "chat";
+    const intent = imageReviewIntent({ request, illustration, streetScene, stickerScene });
+    const kind = stickerScene ? "sticker" : illustration ? "city-illustration" : streetScene ? "street" : "chat";
     // 每次审图前都核一次这一轮还在不在：作废了就不审，也不发。
     if (!stillValid()) return { bytes: null, stale: true };
     const first = await reviewGeneratedImage(agentId, { bytes, mimeType: detectImageType(bytes), intent, kind });
@@ -2531,7 +2617,7 @@ export function apply(ctx) {
     }
   }
 
-  async function prepareChatImage(agentId, request, { stillCurrent = () => true, signal = null, street = null, illustration = null } = {}) {
+  async function prepareChatImage(agentId, request, { stillCurrent = () => true, signal = null, street = null, illustration = null, sticker = null, pendingDraft = false } = {}) {
     if (!request) return { attachment: null, fallback: "" };
     if (!stillCurrent() || signal?.aborted) return { attachment: null, stale: true };
     if (!imageQuota?.available(agentId)) return { attachment: null, fallback: "这会儿先不拍，陪你聊会儿。" };
@@ -2540,6 +2626,8 @@ export function apply(ctx) {
     catch { return { attachment: null, fallback: "参考照这会儿没能读到，先不拍自己。" }; }
     if (request.self && !reference) return { attachment: null, fallback: "还没定好我的参考照，这回先不拍自己。" };
     if (street && (!request.self || !street.path || !fs.existsSync(street.path))) return { attachment: null, stale: true };
+    // 自制表情：动作参考图与角色参考照都得在手上，缺一张就不画。
+    if (sticker && (!reference || !sticker.path || !fs.existsSync(sticker.path))) return { attachment: null, stale: true };
     // 城市插画两种都行：self=true 带且只带一张角色参考照，self=false 零参考图只画街景。
     // 二次检查开着、却没配好识图模型：先别画——画了也没人审，白花额度。
     if (store.getGlobalSettings().imageReviewEnabled === true && !imageReviewReady(agentId)) {
@@ -2559,7 +2647,9 @@ export function apply(ctx) {
     let settled = false;
     try {
       const choice = normalizeImageModelPatch(store.getGlobalSettings().imageModel);
-      const prefix = streetScene
+      const prefix = sticker
+        ? stickerPromptPrefix()
+        : streetScene
         ? streetScenePromptPrefix()
         : illustration
           ? cityIllustrationPrompt(illustration, { self: request.self })
@@ -2567,18 +2657,22 @@ export function apply(ctx) {
             ? "画面人物必须保持参考照中的同一角色、外貌特征和画风；按场景自然构图，可露脸、背影或局部，遵循画面描述，不因参考照强制露脸，不加文字水印。"
             : "只呈现下面的物件、食物或风景，不出现人物或陌生人的自拍。";
       // 参考图顺序：角色在前、已验证的真实街景在后。
-      const referencePaths = [
-        ...(reference ? [reference.path] : []),
-        ...(streetScene ? [streetScene.path] : []),
-      ];
+      // 自制表情例外：动作参考在前、角色参考在后（图一只管动作、图二只管角色）。
+      const referencePaths = sticker
+        ? [sticker.path, reference.path]
+        : [
+          ...(reference ? [reference.path] : []),
+          ...(streetScene ? [streetScene.path] : []),
+        ];
       const generationInput = {
-        prompt: streetScene || illustration ? prefix : [prefix, request.prompt].join("\n"),
+        prompt: sticker || streetScene || illustration ? prefix : [prefix, request.prompt].join("\n"),
         referencePaths, provider: choice.provider || undefined, model: choice.model || undefined,
       };
       const stillValid = () => stillCurrent() && !signal?.aborted
         && store.getGlobalSettings().imageTier !== "off" && store.getPartnerSettings(agentId).imageTier !== "off"
         && (!reference || imageReferences.view(agentId).currentId === reference.id)
-        && (!streetScene || fs.existsSync(streetScene.path));
+        && (!streetScene || fs.existsSync(streetScene.path))
+        && (!sticker || fs.existsSync(sticker.path));
       const result = await generateChatImage(ctx, generationInput, reservation, stillValid);
       // 成功就算一次，即便等待期间旧稿作废或附件写入失败。
       imageQuota.settle(reservation, "success");
@@ -2589,13 +2683,22 @@ export function apply(ctx) {
       if (!detectImageType(result.bytes)) throw new Error("生成结果不是可用图片");
       // 二次质量检查（2026-11-23）：查在落盘前——被判坏的图不留在这台机器上。
       const reviewed = await reviewedImageBytes(agentId, {
-        bytes: result.bytes, generationInput, stillValid, request, illustration, streetScene,
+        bytes: result.bytes, generationInput, stillValid, request, illustration, streetScene, stickerScene: Boolean(sticker),
       });
       if (reviewed.stale) return { attachment: null, stale: true };
       if (!reviewed.bytes) return { attachment: null, fallback: "这张暂时没发出来，先聊着。" };
-      const saved = saveAttachment({ name: illustration ? "城市插画" : "聊天照片", mimeType: detectImageType(reviewed.bytes), data: reviewed.bytes.toString("base64"), agentId });
+      const saved = saveAttachment({ name: sticker ? "自制表情" : illustration ? "城市插画" : "聊天照片", mimeType: detectImageType(reviewed.bytes), data: reviewed.bytes.toString("base64"), agentId, pendingDraft });
       const { data, ...attachment } = saved;
-      recordAttachmentDescription(attachment.id, { title: "伙伴分享的照片", description: request.prompt, via: "generated" });
+      recordAttachmentDescription(attachment.id, { title: sticker ? "伙伴自制表情" : "伙伴分享的照片", description: sticker ? stickerDraftPrompt() : request.prompt, via: "generated" });
+      // 自制表情的来路要留着：动作参考是哪张图，她什么时候授权的，都记在附件上。
+      if (sticker) {
+        recordAttachmentSource(attachment.id, {
+          kind: "self-made-sticker",
+          title: sticker.title ?? "",
+          url: sticker.url ?? "",
+          sourceAttachmentId: sticker.sourceAttachmentId ?? "",
+        });
+      }
       // 街景素材的来路要留着：这张图的背景是哪张真实街景、谁拍的、什么许可，都记在附件上。
       if (illustration) {
         recordAttachmentSource(attachment.id, {
@@ -4104,6 +4207,18 @@ export function apply(ctx) {
     const proactiveKeyword = keywordTokens(String([...store.getThread(agentId).messages].reverse().find((row) => row.role === "user")?.text ?? ""));
     const playContext = oldImageContext(agentId, { keyword: proactiveKeyword, learn: false });
     const oldImageText = playContext.text;
+    // 待分享队列：这位伙伴自己早先备好的稿子。身份或城市变了就不再给（旧稿对不上了）。
+    let currentReferenceId = "";
+    try { currentReferenceId = imageReferences.current(agentId)?.id ?? ""; } catch { currentReferenceId = ""; }
+    const pendingShares = dropStalePendingShares(store.getPendingShares(agentId), {
+      referenceId: currentReferenceId,
+      cityCode: String(store.getGlobalSettings().lifeCityCode ?? ""),
+      sourceStates: pendingShareSourceStates(playContext.metas, store.getThread(agentId).messages),
+    });
+    // 身份或城市变了：旧稿当场作废，不留在队列里。
+    if (pendingShares.length !== store.getPendingShares(agentId).length) store.savePendingShares(agentId, pendingShares);
+    const pendingShareIds = new Map(pendingShares.map((row) => [row.attachmentId, row.kind]));
+    const pendingShareText = formatPendingShareCandidates(pendingShares);
     // 照片依据真到模型手上：上下文里没有那两行，就把这段最近聊天明写进照片提示词。
     // 街景自拍换一套提示词：这一轮要的是「人在真实的街上拍的这张」。
     const streetView = photoShare?.source === "street" ? photoShare.street ?? null : null;
@@ -4125,7 +4240,7 @@ export function apply(ctx) {
           globalRef: store.getGlobalSettings().model, agentRef: await agentDefaultModel(agentId) });
         if ((shareableVideo || videoLoginNotice) && (!videoPartnerEnabled(agentId) || threadStamp(agentId) !== videoStamp || focusCompanion.active()
           || (shareableVideo && !videoQuota()))) return { ok: false, reason: "video-stale" };
-        const systemPrompt = withNamePlate([spec.systemPrompt, places, badgeHint, imagePromptText, photoShareText, oldImageText].filter(Boolean).join("\n\n"), partnerName);
+        const systemPrompt = withNamePlate([spec.systemPrompt, places, badgeHint, imagePromptText, photoShareText, oldImageText, pendingShareText].filter(Boolean).join("\n\n"), partnerName);
         const generate = async (prompt, userText, maxTokens, options = {}) => (await generateReply(ctx, {
           systemPrompt: prompt,
           messages: options.messages ?? [...proactiveMessages, { role: "user", content: userText }], diagnostics, maxTokens,
@@ -4157,12 +4272,12 @@ export function apply(ctx) {
     const oldImage = parseOldImageProtocol(extractSharedPlay(raw, playContext.book, [], []).text);
     const chatPhoto = parseChatImage(oldImage.text);
     // 旧图与生图撞上时旧图优先：只要出现过旧图标记（哪怕是坏的），这一轮就不生图。
-    let photoRequest = oldImage.status !== "none" ? null : chatPhoto.request;
+    const photoRequest = oldImage.status !== "none" ? null : chatPhoto.request;
     diagnostics({ event: "chat.image.parsed", agentId, source: "proactive", status: chatPhoto.status });
     diagnostics({ event: "chat.oldimage.parsed", agentId, source: "proactive", status: oldImage.status });
     // 旧图这一关先过：坏协议、发不出去的旧图，整轮安全收手——
     // 不改徽章、不出声、不落库，也不发空头配文。
-    const oldImagePrepared = prepareOldImage(agentId, oldImage.request, { messages: store.getThread(agentId).messages, playBook: playContext.book });
+    const oldImagePrepared = prepareOldImage(agentId, oldImage.request, { messages: store.getThread(agentId).messages, playBook: playContext.book, pendingIds: pendingShareIds });
     if (oldImage.status === "invalid" || (oldImage.request && !oldImagePrepared.ok)) {
       diagnostics({ event: "proactive.oldimage.rejected", agentId, status: oldImage.status, reason: oldImagePrepared.reason ?? "invalid-protocol" });
       return { ok: false, reason: "silent" };
@@ -4352,25 +4467,6 @@ export function apply(ctx) {
     };
     // 先过正文、去重和语义关再花额度。失败不投递空头配文，也不重试原生图请求。
     // 旧图与生图撞上时旧图优先：不真的生图。
-    // 漏标记兜底（2026-11-23）：候选已选中、文字关都过了，模型却只写自然文字、漏了标记。
-    // 只给 affection/contact 补一张固定无人物随手情景照，24 小时一次，同一条生图与额度通路；
-    // 放在所有文字关之后：被语义关拦下的轮次不白耗这次机会，固定场景也不进同画面去重。
-    if (!photoRequest && pickPhotoFallback({
-      enabled: imageEnabled,
-      scene: photoShare?.source === "scene",
-      marker: chatPhoto.status,
-      oldImage: oldImage.status,
-      text,
-      reasonKind: reason?.kind,
-      blocked: Boolean(exception || followup || wakeEcho || String(todoNudge ?? "").trim()
-        || shareableVideo || shareableNews || videoLoginNotice || greetingOnly),
-      lastAt: store.getProactiveState(agentId).photoFallback?.at ?? null,
-      now: Date.now(),
-    })) {
-      photoRequest = { prompt: PHOTO_FALLBACK_SCENES[reason.kind], self: false };
-      store.setProactiveState(agentId, { photoFallback: { at: new Date().toISOString(), kind: reason.kind } });
-      diagnostics({ event: "proactive.photo.fallback", agentId, kind: reason.kind });
-    }
     const preparedImage = await prepareChatImage(agentId, photoRequest, { stillCurrent: photoStillCurrent, street: streetView, illustration: cityIllustration });
     if (preparedImage.stale) return { ok: false, reason: "stale" };
     // 生图没成：已经写好的正文若本身就是完整一段、也没预告这张图，就当普通主动发出去；
@@ -4471,6 +4567,23 @@ export function apply(ctx) {
     if (!stored) {
       if (preparedImage.attachment) removeAttachment(preparedImage.attachment.id);
       return { ok: false, reason: "message-missing" };
+    }
+    // 待分享的稿子发出去了：它已经进了聊天记录，之后就当旧图复用，不再留在队列里。
+    if (oldImagePrepared.ok && pendingShareIds.has(oldImagePrepared.id)) {
+      const pendingKind = String(pendingShareIds.get(oldImagePrepared.id) ?? "");
+      const draftMeta = ownAttachmentMeta(agentId, oldImagePrepared.id);
+      if (draftMeta?.pendingDraft) {
+        writeJsonAtomic(path.join(attachmentsDir, `${draftMeta.id}.json`), { ...draftMeta, pendingDraft: false });
+      }
+      store.savePendingShares(agentId, store.getPendingShares(agentId).filter((row) => row.attachmentId !== oldImagePrepared.id));
+      // 自制表情发出去了：记成这位伙伴私藏的表情（只在本伙伴这儿，不进共享图库），之后可以再发。
+      if (pendingKind === "sticker") {
+        writeCollectionMeta(agentId, oldImagePrepared.id, {
+          sticker: true, origin: "self-made-sticker", at: new Date().toISOString(), sourceAt: Date.now(),
+          sourceMessageId: String(stored?.id ?? ""), sourceImageMessageId: "", sourceRole: "assistant",
+        });
+      }
+      diagnostics({ event: "pending-share.sent", agentId, attachmentId: oldImagePrepared.id, kind: pendingKind });
     }
     if (shareableVideo) {
       store.saveVideoBook(agentId, recordVideoShare(store.getVideoBook(agentId), shareableVideo, stored));
@@ -5932,6 +6045,23 @@ export function apply(ctx) {
       report.push({ agentId, action: "sent", topic: discovery?.focus ?? null, wakeEcho: Boolean(wakeEcho), exception: Boolean(gate.exception), kind: sendKind });
     }
 
+    // 后台备稿（默认关）放在一轮的最后：主动联系先走完，备稿再画。
+    // 生成一张图要几十秒，摆在前面会把 ta 想找她说话这件事拖住——先说话，后备稿。
+    // 一轮最多备一位伙伴的稿子：低频补货，不用一次叫一堆模型。
+    if (store.getGlobalSettings().backgroundSharePrepEnabled === true) {
+      for (const partner of partners) {
+        if (!isSettled(partner.id)) continue;
+        const prepared = await maybePreparePendingShare(partner.id, now).catch((error) => {
+          diagnostics({ event: "pending-share.failed", agentId: partner.id, error: describeError(error) });
+          return { prepared: 0, reason: "error" };
+        });
+        if (prepared.prepared > 0) {
+          diagnostics({ event: "pending-share.tick", agentId: partner.id, prepared: prepared.prepared, kind: prepared.kind ?? "" });
+          break;
+        }
+      }
+    }
+
     // 顺手把还没写过那句的伙伴补上（只有一个动作，一轮最多暖 3 位）。
     // 不抢她的时间，也不一上来叫一群模型。
     let warmLeft = 3;
@@ -6594,6 +6724,128 @@ export function apply(ctx) {
       diagnostics({ event: "news.fetch.failed", agentId, domain: domain.name, error: describeError(error) });
       return { fetched: false, reason: describeError(error) };
     }
+  }
+
+  /**
+   * 后台备稿（2026-11-23）。
+   *
+   * 走既有生图通路：同一份额度与审图，不另开预算、不绕过审图。
+   * 开关关着、审图不可用、库存没满、离上次补货不够久、失败还在退避里，就不备。
+   * 备出来的稿子放在这位伙伴自己的待分享队列里，等后面合适的轮次再取用。
+   */
+  async function maybePreparePendingShare(agentId, now = new Date()) {
+    const global = store.getGlobalSettings();
+    if (global.backgroundSharePrepEnabled !== true) return { prepared: 0, reason: "off" };
+    let referenceId = "";
+    try { referenceId = imageReferences.current(agentId)?.id ?? ""; } catch { referenceId = ""; }
+    const cityCode = String(global.lifeCityCode ?? "");
+    // 先清旧稿：身份、城市、授权变了就当场作废，不留在队列里。
+    // 这一步排在冷却与退避前面：该作废的稿子不能因为「刚备过」而多留一阵。
+    const metas = partnerAttachmentMetas(agentId);
+    const messages = store.getThread(agentId).messages;
+    const stored = store.getPendingShares(agentId);
+    const list = dropStalePendingShares(stored, { referenceId, cityCode, sourceStates: pendingShareSourceStates(metas, messages) });
+    if (list.length !== stored.length) store.savePendingShares(agentId, list);
+    if (list.length >= PENDING_SHARE_CAP) return { prepared: 0, reason: "full" };
+    // 审图不可用就不备：没人审的稿不算库存。
+    if (global.imageReviewEnabled !== true || !imageReviewReady(agentId)) return { prepared: 0, reason: "no-review" };
+    if (!chatImageServiceReady || imageQuota?.available(agentId) !== true) return { prepared: 0, reason: "no-quota" };
+    const state = store.getProactiveState(agentId);
+    const pendingState = state.pendingShares && typeof state.pendingShares === "object" ? state.pendingShares : {};
+    const filledAt = Date.parse(String(pendingState.lastFilledAt ?? "") || "") || 0;
+    if (filledAt && now.getTime() - filledAt < PENDING_SHARE_FILL_GAP_MS) return { prepared: 0, reason: "cooldown" };
+    const failedAt = Date.parse(String(pendingState.lastFailedAt ?? "") || "") || 0;
+    if (failedAt && now.getTime() - failedAt < PENDING_SHARE_BACKOFF_MS) return { prepared: 0, reason: "backoff" };
+    const city = normalizeLifeCity(global.lifeCity);
+    const source = pickPendingShareSource({
+      items: normalizeNewsBook(state.newsBook, now).items,
+      city,
+      usedTitles: list.map((row) => row.title),
+    });
+    // 自制表情：得有她明确授权过的动作参考图，还要有当前角色的参考照。两样缺一就不做。
+    const stickerSources = pickReferenceUseSources({ metas, agentId, hasBytes: (id) => fs.existsSync(attachmentPath(id)) });
+    const stickerCount = list.filter((row) => row.kind === "sticker").length;
+    const photoCount = list.filter((row) => row.kind === "photo").length;
+    const wantSticker = stickerCount <= photoCount && Boolean(referenceId) && stickerSources.length > 0;
+    // 没有出处就没有稿：宁可队列空着。
+    if (!wantSticker && !source) return { prepared: 0, reason: "no-source" };
+    const itemId = `pending_${now.getTime().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    const draftCurrent = () => {
+      const current = store.getGlobalSettings();
+      return current.backgroundSharePrepEnabled === true && current.imageReviewEnabled === true
+        && String(current.lifeCityCode ?? "") === cityCode && normalizeLifeCity(current.lifeCity) === city
+        && (imageReferences.current(agentId)?.id ?? "") === referenceId;
+    };
+    if (wantSticker) {
+      // 图一只管动作（她授权的那张），图二只管当前角色（参考照）。顺序不能反。
+      const action = stickerSources[0];
+      const prepared = await prepareChatImage(agentId, { prompt: stickerDraftPrompt(), self: true }, {
+        pendingDraft: true,
+        stillCurrent: () => draftCurrent() && normalizeReferenceUse(ownAttachmentMeta(agentId, action.id)?.referenceUse).allowed
+          && store.getThread(agentId).messages.some((row) => row.role === "user" && !row.recalled && row.attachment?.id === action.id),
+        sticker: { path: attachmentPath(action.id), sourceAttachmentId: action.id, title: action.title },
+      });
+      if (!prepared.attachment) {
+        store.setProactiveState(agentId, { pendingShares: { ...pendingState, lastFailedAt: now.toISOString() } });
+        diagnostics({ event: "pending-share.failed", agentId, kind: "sticker", reason: "generate" });
+        return { prepared: 0, reason: "generate-failed" };
+      }
+      const holder = messages.find((row) => String(row?.attachment?.id ?? "") === action.id && !row.recalled);
+      const item = {
+        id: itemId,
+        kind: "sticker",
+        attachmentId: prepared.attachment.id,
+        title: action.title ? `自制表情（照着「${action.title}」）` : "自制表情",
+        description: stickerDraftPrompt(),
+        sourceKind: "self-made-sticker",
+        sourceTitle: action.title,
+        sourceUrl: "",
+        city,
+        cityCode,
+        referenceId,
+        sourceAttachmentId: action.id,
+        sourceMessageId: String(holder?.id ?? ""),
+        self: true,
+        createdAt: now.toISOString(),
+      };
+      store.savePendingShares(agentId, [...store.getPendingShares(agentId), item]);
+      store.setProactiveState(agentId, { pendingShares: { ...pendingState, lastFilledAt: now.toISOString() } });
+      diagnostics({ event: "pending-share.prepared", agentId, kind: item.kind, sourceKind: item.sourceKind });
+      return { prepared: 1, reason: "ok" };
+    }
+    const self = Boolean(referenceId);
+    const illustration = source.sourceKind === "city-illustration"
+      ? { city, title: source.title, snippet: source.snippet, url: source.url }
+      : null;
+    const prepared = await prepareChatImage(agentId, { prompt: pendingSharePrompt({ source, city, self }), self }, {
+      pendingDraft: true,
+      stillCurrent: draftCurrent,
+      illustration,
+    });
+    if (!prepared.attachment) {
+      store.setProactiveState(agentId, { pendingShares: { ...pendingState, lastFailedAt: now.toISOString() } });
+      diagnostics({ event: "pending-share.failed", agentId, reason: "generate" });
+      return { prepared: 0, reason: "generate-failed" };
+    }
+    const item = {
+      id: itemId,
+      kind: "photo",
+      attachmentId: prepared.attachment.id,
+      title: source.title,
+      description: source.snippet,
+      sourceKind: source.sourceKind,
+      sourceTitle: source.title,
+      sourceUrl: source.url,
+      city,
+      cityCode,
+      referenceId,
+      self,
+      createdAt: now.toISOString(),
+    };
+    store.savePendingShares(agentId, [...store.getPendingShares(agentId), item]);
+    store.setProactiveState(agentId, { pendingShares: { ...pendingState, lastFilledAt: now.toISOString() } });
+    diagnostics({ event: "pending-share.prepared", agentId, kind: item.kind, sourceKind: item.sourceKind });
+    return { prepared: 1, reason: "ok" };
   }
 
   /**
@@ -10057,6 +10309,10 @@ export function apply(ctx) {
       app.get("/attachment/:agentId/:id", (c) => {
         const agentId = String(c.req.param("agentId") ?? "").trim();
         if (!isValidPartnerId(agentId)) return c.json({ ok: false, error: { code: "INVALID_PARTNER_ID", message: "伙伴 ID 不合法" } }, 400);
+        // 还没发出去的私藏稿子：常规附件这条路读不到。它只在两处露面——发出去之后当旧图，或者当表情气泡。
+        if (isPendingShareDraft(agentId, String(c.req.param("id") ?? ""))) {
+          return c.json({ ok: false, error: { message: "图片不存在" } }, 404);
+        }
         const attachment = readAttachment(c.req.param("id"), agentId);
         if (!attachment) return c.json({ ok: false, error: { message: "图片不存在" } }, 404);
         return c.body(attachment.data, 200, {
@@ -10855,6 +11111,20 @@ export function apply(ctx) {
             streetViewLibrary?.release();
             diagnostics({ event: "streetview.released", city: afterCity, consent: afterConsent });
           }
+          // 换城市：待分享的稿子是对着当时那座城市备的，当场作废（每位伙伴各清各的）。
+          if (beforeCity !== afterCity || beforeCityCode !== afterCityCode) {
+            try {
+              for (const partner of await listAllPartners()) {
+                store.savePendingShares(partner.id, dropStalePendingShares(store.getPendingShares(partner.id), {
+                  referenceId: "",
+                  cityCode: afterCityCode,
+                }));
+              }
+              diagnostics({ event: "pending-share.released", city: afterCity });
+            } catch (error) {
+              diagnostics({ event: "pending-share.release.failed", error: describeError(error) });
+            }
+          }
           // 今日情境从关到开：清掉「今天已经露过」的记账。
           // 她打开就是为了让伙伴知道今天的事，不该因为同一天早先露过而当场没反应。
           if (!wasDaybookOn && daybookOn()) {
@@ -11581,6 +11851,51 @@ export function apply(ctx) {
         }
       });
 
+      // 「允许作为表情动作参考」：她按一下就算授权，可以撤回。
+      // 只认这位伙伴自己的附件：本地读得到、属主对得上，才谈得上授权；不接 URL，不跨 App 扫。
+      app.get("/library/reference-use/:agentId/:attachmentId", (c) => {
+        const agentId = String(c.req.param("agentId") ?? "").trim();
+        const attachmentId = String(c.req.param("attachmentId") ?? "").trim();
+        if (!isValidPartnerId(agentId) || !attachmentId) return c.json({ ok: false, error: { message: "参数不合法" } }, 400);
+        const meta = ownAttachmentMeta(agentId, attachmentId);
+        if (!meta) return c.json({ ok: false, error: { message: "这张图不在了" } }, 404);
+        return c.json({ ok: true, referenceUse: normalizeReferenceUse(meta.referenceUse) });
+      });
+
+      app.post("/library/reference-use", async (c) => {
+        try {
+          const body = await c.req.json();
+          const agentId = String(body?.agentId ?? "").trim();
+          const attachmentId = String(body?.attachmentId ?? "").trim();
+          const allowed = body?.allowed === true;
+          if (!isValidPartnerId(agentId) || !attachmentId) return c.json({ ok: false, error: { message: "参数不合法" } }, 400);
+          const meta = ownAttachmentMeta(agentId, attachmentId);
+          if (!meta) return c.json({ ok: false, error: { message: "这张图不在了" } }, 404);
+          // 只允许显式授权自己在这段对话发过、尚未撤回的图片。
+          if (allowed && (!fs.existsSync(attachmentPath(attachmentId))
+            || !store.getThread(agentId).messages.some((row) => row.role === "user" && !row.recalled && row.attachment?.id === attachmentId))) {
+            return c.json({ ok: false, error: { message: "这张图已经不在了" } }, 404);
+          }
+          const written = writeReferenceUseMeta(agentId, attachmentId, allowed);
+          if (!written) return c.json({ ok: false, error: { message: "没写上" } }, 500);
+          if (!allowed) {
+            // 撤回授权：照这张图做出来的稿子当场作废，已经发出去的也不再许复用。
+            const pending = store.getPendingShares(agentId);
+            const kept = pending.filter((row) => row.sourceAttachmentId !== attachmentId);
+            if (kept.length !== pending.length) store.savePendingShares(agentId, kept);
+            for (const metaItem of partnerAttachmentMetas(agentId)) {
+              if (String(metaItem?.source?.kind ?? "") !== "self-made-sticker") continue;
+              if (String(metaItem?.source?.sourceAttachmentId ?? "") !== attachmentId) continue;
+              writeCollectionMeta(agentId, metaItem.id, { sticker: false, sourceAt: Date.now() });
+            }
+          }
+          diagnostics({ event: "image.reference-use", agentId, attachmentId, allowed });
+          return c.json({ ok: true, referenceUse: normalizeReferenceUse(written.referenceUse) });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 500);
+        }
+      });
+
       // 导入页要的是「全库」：它跟哪个伙伴没关系，不能按伙伴白名单筛。
       // 聊天那条路（/sticker/:agentId/:id）不动，那边该按白名单还是按白名单。
       app.get("/source-sticker/:id", async (c) => {
@@ -11659,6 +11974,8 @@ export function apply(ctx) {
           // 旧图当表情发：id 是本伙伴的附件 id 时直接读原件（不复制字节、不进图库）。
           // 读不到就往下走原路，不抢公共图库里同名的号。
           if (/^img_[A-Za-z0-9_-]{1,120}$/.test(id)) {
+            // 还没发出去的私藏稿子不露面：表情这条路也不行，等它真的发出去再说。
+            if (isPendingShareDraft(agentId, id)) return c.json({ ok: false, error: { message: "没有这张图" } }, 404);
             const old = readAttachment(id, agentId);
             if (old?.data?.length) return c.body(old.data, 200, { "Content-Type": old.mimeType, "Cache-Control": "private, max-age=3600" });
           }

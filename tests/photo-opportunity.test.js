@@ -205,9 +205,8 @@ test("有合格同城来源时插队这一轮画成城市插画，没材料仍�
   }
 });
 
-test("插队之后模型仍可放弃：明确拒绝出图就当普通主动发，不花生图额度", OPTIONS, async t => {
-  // 2026-11-23：自然文字会被漏标记兜底接住；“放弃”的语义是明确拒绝（见 photo-fallback.test.js）。
-  const app = await boot(t, { answer: "今天就不发图了，窗边坐了一会儿，杯子还是原来那个。" });
+test("插队之后模型仍可放弃：给普通文字就当普通主动发，不花生图额度", OPTIONS, async t => {
+  const app = await boot(t, { answer: "窗边坐了一会儿，杯子还是原来那个。" });
   await app.tick(0.1);
   assert.equal(app.mediaCalls.length, 0);
   const sent = reopenThread(app.dataDir, AGENT).filter(row => row.proactive);

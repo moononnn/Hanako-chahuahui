@@ -1291,6 +1291,32 @@
       imageCollectMenu.style.left = "-9999px";
       imageCollectMenu.style.top = "-9999px";
       placeImageCollectMenu(event);
+      // 「允许作为表情动作参考」只加在她自己发的那张图上：那张图的权在她手里。
+      if (String(img?.dataset?.senderRole || "") === "user") void paintReferenceUseAction(event, owner, attachmentId);
+    }
+
+    /**
+     * 「允许作为表情动作参考」：她按一下就是授权（她有权、也准许拿去做表情动作参考），可以撤回。
+     *
+     * 授权状态要问后端才准：她什么时候按的、撤没撤，面板这边不猜。
+     */
+    async function paintReferenceUseAction(event, owner, attachmentId) {
+      try {
+        const result = await api("GET", `library/reference-use/${encodeURIComponent(owner)}/${encodeURIComponent(attachmentId)}`);
+        const allowed = Boolean(result?.referenceUse?.allowed);
+        const button = stickerMenuButton(allowed ? "撤回表情参考授权" : "允许作为表情动作参考", async () => {
+          closeImageCollectMenu();
+          setStatus(allowed ? "正在撤回…" : "正在记下…");
+          try {
+            const next = await api("POST", "library/reference-use", { agentId: owner, attachmentId, allowed: !allowed });
+            setStatus(next?.referenceUse?.allowed ? "以后这张可以当表情动作参考" : "已撤回，照它做的稿子也作废了");
+          } catch (error) {
+            setStatus(`没存上：${error.message}`);
+          }
+        });
+        imageCollectMenu.appendChild(button);
+        placeImageCollectMenu(event);
+      } catch { /* 问不到就不给这个选项 */ }
     }
 
     async function collectChatImage(owner, attachmentId) {
@@ -3761,6 +3787,8 @@
             imageNode.alt = m.attachment.name || "发送的图片";
             imageNode.loading = "lazy";
             imageNode.dataset.visionNote = String(m.visionNote ?? "");
+            // 她发的那张：只有这种图才谈得上「允许作为表情动作参考」。
+            imageNode.dataset.senderRole = "user";
             appendImageToBubble(regular.bubble, imageNode);
             mountAttachmentImage(imageNode, m.attachment.id, current, Boolean(opts.keepBottom));
           }

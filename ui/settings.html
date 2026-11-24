@@ -288,6 +288,19 @@
           <small class="detail-field-note" id="image-review-note">只拦明显多出或缺失的肢体、脸崩、画面明显跑题、贴纸动作不明；Q 版、简笔、故意遮挡一律不挑。明确不通过时最多重画一次并再审一次（多花一次生图额度）；审图那头用不了时宁可不发图，只留文字。复核用你已经配好的识图模型，不换模型、不新加服务商。</small>
         </div>
       </article>
+      <article class="setting-card" id="background-share-card">
+        <div class="setting-copy">
+          <h3>后台备稿</h3>
+          <p>默认关闭。打开后，伙伴会偶尔在后台备一件自己的东西（一张有出处的日常照，或一个自制表情），放在ta 自己的私藏里，等后面合适的轮次再拿出来。</p>
+          <p class="setting-hint" id="background-share-hint" hidden>这一项要跟「生成后先自查一遍」一起开：备稿走的是生图那份额度与审图，审图不可用时就不会备。</p>
+        </div>
+        <div class="detail-field">
+          <button class="switch" id="background-share-switch" type="button" role="switch" aria-checked="false">
+            <span class="track"><span></span></span><span class="switch-label">关闭</span>
+          </button>
+          <small class="detail-field-note" id="background-share-note">库存很少（每位伙伴 2–3 件），补得很慢；备出来的稿子只在 ta 自己想说的时候才发，不会硬塞给你，也不会进共享图库。自制表情要有你明确授权过的动作参考图：在聊天里右键你发的那张图，选「允许作为表情动作参考」——你按一下就算你有权、也准许拿去做表情动作参考；随时可以撤回，撤回后照它做出来的稿子当场作废。</small>
+        </div>
+      </article>
       <article class="setting-card" id="life-city-card">
         <div class="setting-copy">
           <h3>生活城市</h3>
@@ -1498,8 +1511,21 @@
      * 首项永远是「跟随 Hana 的设置」——那才是正常情形，她不该为了用上这个功能
      * 还得先搞懂 provider 和 model 是两个东西。
      */
+    /** 后台备稿的开关：默认关；与审图开关绑在一起说清楚。 */
+    function paintBackgroundShare() {
+      const button = document.getElementById("background-share-switch");
+      if (!button) return;
+      const on = globalSettings.backgroundSharePrepEnabled === true;
+      button.classList.toggle("on", on);
+      button.setAttribute("aria-checked", String(on));
+      button.querySelector(".switch-label").textContent = on ? "打开" : "关闭";
+      const hint = document.getElementById("background-share-hint");
+      if (hint) hint.hidden = globalSettings.imageReviewEnabled === true;
+    }
+
     function paintImageModel() {
       paintImageReview();
+      paintBackgroundShare();
       const tierHost = document.getElementById("image-global-tier");
       if (tierHost) choiceGroup(tierHost, [["off", "关闭"], ["less", "少一些"], ["normal", "适中"], ["more", "多一些"]], globalSettings.imageTier || "off", async value => {
         for (const button of tierHost.querySelectorAll("button")) button.disabled = true;
@@ -2906,7 +2932,14 @@
     // ── 生图：保存与试生成 ────────────────────────────
     document.getElementById("image-review-switch").addEventListener("click", async () => {
       const next = !globalSettings.imageReviewEnabled;
-      if (await saveGlobal({ imageReviewEnabled: next }, next ? "生成后自查已打开" : "生成后自查已关闭")) paintImageReview();
+      if (await saveGlobal({ imageReviewEnabled: next }, next ? "生成后自查已打开" : "生成后自查已关闭")) {
+        paintImageReview();
+        paintBackgroundShare();
+      }
+    });
+    document.getElementById("background-share-switch").addEventListener("click", async () => {
+      const next = !globalSettings.backgroundSharePrepEnabled;
+      if (await saveGlobal({ backgroundSharePrepEnabled: next }, next ? "后台备稿已打开" : "后台备稿已关闭")) paintBackgroundShare();
     });
     document.getElementById("image-model-save").addEventListener("click", async (event) => {
       const button = event.currentTarget;
