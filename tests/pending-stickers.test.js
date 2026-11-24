@@ -18,6 +18,8 @@ import assert from "node:assert/strict";
 
 import { bootChahuahui, reopenThread } from "./helpers/app-harness.js";
 import { dropStalePendingShares } from "../lib/pending-shares.js";
+import { importStickerBytes } from "../lib/sticker-library.js";
+import { encodeStickerBubble } from "../lib/stickers.js";
 import {
   normalizeReferenceUse,
   pickReferenceUseSources,
@@ -81,9 +83,10 @@ test("源被撤回、源被收回授权、身份换了：稿子都作废", () =>
 
 /* ── 集成 ── */
 
-async function boot(t, { prep = true, review = true, vision = true, answer = "[不回]", verdicts = ["pass"], withAction = true, actionAge = -2 * HOUR } = {}) {
+async function boot(t, { prep = true, review = true, vision = true, answer = "[不回]", verdicts = ["pass"], withAction = true, actionAge = -2 * HOUR, inspiration = false, decline = false } = {}) {
   const mediaCalls = [], prompts = [], reviewRequests = [];
-  let lastTick = null;
+  let lastTick = null, localId = "";
+  const choices = [];
   const app = await bootChahuahui({ seed(store, ctx) {
     const far = new Date(Date.now() + 7 * HOUR);
     const clock = hour => `${String(hour % 24).padStart(2, "0")}:${String(far.getMinutes()).padStart(2, "0")}`;
@@ -93,6 +96,7 @@ async function boot(t, { prep = true, review = true, vision = true, answer = "[�
       globalGate: { minGapMinutes: 0, maxPerDay: 24 },
       lifeCity: "成都", lifeCityCode: "city-test-code", lifeCityDiscoveries: true,
       ...(prep ? { backgroundSharePrepEnabled: true } : {}),
+      ...(inspiration ? { stickerInspirationEnabled: true } : {}),
       ...(review ? { imageReviewEnabled: true } : {}),
       ...(vision ? { vision: { model: { provider: "test-provider", model: "test-model" }, status: "verified" } } : {}),
     });
@@ -129,6 +133,10 @@ async function boot(t, { prep = true, review = true, vision = true, answer = "[�
         attachment: { id: ACTION_ID, name: "动作参考", mimeType: "image/png", size: PNG.length } });
       store.patchMessage(AGENT, sent.id, { readAt: sent.at });
     }
+    if (inspiration) {
+      localId = importStickerBytes(ctx.dataDir, { mimeType: "image/png", name: "探头" }, PNG).sticker.id;
+      store.appendMessage(AGENT, { role: "user", kind: "sticker", text: "这条聊天原文不要给选图模型", bubbles: [encodeStickerBubble(localId)], at: time(actionAge) });
+    }
     const request = ctx.bus.request;
     ctx.bus.request = async (type, payload, ...rest) => {      if (type === "media:generate-image") { mediaCalls.push(payload); return { tasks: [{ taskId: "photo_fixture" }] }; }
       return request(type, payload, ...rest);
@@ -147,6 +155,10 @@ async function boot(t, { prep = true, review = true, vision = true, answer = "[�
   const stream = app.ctx.models.stream.bind(app.ctx.models);
   let reviewIndex = 0;
   app.ctx.models.stream = async (request) => {
+    if (String(request.requestId).startsWith("sticker-source-")) {
+      choices.push(request);
+      return { text: async () => ndjson(decline ? "不做" : localId || ACTION_ID) };
+    }
     if (!hasImagePart(request)) return stream(request);
     reviewRequests.push(request);
     const verdict = verdicts[Math.min(reviewIndex, verdicts.length - 1)];
@@ -181,8 +193,29 @@ async function boot(t, { prep = true, review = true, vision = true, answer = "[�
     return response.body;
   };
   const pending = () => app.store.getPendingShares(AGENT);
-  return { ...app, mediaCalls, prompts, reviewRequests, tick, diagnostics, setReference, allow, pending, lastTick: () => lastTick, setAnswer: (text) => { rule.text = text; } };
+  return { ...app, mediaCalls, prompts, reviewRequests, choices, localId, tick, diagnostics, setReference, allow, pending, lastTick: () => lastTick, setAnswer: (text) => { rule.text = text; } };
 }
+
+test("本对话的表情无需逐张授权，由伙伴选择，普通照片不进候选", OPTIONS, async t => {
+  const app = await boot(t, { inspiration: true });
+  await app.setReference();
+  await app.tick();
+  assert.equal(app.choices.length, 1);
+  const choice = JSON.stringify(app.choices[0].messages);
+  assert.ok(choice.includes(app.localId));
+  assert.ok(!choice.includes(ACTION_ID) && !choice.includes("这条聊天原文"));
+  assert.equal(app.mediaCalls.length, 1);
+  assert.equal(app.pending()[0]?.sourceStickerId, app.localId);
+});
+
+test("伙伴决定不做，不会替它挑一张", OPTIONS, async t => {
+  const app = await boot(t, { inspiration: true, decline: true });
+  await app.setReference();
+  await app.tick();
+  assert.equal(app.choices.length, 1);
+  assert.equal(app.mediaCalls.length, 0);
+  assert.deepEqual(app.pending(), []);
+});
 
 test("授权之后：后台能备出一张自制表情（动作图在前，角色参考照在后）", OPTIONS, async t => {
   const app = await boot(t);

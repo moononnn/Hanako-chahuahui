@@ -272,6 +272,7 @@ import {
   sourceRowById,
   stickerLabelMap,
   stickerLabelText,
+  stickerIdFromBubble,
 } from "./lib/stickers.js";
 import {
   buildStickerNudge,
@@ -285,6 +286,7 @@ import {
   importStickerBytes,
   listStickerLibrary,
   moveStickerToEdge,
+  ownStickerPath,
   readOwnSticker,
   readStickerBytesOf,
   readStickerLibrary,
@@ -294,6 +296,12 @@ import {
   renameStickerGroup,
   reorderStickers,
 } from "./lib/sticker-library.js";
+import {
+  conversationStickerCandidates,
+  conversationStickerIds,
+  parseStickerChoice,
+  stickerChoicePrompt,
+} from "./lib/sticker-inspiration.js";
 import { COLLECT_TARGET, collectStickerImage } from "./lib/sticker-collect.js";
 import { ensureStickerThumb, startThumbWarmup } from "./lib/sticker-thumb.js";
 import { contentHash, isReusableAttachment, touchAttachmentMeta } from "./lib/attachment-hash.js";
@@ -1252,7 +1260,7 @@ export function apply(ctx) {
     // 图片留多久：30 / 45 / 60 / 90 天，或 0 = 永久不删。
     "imageRetentionDays",
     // 生图：一条自己的模型配置（含加密后的 Key），和朗读那条各走各的。
-    "imageModel", "imageTier", "imageReviewEnabled", "backgroundSharePrepEnabled",
+    "imageModel", "imageTier", "imageReviewEnabled", "backgroundSharePrepEnabled", "stickerInspirationEnabled",
     // 生活城市：跟天气各算各的。城市她自己填；真实街景另有一个明确的授权开关。
     "lifeCity", "lifeCityCode", "lifeCityStreetView", "lifeCityDiscoveries", "lifeCityIllustrations",
   ]);
@@ -1276,6 +1284,8 @@ export function apply(ctx) {
     if (Object.prototype.hasOwnProperty.call(patch, "imageReviewEnabled")) patch.imageReviewEnabled = patch.imageReviewEnabled === true;
     // 后台备稿：独立开关，只认真布尔，默认关。
     if (Object.prototype.hasOwnProperty.call(patch, "backgroundSharePrepEnabled")) patch.backgroundSharePrepEnabled = patch.backgroundSharePrepEnabled === true;
+    // 从本对话的表情找灵感：独立开关，只认真布尔，默认关。
+    if (Object.prototype.hasOwnProperty.call(patch, "stickerInspirationEnabled")) patch.stickerInspirationEnabled = patch.stickerInspirationEnabled === true;
     if (Object.prototype.hasOwnProperty.call(patch, "myActionTail")) {
       patch.myAction = { text: actionTemplateFromTail(patch.myActionTail) };
       delete patch.myActionTail;
@@ -2221,9 +2231,100 @@ export function apply(ctx) {
   }
 
   /**
+   * 这段对话里她发过、且本地读得到的表情（开关开着时）。
+   *
+   * 只看本对话、只收本地读得到的、只给编号和一句话说明——原图不进这里。
+   * 外部 App 的私有图库、别的对话、普通照片，都不在其中。
+   */
+  function conversationStickerSources(agentId, { usedIds = [] } = {}) {
+    if (store.getGlobalSettings().stickerInspirationEnabled !== true) return [];
+    const messages = store.getThread(agentId).messages;
+    return conversationStickerCandidates({
+      messages,
+      usedIds,
+      isReadable: (id) => Boolean(readOwnSticker(ctx.dataDir, id)),
+      describe: (id) => {
+        const row = readOwnSticker(ctx.dataDir, id)?.row ?? null;
+        return {
+          title: String(row?.description ?? "").trim(),
+          action: [...(row?.emotion ?? []), ...(row?.scene ?? [])]
+            .map((value) => String(value ?? "").trim()).filter(Boolean).slice(0, 3).join("、"),
+        };
+      },
+    })
+      .map((row) => ({ ...row, kind: "conversation-sticker", path: ownStickerPath(ctx.dataDir, row.id) }))
+      .filter((row) => Boolean(row.path));
+  }
+
+  /**
+   * 这张动作参考现在还合不合法。
+   *
+   * 表情来源：开关撤了、那张图没了、那条话被撤回了，都算作废。
+   * 逐张授权的图：她撤回授权就当场作废。
+   */
+  function stickerSourceStillAllowed(agentId, source) {
+    if (!source?.id) return false;
+    if (source.kind === "conversation-sticker") {
+      if (store.getGlobalSettings().stickerInspirationEnabled !== true) return false;
+      if (!ownStickerPath(ctx.dataDir, source.id)) return false;
+      return store.getThread(agentId).messages.some((row) => row.role === "user" && row.kind === "sticker" && !row.recalled
+        && (row.bubbles ?? []).some((piece) => stickerIdFromBubble(String(piece)) === source.id));
+    }
+    const meta = ownAttachmentMeta(agentId, source.id);
+    return Boolean(meta && normalizeReferenceUse(meta.referenceUse).allowed
+      && store.getThread(agentId).messages.some((row) => row.role === "user" && !row.recalled && row.attachment?.id === source.id));
+  }
+
+  /**
+   * 让伙伴自己挑一张动作参考：只给编号和一句话说明，不给图。
+   *
+   * ta 可以挑，也可以说这一轮不做；不默认总挑第一张。挑不出来就算没挑。
+   */
+  async function partnerPicksStickerSource(agentId, candidates = []) {
+    const rows = Array.isArray(candidates) ? candidates : [];
+    if (!rows.length) return "";
+    const ref = await chatModelRefOf(agentId);
+    if (!ref) return "";
+    try {
+      const requestId = `sticker-source-${agentId}-${Date.now().toString(36)}`;
+      const raw = await withModelDeadline(ctx, {
+        requestId, timeoutMs: 15_000, operation: "sticker-source", diagnostics,
+        run: async () => {
+          const response = await ctx.models.stream({
+            requestId, provider: ref.provider, model: ref.model,
+            messages: [{ role: "user", content: stickerChoicePrompt(rows) }],
+            maxTokens: 120, temperature: 0.4,
+          });
+          return typeof response?.text === "function" ? await response.text() : "";
+        },
+      });
+      let text = "";
+      for (const line of String(raw).split(/\r?\n/u)) {
+        try {
+          const row = JSON.parse(line);
+          if (row.type === "error") throw new Error(row.message || "模型调用失败");
+          if (row.type === "text-delta") text += String(row.delta ?? "");
+          if (row.type === "done" && !text && Array.isArray(row.assistant?.content)) {
+            text = row.assistant.content.filter((part) => part?.type === "text").map((part) => part.text).join("");
+          }
+        } catch (error) {
+          if (error instanceof SyntaxError) continue;
+          throw error;
+        }
+      }
+      const picked = parseStickerChoice(text, rows.map((row) => row.id));
+      diagnostics({ event: "sticker.source.picked", agentId, picked: picked || "none", candidates: rows.length });
+      return picked;
+    } catch (error) {
+      diagnostics({ event: "sticker.source.failed", agentId, error: describeError(error) });
+      return "";
+    }
+  }
+
+  /**
    * 待分享稿子的源状态：她撤回了授权、或源话被撤回，当场作废。
    *
-   * 只看这位伙伴自己的附件；没授权过的图不进这张表。
+   * 只看这位伙伴自己的附件与这段对话里的表情；没授权过的图不进这张表。
    */
   function pendingShareSourceStates(metas = [], messages = []) {
     const states = {};
@@ -2232,6 +2333,14 @@ export function apply(ctx) {
       const allowed = referenceUseAllowed(meta);
       const recalled = Boolean(imageSourceRecalled(meta, messages));
       if (allowed || recalled) states[meta.id] = { allowed, recalled };
+    }
+    // 这段对话里的表情来源：开关开着、还在本地、那条话没被撤回，才算数。
+    const inspiration = store.getGlobalSettings().stickerInspirationEnabled === true;
+    for (const id of conversationStickerIds(messages)) {
+      const live = messages.some((row) => row.role === "user" && row.kind === "sticker" && !row.recalled
+        && (row.bubbles ?? []).some((piece) => stickerIdFromBubble(String(piece)) === id));
+      const readable = Boolean(readOwnSticker(ctx.dataDir, id));
+      states[id] = { allowed: inspiration && live && readable, recalled: !live };
     }
     return states;
   }
@@ -2697,6 +2806,7 @@ export function apply(ctx) {
           title: sticker.title ?? "",
           url: sticker.url ?? "",
           sourceAttachmentId: sticker.sourceAttachmentId ?? "",
+          sourceStickerId: sticker.sourceStickerId ?? "",
         });
       }
       // 街景素材的来路要留着：这张图的背景是哪张真实街景、谁拍的、什么许可，都记在附件上。
@@ -6753,7 +6863,11 @@ export function apply(ctx) {
     const state = store.getProactiveState(agentId);
     const pendingState = state.pendingShares && typeof state.pendingShares === "object" ? state.pendingShares : {};
     const filledAt = Date.parse(String(pendingState.lastFilledAt ?? "") || "") || 0;
-    if (filledAt && now.getTime() - filledAt < PENDING_SHARE_FILL_GAP_MS) return { prepared: 0, reason: "cooldown" };
+    const attemptedAt = Date.parse(String(pendingState.lastAttemptAt ?? "") || "") || 0;
+    // 备过也好、ta 这一轮决定不做也好，都算数：这阵子不再去问。
+    if (Math.max(filledAt, attemptedAt) && now.getTime() - Math.max(filledAt, attemptedAt) < PENDING_SHARE_FILL_GAP_MS) {
+      return { prepared: 0, reason: "cooldown" };
+    }
     const failedAt = Date.parse(String(pendingState.lastFailedAt ?? "") || "") || 0;
     if (failedAt && now.getTime() - failedAt < PENDING_SHARE_BACKOFF_MS) return { prepared: 0, reason: "backoff" };
     const city = normalizeLifeCity(global.lifeCity);
@@ -6762,11 +6876,18 @@ export function apply(ctx) {
       city,
       usedTitles: list.map((row) => row.title),
     });
-    // 自制表情：得有她明确授权过的动作参考图，还要有当前角色的参考照。两样缺一就不做。
-    const stickerSources = pickReferenceUseSources({ metas, agentId, hasBytes: (id) => fs.existsSync(attachmentPath(id)) });
+    // 自制表情的候选：两处来。
+    // ① 这段对话里她发过、本地读得到的表情（开关开着时）——伙伴自己挑哪张。
+    // ② 她明确授权过的图（逐张授权那套仍然能用，但不是必须先做的那一步）。
+    const usedSources = Array.isArray(pendingState.usedSources) ? pendingState.usedSources : [];
+    const stickerCandidates = [
+      ...conversationStickerSources(agentId, { usedIds: usedSources }),
+      ...pickReferenceUseSources({ metas, agentId, hasBytes: (id) => !usedSources.includes(id) && fs.existsSync(attachmentPath(id)) })
+        .map((row) => ({ id: row.id, title: row.title, action: row.description, said: "", kind: "attachment", path: attachmentPath(row.id) })),
+    ];
     const stickerCount = list.filter((row) => row.kind === "sticker").length;
     const photoCount = list.filter((row) => row.kind === "photo").length;
-    const wantSticker = stickerCount <= photoCount && Boolean(referenceId) && stickerSources.length > 0;
+    const wantSticker = stickerCount <= photoCount && Boolean(referenceId) && stickerCandidates.length > 0;
     // 没有出处就没有稿：宁可队列空着。
     if (!wantSticker && !source) return { prepared: 0, reason: "no-source" };
     const itemId = `pending_${now.getTime().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -6777,40 +6898,63 @@ export function apply(ctx) {
         && (imageReferences.current(agentId)?.id ?? "") === referenceId;
     };
     if (wantSticker) {
-      // 图一只管动作（她授权的那张），图二只管当前角色（参考照）。顺序不能反。
-      const action = stickerSources[0];
+      // 让 ta 自己挑：只给编号和一句话说明，不给图。ta 也可以说这一轮不做。
+      const picked = await partnerPicksStickerSource(agentId, stickerCandidates);
+      if (!picked) {
+        // ta 这一轮不做：记一笔，等下一个窗口再问。不用替他挑第一张。
+        store.setProactiveState(agentId, { pendingShares: { ...pendingState, lastAttemptAt: now.toISOString() } });
+        diagnostics({ event: "pending-share.skipped", agentId, reason: "declined", candidates: stickerCandidates.length });
+        return { prepared: 0, reason: "declined" };
+      }
+      const action = stickerCandidates.find((row) => row.id === picked);
+      if (!action) return { prepared: 0, reason: "no-source" };
+      // 图一只管动作（她发过的那张表情），图二只管当前角色（参考照）。顺序不能反。
       const prepared = await prepareChatImage(agentId, { prompt: stickerDraftPrompt(), self: true }, {
         pendingDraft: true,
-        stillCurrent: () => draftCurrent() && normalizeReferenceUse(ownAttachmentMeta(agentId, action.id)?.referenceUse).allowed
-          && store.getThread(agentId).messages.some((row) => row.role === "user" && !row.recalled && row.attachment?.id === action.id),
-        sticker: { path: attachmentPath(action.id), sourceAttachmentId: action.id, title: action.title },
+        stillCurrent: () => draftCurrent() && stickerSourceStillAllowed(agentId, action),
+        sticker: {
+          path: action.path, title: action.title,
+          sourceAttachmentId: action.kind === "attachment" ? action.id : "",
+          sourceStickerId: action.kind === "conversation-sticker" ? action.id : "",
+        },
       });
       if (!prepared.attachment) {
         store.setProactiveState(agentId, { pendingShares: { ...pendingState, lastFailedAt: now.toISOString() } });
         diagnostics({ event: "pending-share.failed", agentId, kind: "sticker", reason: "generate" });
         return { prepared: 0, reason: "generate-failed" };
       }
-      const holder = messages.find((row) => String(row?.attachment?.id ?? "") === action.id && !row.recalled);
+      const holder = messages.find((row) => row.role === "user" && !row.recalled && (action.kind === "attachment"
+        ? row.attachment?.id === action.id
+        : row.kind === "sticker" && (row.bubbles ?? []).some((piece) => stickerIdFromBubble(String(piece)) === action.id)));
       const item = {
         id: itemId,
         kind: "sticker",
         attachmentId: prepared.attachment.id,
         title: action.title ? `自制表情（照着「${action.title}」）` : "自制表情",
         description: stickerDraftPrompt(),
-        sourceKind: "self-made-sticker",
+        sourceKind: action.kind === "conversation-sticker" ? "conversation-sticker" : "self-made-sticker",
         sourceTitle: action.title,
         sourceUrl: "",
         city,
         cityCode,
         referenceId,
-        sourceAttachmentId: action.id,
+        sourceAttachmentId: action.kind === "attachment" ? action.id : "",
+        sourceStickerId: action.kind === "conversation-sticker" ? action.id : "",
         sourceMessageId: String(holder?.id ?? ""),
         self: true,
         createdAt: now.toISOString(),
       };
       store.savePendingShares(agentId, [...store.getPendingShares(agentId), item]);
-      store.setProactiveState(agentId, { pendingShares: { ...pendingState, lastFilledAt: now.toISOString() } });
-      diagnostics({ event: "pending-share.prepared", agentId, kind: item.kind, sourceKind: item.sourceKind });
+      // 记下用过这份素材：下一回别再挑同一张。
+      store.setProactiveState(agentId, {
+        pendingShares: {
+          ...pendingState,
+          lastFilledAt: now.toISOString(),
+          lastAttemptAt: now.toISOString(),
+          usedSources: [...usedSources, action.id].slice(-8),
+        },
+      });
+      diagnostics({ event: "pending-share.prepared", agentId, kind: item.kind, sourceKind: item.sourceKind, sourceId: action.id });
       return { prepared: 1, reason: "ok" };
     }
     const self = Boolean(referenceId);

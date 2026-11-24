@@ -298,7 +298,11 @@
           <button class="switch" id="background-share-switch" type="button" role="switch" aria-checked="false">
             <span class="track"><span></span></span><span class="switch-label">关闭</span>
           </button>
-          <small class="detail-field-note" id="background-share-note">库存很少（每位伙伴 2–3 件），补得很慢；备出来的稿子只在 ta 自己想说的时候才发，不会硬塞给你，也不会进共享图库。自制表情要有你明确授权过的动作参考图：在聊天里右键你发的那张图，选「允许作为表情动作参考」——你按一下就算你有权、也准许拿去做表情动作参考；随时可以撤回，撤回后照它做出来的稿子当场作废。</small>
+          <small class="detail-field-note" id="background-share-note">库存很少（每位伙伴 2–3 件），补得很慢；备出来的稿子只在 ta 自己想说的时候才发，不会硬塞给你，也不会进共享图库。自制表情可以从你们聊过的表情里找灵感。</small>
+          <button class="switch" id="sticker-inspiration-switch" type="button" role="switch" aria-label="从聊天表情找灵感" aria-checked="false">
+            <span class="track"><span></span></span><span class="switch-label">关闭</span>
+          </button>
+          <small class="detail-field-note">从聊天表情找灵感：开启后，伙伴自己挑本对话里你发过、茶话会本地可读的表情。挑中的图才会送到已配置的生图服务作为动作参考，普通聊天照片不会自动参与。</small>
         </div>
       </article>
       <article class="setting-card" id="life-city-card">
@@ -1519,6 +1523,11 @@
       button.classList.toggle("on", on);
       button.setAttribute("aria-checked", String(on));
       button.querySelector(".switch-label").textContent = on ? "打开" : "关闭";
+      const inspiration = document.getElementById("sticker-inspiration-switch");
+      const active = globalSettings.stickerInspirationEnabled === true;
+      inspiration.classList.toggle("on", active);
+      inspiration.setAttribute("aria-checked", String(active));
+      inspiration.querySelector(".switch-label").textContent = active ? "打开" : "关闭";
       const hint = document.getElementById("background-share-hint");
       if (hint) hint.hidden = globalSettings.imageReviewEnabled === true;
     }
@@ -2940,6 +2949,10 @@
     document.getElementById("background-share-switch").addEventListener("click", async () => {
       const next = !globalSettings.backgroundSharePrepEnabled;
       if (await saveGlobal({ backgroundSharePrepEnabled: next }, next ? "后台备稿已打开" : "后台备稿已关闭")) paintBackgroundShare();
+    });
+    document.getElementById("sticker-inspiration-switch").addEventListener("click", async () => {
+      const next = globalSettings.stickerInspirationEnabled !== true;
+      if (await saveGlobal({ stickerInspirationEnabled: next }, next ? "已开启聊天表情灵感" : "已关闭聊天表情灵感")) paintBackgroundShare();
     });
     document.getElementById("image-model-save").addEventListener("click", async (event) => {
       const button = event.currentTarget;
