@@ -305,6 +305,18 @@
           <small class="detail-field-note">从聊天表情找灵感：开启后，伙伴自己挑本对话里你发过、茶话会本地可读的表情。挑中的图才会送到已配置的生图服务作为动作参考，普通聊天照片不会自动参与。</small>
         </div>
       </article>
+      <article class="setting-card" id="sticker-usage-sync-card">
+        <div class="setting-copy">
+          <h3>表情用法同步</h3>
+          <p>默认关闭。打开后，你在聊天里纠正某张共享表情的用法（“这张用错啦，它是在炸毛”），茶话会顺手把这条用法告诉图库，图库以后挑图不会再按旧标签选错。</p>
+        </div>
+        <div class="detail-field">
+          <button class="switch" id="sticker-usage-sync-switch" type="button" role="switch" aria-checked="false">
+            <span class="track"><span></span></span><span class="switch-label">关闭</span>
+          </button>
+          <small class="detail-field-note">只同步共享图库里的表情，而且要说得清是哪一张、什么用法；普通照片和你本地独有的图不推。你说「只留这里」「不要同步」就不推。同步失败不影响聊天：这条纠正本地照样记得，手动同步的入口也还在。</small>
+        </div>
+      </article>
       <article class="setting-card" id="life-city-card">
         <div class="setting-copy">
           <h3>生活城市</h3>
@@ -1495,6 +1507,17 @@
       paintGlobalVoiceModel();
       paintImageModel();
       paintSearchEngine();
+      paintStickerUsageSync();
+    }
+
+    /** 表情用法同步的开关：默认关，她自己开一次才生效。 */
+    function paintStickerUsageSync() {
+      const button = document.getElementById("sticker-usage-sync-switch");
+      if (!button) return;
+      const on = globalSettings.stickerUsageSyncEnabled === true;
+      button.classList.toggle("on", on);
+      button.setAttribute("aria-checked", String(on));
+      button.querySelector(".switch-label").textContent = on ? "打开" : "关闭";
     }
 
     /** 生图二次检查的开关：默认关；开之前把话说清楚。 */
@@ -2953,6 +2976,10 @@
     document.getElementById("sticker-inspiration-switch").addEventListener("click", async () => {
       const next = globalSettings.stickerInspirationEnabled !== true;
       if (await saveGlobal({ stickerInspirationEnabled: next }, next ? "已开启聊天表情灵感" : "已关闭聊天表情灵感")) paintBackgroundShare();
+    });
+    document.getElementById("sticker-usage-sync-switch").addEventListener("click", async () => {
+      const next = globalSettings.stickerUsageSyncEnabled !== true;
+      if (await saveGlobal({ stickerUsageSyncEnabled: next }, next ? "已开启表情用法同步" : "已关闭表情用法同步")) paintStickerUsageSync();
     });
     document.getElementById("image-model-save").addEventListener("click", async (event) => {
       const button = event.currentTarget;

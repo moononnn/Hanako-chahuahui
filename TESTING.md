@@ -1,5 +1,16 @@
 # TESTING · 茶话会
 
+## 表情用法自动同步（2026-11-24）
+
+- 新增全局开关「表情用法同步」（`stickerUsageSyncEnabled`，默认关闭），设置页给独立开关，只认真布尔；不改任何既有配置项。
+- 同步只发生在收到新用户消息的那一条上：复用既有纠正解析（`lib/sticker-corrections.js` 的 `stickerCorrectionFrom`），必须定位到共享图库里确切那一张、且新用法说得清楚（≥2 字、≤60 字），才发 `app:biaoqingbao-app/sticker/adopt-usage`，载荷只有 `{stickerId, meaning}`。旧历史不回头扫、不补同步。
+- 她明说「只留这里／不要同步／别告诉图库」就不推；只认共享图库里的编号，本地独有的图与普通照片不推。
+- 同步在后台跑，不等它、不碰回聊；失败只记一笔（诊断事件 `sticker.usage-sync` 带真实 status），本地纠正与手动同步入口（`POST /library/sticker-correction`）都还在，不谎报成功。
+- 同张并发：一张图同时只跑一趟，后到的说法记成待发，前一趟跑完再送最后那句；排队中的那次既不算成功也不算失败。
+- 新增 `tests/sticker-usage-sync.test.js`（9 项：拒绝同步的说法、可同步条件、同张并发、失败不谎报、默认关不推、开了只推编号与用法、只留这里不推、失败后本地与手动入口仍在、普通聊天与照片不推）。
+- 定向验证：`node --test tests/sticker-usage-sync.test.js` 9/9；`tests/sticker-corrections.test.js`、`tests/sticker-correction-sync.test.js`、`tests/video-share-routes.test.js`、`tests/pending-stickers.test.js` 52/52；`tests/ui-loading.test.js`、`tests/ui.test.js`、`tests/video-settings-ui.test.js`、`tests/image-settings-ui.test.js` 235/235；`tests/co-create.test.js`、`tests/growth.test.js`、`tests/loading-routes.test.js`、`tests/mobile-routes.test.js` 94/94。改动 JS 语法检查通过；未跑全量、未发布。
+- 未验：两端实机联调（茶话会真发一句纠正 → 表情包应用那边真收到）没跑。接收端按图存一条用法，两位伙伴各自纠正同一张图时后写覆盖先写——已知，未处理。
+
 ## 生活城市与真实街景自拍（2026-11-18，0.19.0-dev.6）
 
 - 新增全局设置「生活城市」（`lifeCity`，她手填，默认空、默认关）与独立授权开关「真实街景自拍」（`lifeCityStreetView`，默认关）。两者与天气设置各自独立，不读定位；城市空或没授权时，一个外部请求都不发。

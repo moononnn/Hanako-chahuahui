@@ -303,6 +303,13 @@ import {
   stickerChoicePrompt,
 } from "./lib/sticker-inspiration.js";
 import { applyStickerCorrections, correctedSticker, normalizeStickerCorrections, stickerCorrectionFrom } from "./lib/sticker-corrections.js";
+import {
+  createUsageSyncer,
+  isSyncableCorrection,
+  mentionsLocalOnly,
+  USAGE_SYNC_TARGET,
+  USAGE_SYNC_TIMEOUT_MS,
+} from "./lib/sticker-usage-sync.js";
 import { COLLECT_TARGET, collectStickerImage } from "./lib/sticker-collect.js";
 import { ensureStickerThumb, startThumbWarmup } from "./lib/sticker-thumb.js";
 import { contentHash, isReusableAttachment, touchAttachmentMeta } from "./lib/attachment-hash.js";
@@ -1262,6 +1269,8 @@ export function apply(ctx) {
     "imageRetentionDays",
     // 生图：一条自己的模型配置（含加密后的 Key），和朗读那条各走各的。
     "imageModel", "imageTier", "imageReviewEnabled", "backgroundSharePrepEnabled", "stickerInspirationEnabled",
+    // 表情用法自动同步：默认关，她自己开一次才生效。
+    "stickerUsageSyncEnabled",
     // 生活城市：跟天气各算各的。城市她自己填；真实街景另有一个明确的授权开关。
     "lifeCity", "lifeCityCode", "lifeCityStreetView", "lifeCityDiscoveries", "lifeCityIllustrations",
   ]);
@@ -1287,6 +1296,8 @@ export function apply(ctx) {
     if (Object.prototype.hasOwnProperty.call(patch, "backgroundSharePrepEnabled")) patch.backgroundSharePrepEnabled = patch.backgroundSharePrepEnabled === true;
     // 从本对话的表情找灵感：独立开关，只认真布尔，默认关。
     if (Object.prototype.hasOwnProperty.call(patch, "stickerInspirationEnabled")) patch.stickerInspirationEnabled = patch.stickerInspirationEnabled === true;
+    // 表情用法自动同步：独立开关，只认真布尔，默认关。
+    if (Object.prototype.hasOwnProperty.call(patch, "stickerUsageSyncEnabled")) patch.stickerUsageSyncEnabled = patch.stickerUsageSyncEnabled === true;
     if (Object.prototype.hasOwnProperty.call(patch, "myActionTail")) {
       patch.myAction = { text: actionTemplateFromTail(patch.myActionTail) };
       delete patch.myActionTail;
@@ -7316,6 +7327,62 @@ export function apply(ctx) {
     return applyStickerCorrections(catalog, corrections);
   }
 
+  // ─────────────────── 表情用法自动同步（默认关） ───────────────────
+  //
+  // 她在聊天里纠正过某张共享表情的用法（“这张不是卖萌，是被夸了之后假装不在意”），
+  // 顺手把这条用法告诉图库，图库那边挑图才不会又按旧标签选错。
+  //
+  // 边界：默认关；只处理她刚发的那一条；只推共享图库里的表情；普通照片不推；
+  // 她说「只留这里」就不推；同步在后台做，不等它，也不碰回聊。
+  const usageSyncer = createUsageSyncer({
+    request: (payload) => store.getGlobalSettings().stickerUsageSyncEnabled === true
+      ? ctx.bus.request(USAGE_SYNC_TARGET, payload, { timeout: USAGE_SYNC_TIMEOUT_MS })
+      : { ok: false, error: "自动同步已关闭" },
+    diagnostics,
+  });
+
+  /**
+   * 处理这一条新消息里的用法纠正。
+   * 只看这一条 + 它前面的几条（找得到那张图），不回头翻旧账。
+   */
+  async function scheduleStickerUsageSync({ agentId, message, history }) {
+    try {
+      if (store.getGlobalSettings().stickerUsageSyncEnabled !== true) return;
+      // 她明说只留这儿，就不推：这条纠正只留在茶话会本地。
+      if (mentionsLocalOnly(message?.text)) {
+        diagnostics({ event: "sticker.usage-sync.skipped", agentId, reason: "local-only" });
+        return;
+      }
+      const index = await readCatalog(ctx);
+      if (!index) return;
+      const catalog = buildCatalog(index, agentId);
+      if (!catalog?.stickers?.length) return;
+      // 只认共享图库里的编号：本地独有的图、她发的普通照片，都不在里头。
+      const allowedIds = new Set(catalog.byId.keys());
+      if (!allowedIds.size) return;
+      const aliases = new Map(readStickerLibrary(ctx.dataDir).stickers
+        .filter(row => allowedIds.has(row.sourceId))
+        .map(row => [row.id, row.sourceId]));
+      const correction = stickerCorrectionFrom(message, history || [], { aliases, allowedIds });
+      if (!correction) return;
+      // 只同步用法所在的分句，别顺手带上后半句的闲聊。
+      const meaning = correction.meaning.split(/[，,；;。！？\n]/u, 1)[0].trim();
+      const normalized = normalizeStickerCorrections([{ ...correction, meaning }])[0];
+      if (!isSyncableCorrection(normalized)) return;
+      const result = await usageSyncer.sync({ stickerId: normalized.id, meaning: normalized.meaning });
+      // 只记事实：成了就是成了，没成就是没成，不给自己贴标签。
+      diagnostics({
+        event: "sticker.usage-sync",
+        agentId,
+        stickerId: normalized.id,
+        status: result.status,
+        ...(result.error ? { error: result.error } : {}),
+      });
+    } catch (error) {
+      diagnostics({ event: "sticker.usage-sync.error", agentId, error: describeError(error) });
+    }
+  }
+
   async function composeBubbles(agentId, rawText, { maxBubbles = 6, history = [], currentContext = {} } = {}) {
     // 旧图协议在这一层也要剥：不然内部 JSON 会跟着分条进聊天。
     const mark = parseStickerMarker(parseChatImage(parseOldImageProtocol(rawText).text).text);
@@ -10720,6 +10787,9 @@ export function apply(ctx) {
         if (isSpeechMessage(stored) && replyComposer.interrupt(agentId, stored.id)) {
           diagnostics({ event: "reply.interrupted", agentId, messageId: stored.id });
         }
+        // 表情用法自动同步（默认关）：她刚纠正过某张共享表情的用法，就顺手告诉图库。
+        // 后台做，不等它，也不碰回聊；失败只记一笔，本地纠正和手动入口都还在。
+        void scheduleStickerUsageSync({ agentId, message: stored, history: threadBeforeMessage.messages });
         if (matchVideoStop(messageText)) {
           store.setGlobalSettings({ videoShareMaxPerDay: 0 });
           // 只记明确关闭的来源，不另设门禁；恢复仍由设置开关决定。
