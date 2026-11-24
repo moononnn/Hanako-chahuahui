@@ -43,10 +43,10 @@ const hasImagePart = (request) => (request?.messages ?? []).some((row) => Array.
 /* ── 纯函数 ── */
 
 test("队列只认自己那两种稿子，库存封顶", () => {
-  const rows = Array.from({ length: 6 }, (_, i) => ({ id: `p${i}`, kind: "photo", attachmentId: `img_${i}`, title: `t${i}` }));
+  const rows = Array.from({ length: 7 }, (_, i) => ({ id: `p${i}`, kind: i % 2 ? "sticker" : "photo", attachmentId: `img_${i}`, title: `t${i}` }));
   const clean = normalizePendingShares(rows);
-  assert.equal(clean.length, PENDING_SHARE_CAP);
-  assert.equal(clean[clean.length - 1].id, "p5", "留最新的");
+  assert.equal(PENDING_SHARE_CAP, 6);
+  assert.deepEqual(clean.map((row) => row.id), ["p1", "p2", "p3", "p4", "p5", "p6"], "两类稿共用上限，留最新的六件");
   assert.equal(normalizePendingShares([{ id: "x", kind: "other", attachmentId: "img_x" }]).length, 0);
   assert.equal(normalizePendingShares([{ id: "x", kind: "photo" }]).length, 0, "没有附件 id 的不算稿");
 });
