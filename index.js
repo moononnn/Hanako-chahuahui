@@ -302,6 +302,7 @@ import {
   parseStickerChoice,
   stickerChoicePrompt,
 } from "./lib/sticker-inspiration.js";
+import { applyStickerCorrections, correctedSticker, normalizeStickerCorrections, stickerCorrectionFrom } from "./lib/sticker-corrections.js";
 import { COLLECT_TARGET, collectStickerImage } from "./lib/sticker-collect.js";
 import { ensureStickerThumb, startThumbWarmup } from "./lib/sticker-thumb.js";
 import { contentHash, isReusableAttachment, touchAttachmentMeta } from "./lib/attachment-hash.js";
@@ -4165,7 +4166,7 @@ export function apply(ctx) {
       try {
         const stickerIndex = await readCatalog(ctx);
         if (stickerIndex) {
-          stickerCatalog = buildCatalog(stickerIndex, agentId);
+          stickerCatalog = learnedStickerCatalog(agentId, buildCatalog(stickerIndex, agentId));
           stickerText = buildStickerHint(stickerCatalog);
         }
       } catch (error) {
@@ -7293,6 +7294,28 @@ export function apply(ctx) {
    * 就只是不发，不影响说话。甩不甩交给ta自己按情绪判断，代码只管一条回复最多出一张
    * （多余的标记在 parseStickerMarker 那里就被吃掉了）。
    */
+  function learnedStickerCatalog(agentId, catalog) {
+    if (!catalog?.stickers.length) return catalog;
+    const memory = store.readMemory(agentId);
+    const rows = store.getThread(agentId).messages;
+    const allowedIds = new Set(catalog.byId.keys());
+    const aliases = new Map(readStickerLibrary(ctx.dataDir).stickers.filter(row => allowedIds.has(row.sourceId)).map(row => [row.id, row.sourceId]));
+    const found = [];
+    // 顺手认回最近的旧纠正，新收到的也走同一条链；不改历史消息或公共索引。
+    for (let i = Math.max(0, rows.length - 400); i < rows.length; i += 1) {
+      const row = rows[i];
+      if (row.role !== "user") continue;
+      const history = row.quote?.messageId ? rows : rows.slice(Math.max(0, i - 3), i);
+      const correction = stickerCorrectionFrom(row, history, { aliases, allowedIds });
+      if (correction) found.push(correction);
+    }
+    const corrections = normalizeStickerCorrections([...memory.stickerCorrections, ...found]);
+    if (JSON.stringify(corrections) !== JSON.stringify(memory.stickerCorrections)) {
+      store.writeMemory(agentId, { ...memory, stickerCorrections: corrections });
+    }
+    return applyStickerCorrections(catalog, corrections);
+  }
+
   async function composeBubbles(agentId, rawText, { maxBubbles = 6, history = [], currentContext = {} } = {}) {
     // 旧图协议在这一层也要剥：不然内部 JSON 会跟着分条进聊天。
     const mark = parseStickerMarker(parseChatImage(parseOldImageProtocol(rawText).text).text);
@@ -7301,7 +7324,7 @@ export function apply(ctx) {
     let stickerException = null;
     if (mark.keyword) {
       const index = await readCatalog(ctx);
-      const catalog = index ? buildCatalog(index, agentId) : null;
+      const catalog = index ? learnedStickerCatalog(agentId, buildCatalog(index, agentId)) : null;
       if (catalog) {
         const stickerPolicy = stickerPolicyFor(agentId, currentContext);
         const picked = pickSticker(catalog, {
@@ -7437,7 +7460,7 @@ export function apply(ctx) {
     });
     // 表情包：只借不给。读不到就什么都不提，聊天照常。
     const stickerIndex = await readCatalog(ctx);
-    const stickerCatalog = stickerIndex ? buildCatalog(stickerIndex, agentId) : null;
+    const stickerCatalog = stickerIndex ? learnedStickerCatalog(agentId, buildCatalog(stickerIndex, agentId)) : null;
     const stickerText = buildStickerHint(stickerCatalog);
     // ta自己那块表：现在几点、距上次说话多久、今天她开没开口
     const timeText = timeBlock({
@@ -10662,7 +10685,8 @@ export function apply(ctx) {
         if (isSticker) {
           const own = readOwnSticker(ctx.dataDir, stickerId);
           if (own) {
-            stickerSignalText = stickerLabelText(own.row);
+            const corrected = store.readMemory(agentId).stickerCorrections.find(row => row.id === (own.row.sourceId || stickerId));
+            stickerSignalText = stickerLabelText(correctedSticker(own.row, corrected?.meaning));
           } else {
             const stickerIndex = await readCatalog(ctx);
             const catalog = stickerIndex ? buildCatalog(stickerIndex, agentId) : null;
@@ -10671,7 +10695,7 @@ export function apply(ctx) {
               if (attachment?.id && !attachment.reused) removeAttachment(attachment.id);
               return c.json({ ok: false, error: { message: "这张表情包当前不可用" } }, 400);
             }
-            stickerSignalText = stickerLabelText(catalog.byId.get(stickerId));
+            stickerSignalText = stickerLabelText(learnedStickerCatalog(agentId, catalog).byId.get(stickerId));
           }
         }
         const messageText = text || (isSticker ? "[表情]" : "[图片]");
