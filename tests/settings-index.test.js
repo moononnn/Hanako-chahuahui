@@ -20,47 +20,14 @@ function panelBody(name) {
   return settings.slice(start, end);
 }
 
-/** 目录那一段。 */
-function indexBody() {
-  const start = settings.indexOf('id="settings-index"');
-  assert.ok(start > 0, '目录得在');
-  const end = settings.indexOf('</section>', start);
-  return settings.slice(start, end);
-}
-
-test('首屏是九类目录，每类都写清楚', () => {
-  assert.match(settings, /id="settings-index"/, '首屏得是目录');
-  assert.match(settings, /<h2 id="settings-index-title">设置目录<\/h2>/);
-  const groups = [...indexBody().matchAll(/data-group="([a-z]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(groups, ['appearance', 'sound', 'partners', 'proactive', 'immersion', 'image', 'model', 'usage', 'mobile']);
-  for (const title of ['外观与称呼', '声音', '伙伴', '主动联系', '城市与日常', '照片与表情', '模型与服务', '数据与用量', '手机']) {
-    assert.match(indexBody(), new RegExp(`<h3>${title}</h3>`), `${title} 这一类要写清楚`);
+test('首页三组九个整行入口，子页默认收起', () => {
+  const index = settings.slice(settings.indexOf('id="settings-index"'), settings.indexOf('id="panel-chat"'));
+  assert.deepEqual([...index.matchAll(/<h2>([^<]+)<\/h2>/g)].map(m => m[1]), ['聊天体验', '伙伴与日常', '应用管理']);
+  assert.deepEqual([...index.matchAll(/data-tab-target="([a-z]+)"/g)].map(m => m[1]), ['chat', 'sound', 'partners', 'proactive', 'immersion', 'image', 'model', 'usage', 'mobile']);
+  assert.doesNotMatch(index, /data-anchor|index-card|role="tablist"/);
+  for (const tab of ['chat', 'sound', 'voice', 'image', 'immersion', 'model', 'usage', 'search', 'proactive', 'partners', 'mobile']) {
+    assert.match(panelBody(tab), /data-settings-panel hidden/);
   }
-  // 目录里不摆侧栏，也不自己造路由。
-  assert.doesNotMatch(indexBody(), /<aside|role="navigation"/);
-});
-
-test('分类按钮的 id、data-tab 与面板编号一处没改', () => {
-  for (const [tab, label] of [['chat', '聊天显示'], ['sound', '提示音'], ['voice', '语音'], ['image', '生图'], ['immersion', '沉浸感'], ['model', '模型'], ['usage', '用量'], ['search', '搜索'], ['proactive', '主动联系'], ['partners', '伙伴'], ['mobile', '手机']]) {
-    assert.match(settings, new RegExp(`id="tab-${tab}" data-tab="${tab}"`), `${tab} 分类按钮得还在`);
-    assert.match(settings, new RegExp(`>${label}<`), `${label} 这一栏的名字没改`);
-    assert.match(settings, new RegExp(`id="panel-${tab}"`), `${tab} 面板编号没改`);
-  }
-  // 面板跟分类栏一一对应，除第一栏外都默认收着。
-  for (const tab of ['voice', 'immersion', 'model', 'proactive', 'partners']) {
-    assert.match(settings, new RegExp(`id="panel-${tab}"[^>]*hidden`), `${tab} 面板默认要收着`);
-  }
-});
-
-test('目录里的每一条都指得到真的面板和真的那一项', () => {
-  const links = [...indexBody().matchAll(/data-tab-target="([a-z]+)"(?: data-anchor="([a-z0-9-]+)")?/g)];
-  assert.ok(links.length >= 25, `目录条目太少：${links.length}`);
-  for (const [, tab, anchor] of links) {
-    assert.match(settings, new RegExp(`id="panel-${tab}"`), `${tab} 面板得在`);
-    if (anchor) assert.match(panelBody(tab), new RegExp(`id="${anchor}"`), `${anchor} 这一项得在 ${tab}`);
-  }
-  // 目录只带「去哪一栏、哪一项」，不夹带别的动作。
-  assert.doesNotMatch(indexBody(), /api\(|apiWith\(|fetch\(|saveGlobal/);
 });
 
 test('城市与日常：生活城市那四张卡搬到这一页，天气与日常感知独立成小节', () => {
@@ -76,7 +43,7 @@ test('城市与日常：生活城市那四张卡搬到这一页，天气与日�
 
 test('照片与表情：同一页分两组；图片存储搬到数据与用量', () => {
   const image = panelBody('image');
-  assert.match(image, /<h2>照片与生图<\/h2>/);
+  assert.match(image, /<h2>照片<\/h2>/);
   assert.match(image, /<h2>表情<\/h2>/);
   assert.match(image, /id="sticker-inspiration-card"/, '表情灵感得单独一张卡，跟备稿分开');
   assert.match(image, /id="sticker-usage-sync-card"/);
@@ -102,16 +69,14 @@ test('目录只是导航：老入口、setTab 副作用和面板懒加载都还�
   assert.match(settings, /setTab\("proactive"\)/, '伙伴页跳 B站分享那条老路还在');
   // 目录页与面板页来回切：目录藏起来、分类栏亮起来。
   assert.match(settings, /function showIndex\(\)/);
-  assert.match(settings, /if \(indexNode\) indexNode\.hidden = true;/);
-  assert.match(settings, /if \(tabsNode\) tabsNode\.hidden = false;/);
+  assert.match(settings, /indexNode\.hidden = true;/);
+  assert.match(settings, /indexBack\.addEventListener\("click", showIndex\)/);
   assert.match(settings, /showIndex\(\);/, '打开设置先落在目录上');
-  assert.match(settings, /const UI_BUILD = "20261124\.1"/, '设置页版本戳要升，页面旧了才看得出来');
+  assert.match(settings, /const UI_BUILD = "20261124\.2"/, '设置页版本戳要升，页面旧了才看得出来');
 });
 
-test('窄窗不横溢：451px 一级的窗口排得下', () => {
-  assert.match(settingsCss, /\.index-grid \{[^}]*repeat\(auto-fit, minmax\(200px, 1fr\)\)/s);
-  assert.match(settingsCss, /@media \(max-width: 520px\) \{[^@]*\.index-grid \{ grid-template-columns: 1fr; \}/s, '520px 以下目录排成一列');
-  assert.match(settingsCss, /\.index-link \{[^}]*overflow-wrap: anywhere;/s, '长词自己折，不横着顶出去');
-  assert.match(settingsCss, /\.tabs \{[^}]*flex-wrap: wrap;/s, '分类栏自己换行');
-  assert.match(settingsCss, /html, body \{[^}]*overflow-x: clip;/s);
+test('目录在窄窗仍是单列整行，子页不摆分类条', () => {
+  assert.match(settingsCss, /\.index-list \{[^}]*display: grid;/s);
+  assert.match(settingsCss, /\.index-list \.index-link \{[^}]*width: 100%;[^}]*min-height: 44px;/s);
+  assert.doesNotMatch(settings, /<nav class="tabs"/);
 });

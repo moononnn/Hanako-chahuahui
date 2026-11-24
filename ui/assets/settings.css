@@ -439,11 +439,31 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
   .setting-card { padding: 16px; }
 }
 
-/* 窄窗（手机上开设置页）：目录一列排开，长词自己折，不横着溢出去。 */
-@media (max-width: 520px) {
-  .index-grid { grid-template-columns: 1fr; }
-  .index-card { padding: 14px; }
-  .index-head { margin-left: 0; margin-right: 0; }
+.settings-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 8px; min-height: 52px; margin-bottom: 14px; border-bottom: 1px solid var(--line-soft); }
+.settings-toolbar h1 { font-size: clamp(17px, 4vw, 23px); text-align: center; }
+.settings-toolbar .soft-button { padding: 5px 8px; font-size: 12px; background: transparent; border-color: transparent; white-space: nowrap; }
+.settings-index { max-width: 600px; margin-inline: auto; }
+.index-group + .index-group { margin-top: 18px; }
+.index-group h2 { margin: 0 0 6px 10px; font-size: 13px; color: var(--ink-soft); }
+.index-list { display: grid; border: 1px solid var(--line-soft); border-radius: 13px; background: var(--surface); }
+.index-list .index-link { display: flex; width: 100%; min-height: 44px; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 13px; border: 0; border-radius: 0; background: transparent; color: var(--ink); font-size: 14px; font-weight: 600; }
+.index-list .index-link:first-child { border-radius: 12px 12px 0 0; }
+.index-list .index-link:last-child { border-radius: 0 0 12px 12px; }
+.index-list .index-link + .index-link { border-top: 1px solid var(--line-soft); }
+.index-list .index-link:hover, .index-list .index-link:focus-visible { background: var(--mint-soft); }
+.index-arrow { width: 7px; height: 7px; flex: none; margin-right: 3px; border: solid var(--mint-deep); border-width: 1px 1px 0 0; transform: rotate(45deg); }
+#panel-image .setting-card { margin: 0; box-shadow: none; border-radius: 0; padding: 12px 14px; }
+#panel-image .setting-card:first-of-type, #sticker-inspiration-card { border-radius: 12px 12px 0 0; }
+#panel-image #background-share-card, #panel-image #sticker-usage-sync-card { border-radius: 0 0 12px 12px; }
+#panel-image .setting-card + .setting-card { border-top: 0; }
+#panel-image .image-switch-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; align-items: start; }
+#panel-image .image-switch-row .detail-field { display: contents; }
+#panel-image .image-switch-row .switch { justify-self: end; }
+#panel-image .image-switch-row .detail-field-note { grid-column: 1 / -1; margin-top: 0; }
+#panel-sound + #panel-voice:not([hidden]), #panel-search:not([hidden]) { margin-top: 24px; }
+@media (max-width: 390px) {
+  .settings-toolbar { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 4px; }
+  .settings-toolbar .soft-button { padding-inline: 4px; }
 }
 
 /* ── 和小花聊聊：先体检，聊着改，点「确认修改」才落盘；旧版存着，能退回来 ── */

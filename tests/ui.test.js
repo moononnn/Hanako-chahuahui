@@ -806,20 +806,9 @@ test("设置页操作按钮和上方控件之间保留呼吸感", () => {
   assert.match(settingsCss, /\.user-name-field \.soft-button \{[^}]*margin-top: 12px;/s);
 });
 
-test("设置页按类目分栅，并提供移出和放回入口", () => {
-  // 六个分类各自一栅：找设置点一下就到，不用再一路往下滚
-  for (const [tab, label] of [["chat", "聊天显示"], ["voice", "语音"], ["immersion", "沉浸感"], ["model", "模型"], ["proactive", "主动联系"], ["partners", "伙伴"]]) {
-    assert.match(settings, new RegExp(`data-tab="${tab}"[^>]*>${label}<`), `${label} 要有自己的一栅`);
-    assert.match(settings, new RegExp(`id="panel-${tab}"`), `${label} 要有一块面板`);
-  }
-  // 面板跟分类栏一一对应，漏一个就会点不开；除第一栏外都默认收着
-  for (const tab of ["voice", "immersion", "model", "proactive", "partners"]) {
-    assert.match(settings, new RegExp(`id="panel-${tab}"[^>]*hidden`), `${tab} 面板默认要收着`);
-  }
-  assert.doesNotMatch(settings, /id="panel-chat"[^>]*hidden/, "默认落在第一栏");
-  // 分类得有 tab 语义，屏幕阅读器才知道当前在哪一栏
-  assert.match(settings, /role="tablist"/);
-  assert.match(settings, /aria-selected="true"/);
+test("设置页提供伙伴移出和放回入口", () => {
+  assert.match(settings, /id="panel-partners"[^>]*hidden/);
+  assert.match(settings, /data-tab-target="partners"/);
   assert.match(settings, /id="removed-entry"/);
   assert.match(settings, /只移出，内容留着/);
   assert.match(settings, /放回列表/);
