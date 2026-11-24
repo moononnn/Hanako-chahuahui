@@ -19,6 +19,8 @@ function setup(t, generate = async () => ({ bytes: PNG })) {
   const deps = { imageQuota, imageQuotaError: null, imageReferences: { current: () => reference, view: () => ({ currentId: reference?.id }) }, store: { getGlobalSettings: () => global, getPartnerSettings: () => partner }, ctx: {},
     generateChatImage: async (_ctx, options) => { calls.push(options); return generate(options); },
     normalizeImageModelPatch: () => ({}), detectImageType,
+    // 落盘前的二次质量检查（2026-11-23）：开关默认关时原样放行，这里照这个口径给桩。
+    reviewedImageBytes: async (_agentId, { bytes }) => ({ bytes, stale: false }),
     saveAttachment: input => { saved.push(input); return { id: "img_result", data: PNG }; },
     recordAttachmentDescription() {}, diagnostics() {}, describeError: error => ({ message: error.message }),
   };

@@ -275,6 +275,19 @@
           </div>
         </div>
       </article>
+      <article class="setting-card" id="image-review-card">
+        <div class="setting-copy">
+          <h3>生成后先自查一遍</h3>
+          <p>默认关闭。这是生图的一个新用途：打开后，每张生成好的图在发出去之前会额外调用一次识图模型复核——一张图一次审图，可能多花一次识图额度。</p>
+          <p class="setting-hint" id="image-review-hint" hidden>还没配好并验过识图模型：这一项开着就不发图了——画出来也没人审，先去那边配好识图模型。</p>
+        </div>
+        <div class="detail-field">
+          <button class="switch" id="image-review-switch" type="button" role="switch" aria-checked="false">
+            <span class="track"><span></span></span><span class="switch-label">关闭</span>
+          </button>
+          <small class="detail-field-note" id="image-review-note">只拦明显多出或缺失的肢体、脸崩、画面明显跑题、贴纸动作不明；Q 版、简笔、故意遮挡一律不挑。明确不通过时最多重画一次并再审一次（多花一次生图额度）；审图那头用不了时宁可不发图，只留文字。复核用你已经配好的识图模型，不换模型、不新加服务商。</small>
+        </div>
+      </article>
       <article class="setting-card" id="life-city-card">
         <div class="setting-copy">
           <h3>生活城市</h3>
@@ -1467,12 +1480,26 @@
       paintSearchEngine();
     }
 
+    /** 生图二次检查的开关：默认关；开之前把话说清楚。 */
+    function paintImageReview() {
+      const button = document.getElementById("image-review-switch");
+      if (!button) return;
+      const on = globalSettings.imageReviewEnabled === true;
+      button.classList.toggle("on", on);
+      button.setAttribute("aria-checked", String(on));
+      button.querySelector(".switch-label").textContent = on ? "打开" : "关闭";
+      const vision = globalSettings.vision || {};
+      const hint = document.getElementById("image-review-hint");
+      if (hint) hint.hidden = Boolean(vision.model && vision.status === "verified");
+    }
+
     /**
      * 生图那一条：不碰任何密钥，只记一个「用哪个模型」。
      * 首项永远是「跟随 Hana 的设置」——那才是正常情形，她不该为了用上这个功能
      * 还得先搞懂 provider 和 model 是两个东西。
      */
     function paintImageModel() {
+      paintImageReview();
       const tierHost = document.getElementById("image-global-tier");
       if (tierHost) choiceGroup(tierHost, [["off", "关闭"], ["less", "少一些"], ["normal", "适中"], ["more", "多一些"]], globalSettings.imageTier || "off", async value => {
         for (const button of tierHost.querySelectorAll("button")) button.disabled = true;
@@ -2877,6 +2904,10 @@
       }
     });
     // ── 生图：保存与试生成 ────────────────────────────
+    document.getElementById("image-review-switch").addEventListener("click", async () => {
+      const next = !globalSettings.imageReviewEnabled;
+      if (await saveGlobal({ imageReviewEnabled: next }, next ? "生成后自查已打开" : "生成后自查已关闭")) paintImageReview();
+    });
     document.getElementById("image-model-save").addEventListener("click", async (event) => {
       const button = event.currentTarget;
       button.disabled = true;

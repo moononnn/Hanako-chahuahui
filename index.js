@@ -496,6 +496,7 @@ import {
 } from "./lib/host-image.js";
 import { normalizeImageTier, chatImagePrompt, parseChatImage, pickPhotoShare, pickPhotoOpportunity, pickReasonPhoto, pickPhotoFallback, PHOTO_FALLBACK_SCENES, hasImagePromise, photoSharePrompt, streetViewPhotoPrompt, shouldDegradePhotoShare, photoShareBlockers, imageSceneExclusions } from "./lib/chat-image.js";
 import { createImageQuota } from "./lib/image-quota.js";
+import { imageReviewPrompt, parseImageReviewVerdict, shouldRepaintAfterReview } from "./lib/image-review.js";
 import { createImageReferences } from "./lib/image-reference.js";
 import { registerImageReferenceRoutes } from "./lib/image-reference-routes.js";
 import { createStreetViewLibrary, STREET_VIEW_CHANCE, STREET_VIEW_COOLDOWN_MS } from "./lib/street-view.js";
@@ -1236,7 +1237,7 @@ export function apply(ctx) {
     // 图片留多久：30 / 45 / 60 / 90 天，或 0 = 永久不删。
     "imageRetentionDays",
     // 生图：一条自己的模型配置（含加密后的 Key），和朗读那条各走各的。
-    "imageModel", "imageTier",
+    "imageModel", "imageTier", "imageReviewEnabled",
     // 生活城市：跟天气各算各的。城市她自己填；真实街景另有一个明确的授权开关。
     "lifeCity", "lifeCityCode", "lifeCityStreetView", "lifeCityDiscoveries", "lifeCityIllustrations",
   ]);
@@ -1256,6 +1257,8 @@ export function apply(ctx) {
   function normalizeGlobalSettingsPatch(input) {
     const patch = pickSettingsPatch(input, GLOBAL_SETTING_KEYS, "全局设置");
     if (Object.prototype.hasOwnProperty.call(patch, "imageTier")) patch.imageTier = normalizeImageTier(patch.imageTier);
+    // 生图二次检查：独立开关，只认真布尔，默认关。
+    if (Object.prototype.hasOwnProperty.call(patch, "imageReviewEnabled")) patch.imageReviewEnabled = patch.imageReviewEnabled === true;
     if (Object.prototype.hasOwnProperty.call(patch, "myActionTail")) {
       patch.myAction = { text: actionTemplateFromTail(patch.myActionTail) };
       delete patch.myActionTail;
@@ -2393,6 +2396,141 @@ export function apply(ctx) {
     return "生成一张自拍情景图。第一张参考图是唯一的人物外貌和画风参考；保持脸、发型、眼睛、配饰与原本的画风。第二张参考图只管地点：沿用相同的街道走向、建筑轮廓与路面，不照搬路人。人物自然站在取景一侧，保留可辨认的街巷纵深，像手机前置镜头随手拍的一张。不增加虚构店招、文字或水印。";
   }
 
+  /**
+   * 给审图模型的构图意图：只有固定类别说明。
+   *
+   * 刻意不用模型写的那句画面描述：它可能夹着聊天里的细节，而审图走的是另一家供应商，
+   * 那边不该拿到这些。普通图只按 self 分两种固定说法；城市插画与真实街景各用一条固定说明。
+   */
+  function imageReviewIntent({ request, illustration = false, streetScene = null }) {
+    if (streetScene) return "真实街景自拍：人物在前，已核过出处的真实街景在后";
+    if (illustration) return "城市插画：按同城公开文字材料画的城市街景";
+    return request?.self
+      ? "一张人物出镜的生活照：这位伙伴自己在画面里"
+      : "一张没有人出镜的生活照：画面里只有物件、食物或风景";
+  }
+
+  /**
+   * 二次检查开着的时候，得先有配好并验过的识图模型。
+   * 没有就不画：画出来也没人审，白花一次生图额度。
+   */
+  function imageReviewReady(agentId) {
+    const vision = effectiveVisionConfig(store.getGlobalSettings().vision, store.getPartnerSettings(agentId).vision);
+    const ref = normalizeModelRef(vision.model);
+    return Boolean(ref && vision.status === "verified");
+  }
+
+  /**
+   * 生图发出前的二次质量检查（2026-11-23）。
+   *
+   * 复用已经配好并验过的识图模型：只给候选图和一句构图意图，不给聊天。
+   * 判定严格三选一：pass / reject / unavailable。
+   * 审图这头自己不可用（没配、没验过、调用失败）就是 unavailable：
+   * 不换通道、不换 provider，更不新加域名。
+   */
+  async function reviewGeneratedImage(agentId, { bytes, mimeType, intent = "", kind = "chat" } = {}) {
+    if (!imageReviewReady(agentId)) return { verdict: "unavailable", reason: "no-vision-model" };
+    const vision = effectiveVisionConfig(store.getGlobalSettings().vision, store.getPartnerSettings(agentId).vision);
+    const ref = normalizeModelRef(vision.model);
+    if (!ref || !bytes) return { verdict: "unavailable", reason: "no-vision-model" };
+    const requestId = `chahuahui_review_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    try {
+      const raw = await withModelDeadline(ctx, {
+        requestId, timeoutMs: 60_000, operation: "image-review", diagnostics,
+        // 响应读取也放在期限里：provider 挂住时不能把这一轮拖死。
+        run: async () => {
+          const response = await ctx.models.stream({
+            requestId, provider: ref.provider, model: ref.model,
+            messages: [{ role: "user", content: [
+              { type: "text", text: imageReviewPrompt({ intent, kind }) },
+              { type: "image", mimeType, data: bytes.toString("base64") },
+            ] }],
+            maxTokens: 200, temperature: 0,
+          });
+          return typeof response?.text === "function" ? await response.text() : "";
+        },
+      });
+      let text = "";
+      for (const line of String(raw).split(/\r?\n/u)) {
+        try {
+          const row = JSON.parse(line);
+          if (row.type === "error") throw new Error(row.message || "审图模型调用失败");
+          if (row.type === "text-delta") text += String(row.delta ?? "");
+          if (row.type === "done" && !text && Array.isArray(row.assistant?.content)) {
+            text = row.assistant.content.filter((part) => part?.type === "text").map((part) => part.text).join("");
+          }
+        } catch (error) {
+          if (error instanceof SyntaxError) continue;
+          throw error;
+        }
+      }
+      const verdict = parseImageReviewVerdict(text);
+      diagnostics({ event: "image.review.verdict", agentId, provider: ref.provider, model: ref.model, verdict });
+      return { verdict, reason: text.trim().slice(0, 200) };
+    } catch (error) {
+      diagnostics({ event: "image.review.unavailable", agentId, error: describeError(error) });
+      return { verdict: "unavailable", reason: describeError(error) };
+    } finally {
+      try { await ctx.models.cancel(requestId); } catch (error) { diagnostics({ event: "models.cancel.failed", error: describeError(error) }); }
+    }
+  }
+
+  /**
+   * 落盘前的二次检查：不合格就最多重画一次，第二张也要审；仍不合格就不落附件。
+   *
+   * 返回 { bytes, stale }：bytes 为空表示这张不发（文字照发）；
+   * stale 表示这一轮已经被取消或作废，整条作罢。
+   */
+  async function reviewedImageBytes(agentId, { bytes, generationInput, stillValid, request, illustration = false, streetScene = null }) {
+    if (store.getGlobalSettings().imageReviewEnabled !== true) return { bytes, stale: false };
+    const intent = imageReviewIntent({ request, illustration, streetScene });
+    const kind = illustration ? "city-illustration" : streetScene ? "street" : "chat";
+    // 每次审图前都核一次这一轮还在不在：作废了就不审，也不发。
+    if (!stillValid()) return { bytes: null, stale: true };
+    const first = await reviewGeneratedImage(agentId, { bytes, mimeType: detectImageType(bytes), intent, kind });
+    if (first.verdict === "pass") {
+      if (!stillValid()) return { bytes: null, stale: true };
+      return { bytes, stale: false };
+    }
+    // 审图期间这一轮被取消了：整条作罢，别拿旧稿凑。
+    if (!stillValid()) return { bytes: null, stale: true };
+    // 只有明确 reject 才重画；unavailable 不重画（没人审，画了也是白画）。
+    const repaint = shouldRepaintAfterReview({
+      verdict: first.verdict,
+      stillCurrent: true,
+      quotaAvailable: imageQuota?.available(agentId) === true,
+      sameProvider: true, sameReference: true,
+    });
+    if (!repaint) {
+      diagnostics({ event: "image.review.blocked", agentId, verdict: first.verdict, repainted: false });
+      return { bytes: null, stale: false };
+    }
+    // 独立预占：重画是另一次生成，照原额度记一次。
+    let reservation2 = null;
+    try { reservation2 = imageQuota.reserve(agentId); }
+    catch (error) { diagnostics({ event: "image.review.repaint.failed", agentId, error: describeError(error) }); }
+    if (!reservation2) return { bytes: null, stale: false };
+    let settled2 = false;
+    try {
+      const retry = await generateChatImage(ctx, generationInput, reservation2, stillValid);
+      imageQuota.settle(reservation2, "success");
+      settled2 = true;
+      // 重画回来后这一轮若已作废：不能再发一次审图，直接作罢。
+      if (!stillValid()) return { bytes: null, stale: true };
+      const second = await reviewGeneratedImage(agentId, { bytes: retry.bytes, mimeType: detectImageType(retry.bytes), intent, kind });
+      if (second.verdict === "pass") return { bytes: retry.bytes, stale: false };
+      diagnostics({ event: "image.review.blocked", agentId, verdict: second.verdict, repainted: true });
+      return { bytes: null, stale: false };
+    } catch (error) {
+      if (!settled2) {
+        try { imageQuota.settle(reservation2, error?.imageOutcome || "unknown"); }
+        catch { /* 结算失败不影响这一轮的判定 */ }
+      }
+      diagnostics({ event: "image.review.repaint.failed", agentId, error: describeError(error) });
+      return { bytes: null, stale: false };
+    }
+  }
+
   async function prepareChatImage(agentId, request, { stillCurrent = () => true, signal = null, street = null, illustration = null } = {}) {
     if (!request) return { attachment: null, fallback: "" };
     if (!stillCurrent() || signal?.aborted) return { attachment: null, stale: true };
@@ -2403,6 +2541,11 @@ export function apply(ctx) {
     if (request.self && !reference) return { attachment: null, fallback: "还没定好我的参考照，这回先不拍自己。" };
     if (street && (!request.self || !street.path || !fs.existsSync(street.path))) return { attachment: null, stale: true };
     // 城市插画两种都行：self=true 带且只带一张角色参考照，self=false 零参考图只画街景。
+    // 二次检查开着、却没配好识图模型：先别画——画了也没人审，白花额度。
+    if (store.getGlobalSettings().imageReviewEnabled === true && !imageReviewReady(agentId)) {
+      diagnostics({ event: "image.review.skipped", agentId, reason: "no-vision-model" });
+      return { attachment: null, fallback: "还没配好识图模型，这回先不拍。" };
+    }
     const streetScene = street;
     let reservation;
     try { reservation = imageQuota.reserve(agentId); }
@@ -2428,10 +2571,15 @@ export function apply(ctx) {
         ...(reference ? [reference.path] : []),
         ...(streetScene ? [streetScene.path] : []),
       ];
-      const result = await generateChatImage(ctx, {
+      const generationInput = {
         prompt: streetScene || illustration ? prefix : [prefix, request.prompt].join("\n"),
         referencePaths, provider: choice.provider || undefined, model: choice.model || undefined,
-      }, reservation, () => stillCurrent() && !signal?.aborted && store.getGlobalSettings().imageTier !== "off" && store.getPartnerSettings(agentId).imageTier !== "off" && (!reference || imageReferences.view(agentId).currentId === reference.id) && (!streetScene || fs.existsSync(streetScene.path)));
+      };
+      const stillValid = () => stillCurrent() && !signal?.aborted
+        && store.getGlobalSettings().imageTier !== "off" && store.getPartnerSettings(agentId).imageTier !== "off"
+        && (!reference || imageReferences.view(agentId).currentId === reference.id)
+        && (!streetScene || fs.existsSync(streetScene.path));
+      const result = await generateChatImage(ctx, generationInput, reservation, stillValid);
       // 成功就算一次，即便等待期间旧稿作废或附件写入失败。
       imageQuota.settle(reservation, "success");
       settled = true;
@@ -2439,7 +2587,13 @@ export function apply(ctx) {
       if (!stillCurrent() || signal?.aborted || changed || store.getGlobalSettings().imageTier === "off" || store.getPartnerSettings(agentId).imageTier === "off") return { attachment: null, stale: true };
       if (streetScene && !fs.existsSync(streetScene.path)) return { attachment: null, stale: true };
       if (!detectImageType(result.bytes)) throw new Error("生成结果不是可用图片");
-      const saved = saveAttachment({ name: illustration ? "城市插画" : "聊天照片", mimeType: detectImageType(result.bytes), data: result.bytes.toString("base64"), agentId });
+      // 二次质量检查（2026-11-23）：查在落盘前——被判坏的图不留在这台机器上。
+      const reviewed = await reviewedImageBytes(agentId, {
+        bytes: result.bytes, generationInput, stillValid, request, illustration, streetScene,
+      });
+      if (reviewed.stale) return { attachment: null, stale: true };
+      if (!reviewed.bytes) return { attachment: null, fallback: "这张暂时没发出来，先聊着。" };
+      const saved = saveAttachment({ name: illustration ? "城市插画" : "聊天照片", mimeType: detectImageType(reviewed.bytes), data: reviewed.bytes.toString("base64"), agentId });
       const { data, ...attachment } = saved;
       recordAttachmentDescription(attachment.id, { title: "伙伴分享的照片", description: request.prompt, via: "generated" });
       // 街景素材的来路要留着：这张图的背景是哪张真实街景、谁拍的、什么许可，都记在附件上。
