@@ -3767,7 +3767,8 @@ export function apply(ctx) {
     };
     if (parsed.operation === "none") {
       const feedback = saveFeedback();
-      diagnostics({ event: "adaptation.reconcile.none", agentId, sourceMessageId: stored.id });
+      diagnostics({ event: "adaptation.reconcile.none", agentId, sourceMessageId: stored.id,
+        filtered: parsed.filtered?.reason ?? null });
       return { ...parsed, feedback };
     }
     if (parsed.operation === "revoke") {

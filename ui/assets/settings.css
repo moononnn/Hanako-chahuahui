@@ -554,6 +554,10 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 .adaptation-scope.wide { background: var(--blossom-soft); color: #9b5268; }
 .adaptation-item > p { margin: 7px 0 9px; color: var(--ink); overflow-wrap: anywhere; }
 .adaptation-actions, .adaptation-editor-actions, .adaptation-confirm-actions { flex-wrap: nowrap; }
+/* 建议复核：折叠区不占主列表；展开后每条仍是原来那套范围标签、一起改改、忘掉。 */
+.adaptation-review { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line-soft); }
+.adaptation-review > summary { color: var(--mint-deep); font-size: 12.5px; cursor: pointer; }
+.adaptation-item > .adaptation-review-reason { margin: 2px 0 9px; color: var(--ink-soft); font-size: 11.5px; line-height: 1.6; overflow-wrap: anywhere; }
 .adaptation-editor { margin-top: 12px; padding: 13px; border: 1px solid var(--line-soft); border-radius: var(--r-lg); background: var(--paper); }
 .adaptation-chat { max-height: 210px; overflow-y: auto; padding: 2px 2px 6px; }
 .adaptation-bubble { width: fit-content; max-width: 88%; margin-bottom: 8px; padding: 9px 11px; border-radius: var(--r-md); background: var(--mint-soft); color: var(--ink); font-size: 12.5px; overflow-wrap: anywhere; }

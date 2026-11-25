@@ -779,7 +779,7 @@
     import { hana as localHana } from "./assets/sdk.js";
     import { PROFILES, DEFAULT_PROFILE_ID, ensureAudio, normalizeSettings, play as playMessageSound } from "./assets/message-sound.js";
     import { mountMobileSettings } from "./assets/mobile-settings.js";
-    import { mountPartnerImageSettings } from "./assets/image-settings.js?v=20261125.3";
+    import { mountPartnerImageSettings } from "./assets/image-settings.js?v=20261125.4";
 
     // 嵌在聊天卡里时复用外层宿主桥；单独打开时仍保留原来的 SDK 兜底。
     const hana = window.parent !== window && window.parent.__chahuahuiHana ? window.parent.__chahuahuiHana : localHana;
@@ -797,7 +797,7 @@
 
     // 这一页自己的版本号：后端读同一个文件里的这一行，两边对不上就说明她眼前是旧的。
     // （以前用文件哈希当戳，但那个值是后端给的，页面旧了它照样显示新值，等于没测。）
-    const UI_BUILD = "20261125.3";
+    const UI_BUILD = "20261125.4";
 
     // 全局生图档位那一段说明：生效上限会拼在前面，这段是不变的部分。
     const GLOBAL_IMAGE_TIER_NOTE = "关闭／每天最多4张／8张／32张，本地时间零点更新。这是全体共用的一份额度；每位伙伴自己还有一档，两边都要有余额才出图——任一边关着就不发。生成成功才计入已出张数；等待结果的请求先占名额，超时不自动重试，结果未明时保留到次日。失败也可能产生上游费用。";
@@ -4064,6 +4064,50 @@
       panel.appendChild(card);
     }
 
+    // ── 适应理解（相处出来的理解）：长期才上这页，建议复核的收进折叠区 ──
+
+    /**
+     * 这条理解摆哪儿：主列表、建议复核、还是这页不摆。
+     *
+     * 后端每条都该带 duration（persistent / life-day / until / current-turn）。
+     * 还没带 duration 的后端（旧版本）就按长期算——宁可照旧显示，也不把旧数据藏起来。
+     * 短期条目（life-day / until / current-turn）即使当下有效，也不占这一页；
+     * 以后新增的、界上不认识的 duration 当长期处理，不让它们默默地消失。
+     */
+    const SHORT_GUIDE_DURATIONS = new Set(["life-day", "until", "current-turn"]);
+    function adaptationPlacement(guide) {
+      const raw = typeof guide?.duration === "string" ? guide.duration.trim() : "";
+      if (raw && SHORT_GUIDE_DURATIONS.has(raw)) return "hidden";
+      return typeof guide?.reviewReason === "string" && guide.reviewReason.trim() ? "review" : "main";
+    }
+
+    /** 把一页的条目分两拨：主列表；带复核原因的进折叠的「建议复核」。 */
+    function splitAdaptationItems(items) {
+      const main = [];
+      const review = [];
+      for (const guide of Array.isArray(items) ? items : []) {
+        const where = adaptationPlacement(guide);
+        if (where === "main") main.push(guide);
+        else if (where === "review") review.push(guide);
+      }
+      return { main, review };
+    }
+
+    /**
+     * 复核原因给人看的说法。
+     * 后端现在给的是短代码；认得的翻成人话，认不得的（已经是人话）原样显示；
+     * 看着像内部标识的，换成一句通用的话——页面上不摆代码。
+     */
+    const REVIEW_REASON_TEXT = {
+      "temporary-evidence": "当初的原话像是一时的情况（今天、这次、先别），却被记成了长期。",
+    };
+    function reviewReasonText(reason) {
+      const raw = typeof reason === "string" ? reason.trim() : "";
+      if (!raw) return "";
+      if (REVIEW_REASON_TEXT[raw]) return REVIEW_REASON_TEXT[raw];
+      return /^[a-z][a-z0-9_-]*$/i.test(raw) ? "当初的原话像是一时的情况，却被记成了长期。" : raw;
+    }
+
     async function openPartner(agentId, detailTab = "directory", nav = {}) {
       disposeImageSettings?.(); disposeImageSettings = null;
       const requestSeq = ++partnerRequestSeq;
@@ -5229,11 +5273,14 @@
       detailPanels.memory.appendChild(resetCard);
 
       const adaptationCard = detailCard("我们相处出来的理解", "这里只放会改变相处方式的理解。写偏了可以一起改，也可以让 ta 忘掉；不会碰 Hana 的人格和全局记忆。");
-      const adaptationItems = Array.isArray(adaptation.items) ? adaptation.items : [];
-      if (!adaptationItems.length) {
+      const { main: adaptationMain, review: adaptationReview } = splitAdaptationItems(adaptation.items);
+      if (!adaptationMain.length && !adaptationReview.length) {
         adaptationCard.appendChild(Object.assign(document.createElement("div"), { className: "empty-note", textContent: "还没有形成需要单独记下的相处习惯。" }));
+      } else if (!adaptationMain.length) {
+        adaptationCard.appendChild(Object.assign(document.createElement("div"), { className: "empty-note", textContent: `眼下没有需要直接改的长期理解；有 ${adaptationReview.length} 条在下面「建议复核」里，看看还作不作数。` }));
       }
-      for (const guide of adaptationItems) {
+      // 主列表和「建议复核」用同一个构造器：范围标签、一起改改、忘掉都照旧。
+      const buildAdaptationItem = (guide) => {
         const item = document.createElement("div");
         item.className = "adaptation-item";
         const scope = document.createElement("span");
@@ -5252,7 +5299,15 @@
         forget.className = "remove-link";
         forget.textContent = "忘掉";
         actions.append(revise, forget);
-        item.append(scope, itemText, actions);
+        item.append(scope, itemText);
+        if (typeof guide.reviewReason === "string" && guide.reviewReason.trim()) {
+          // 后端给的原因：代码也好、人话也好，页面上只摆人话。
+          const reason = document.createElement("p");
+          reason.className = "adaptation-review-reason";
+          reason.textContent = `建议复核：${reviewReasonText(guide.reviewReason)}`;
+          item.appendChild(reason);
+        }
+        item.appendChild(actions);
 
         forget.addEventListener("click", async () => {
           const reach = guide.scope === "user-wide" ? "这会让所有伙伴都忘掉这条理解。" : `这只会影响你和 ${partner.name}。`;
@@ -5385,7 +5440,22 @@
             }
           });
         });
-        adaptationCard.appendChild(item);
+        return item;
+      };
+      for (const guide of adaptationMain) adaptationCard.appendChild(buildAdaptationItem(guide));
+      if (adaptationReview.length) {
+        // 折叠起来，不占主列表的地方；展开后每条仍是原来那套「一起改改 / 忘掉」。
+        const reviewBox = document.createElement("details");
+        reviewBox.className = "adaptation-review";
+        const reviewSummary = document.createElement("summary");
+        reviewSummary.textContent = `建议复核（${adaptationReview.length}）`;
+        reviewBox.appendChild(reviewSummary);
+        const reviewHint = document.createElement("p");
+        reviewHint.className = "detail-field-note";
+        reviewHint.textContent = "这些长期理解可能已经过时了：看看还作不作数——可以一起改改，也可以忘掉。";
+        reviewBox.appendChild(reviewHint);
+        for (const guide of adaptationReview) reviewBox.appendChild(buildAdaptationItem(guide));
+        adaptationCard.appendChild(reviewBox);
       }
       detailPanels.relation.appendChild(adaptationCard);
 

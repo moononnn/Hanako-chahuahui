@@ -97,7 +97,7 @@ test('目录只是导航：老入口、setTab 副作用和面板懒加载都还�
   assert.match(settings, /function showIndex\(\)/);
   assert.match(settings, /indexNode\.hidden = true;/);
   assert.match(settings, /showIndex\(\);/, '打开设置先落在目录上');
-  assert.match(settings, /const UI_BUILD = "20261125\.3"/, '设置页版本戳要升，页面旧了才看得出来');
+  assert.match(settings, /const UI_BUILD = "20261125\.4"/, '设置页版本戳要升，页面旧了才看得出来');
 });
 
 test('目录在窄窗仍是单列整行，子页不摆分类条', () => {

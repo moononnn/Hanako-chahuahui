@@ -32,8 +32,8 @@ const book = (guide = baseGuide) => ({ revision: 4, guides: [guide], exceptions:
 test("查看相处理解只给轻量文案和作用范围，不泄露内部 schema 与数值", () => {
   const rows = listAdaptationForUser({ partnerBook: book(), userBook: book({ ...baseGuide, id: "g-wide", scope: "user-wide" }) });
   assert.deepEqual(rows.map((row) => Object.keys(row).sort()), [
-    ["id", "kind", "meaning", "scope", "updatedAt"],
-    ["id", "kind", "meaning", "scope", "updatedAt"],
+    ["duration", "id", "kind", "meaning", "scope", "updatedAt"],
+    ["duration", "id", "kind", "meaning", "scope", "updatedAt"],
   ]);
   assert.equal(JSON.stringify(rows).includes("confidence"), false);
   assert.equal(JSON.stringify(rows).includes("claims"), false);
