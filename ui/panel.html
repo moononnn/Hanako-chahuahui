@@ -1267,7 +1267,12 @@
     imageCollectMenu.hidden = true;
     document.body.appendChild(imageCollectMenu);
 
-    function closeImageCollectMenu() { imageCollectMenu.hidden = true; }
+    let imageCollectMenuRequest = 0;
+
+    function closeImageCollectMenu() {
+      imageCollectMenuRequest += 1;
+      imageCollectMenu.hidden = true;
+    }
 
     function placeImageCollectMenu(event) {
       const margin = 8;
@@ -1284,6 +1289,7 @@
       event.preventDefault();
       event.stopPropagation();
       const owner = String(img?.dataset?.attachmentOwner || current || "").trim();
+      const request = ++imageCollectMenuRequest;
       imageCollectMenu.replaceChildren(
         stickerMenuButton("收进表情包", () => void collectChatImage(owner, attachmentId)),
       );
@@ -1291,48 +1297,56 @@
       imageCollectMenu.style.left = "-9999px";
       imageCollectMenu.style.top = "-9999px";
       placeImageCollectMenu(event);
-      // 「允许作为表情动作参考」只加在她自己发的那张图上：那张图的权在她手里。
-      if (String(img?.dataset?.senderRole || "") === "user") void paintReferenceUseAction(event, owner, attachmentId);
+      // 只有自己发的图片才能授予动作参考权限。
+      if (String(img?.dataset?.senderRole || "") === "user") void paintReferenceUseAction(event, owner, attachmentId, request);
     }
 
-    /**
-     * 「允许作为表情动作参考」：她按一下就是授权（她有权、也准许拿去做表情动作参考），可以撤回。
-     *
-     * 授权状态要问后端才准：她什么时候按的、撤没撤，面板这边不猜。
-     */
-    async function paintReferenceUseAction(event, owner, attachmentId) {
+    async function paintReferenceUseAction(event, owner, attachmentId, request) {
       try {
         const result = await api("GET", `library/reference-use/${encodeURIComponent(owner)}/${encodeURIComponent(attachmentId)}`);
-        const allowed = Boolean(result?.referenceUse?.allowed);
-        const button = stickerMenuButton(allowed ? "撤回表情参考授权" : "允许作为表情动作参考", async () => {
-          closeImageCollectMenu();
-          setStatus(allowed ? "正在撤回…" : "正在记下…");
-          try {
-            const next = await api("POST", "library/reference-use", { agentId: owner, attachmentId, allowed: !allowed });
-            setStatus(next?.referenceUse?.allowed ? "以后这张可以当表情动作参考" : "已撤回，照它做的稿子也作废了");
-          } catch (error) {
-            setStatus(`没存上：${error.message}`);
-          }
-        });
+        if (request !== imageCollectMenuRequest || imageCollectMenu.hidden || owner !== current) return;
+        const button = result?.referenceUse?.allowed === true
+          ? stickerMenuButton("撤回表情参考授权", async () => {
+            closeImageCollectMenu();
+            setStatus("正在撤回…");
+            try {
+              await api("POST", "library/reference-use", { agentId: owner, attachmentId, allowed: false });
+              setStatus("已撤回参考授权，收藏保留");
+            } catch (error) {
+              setStatus(`没撤回：${error.message}`);
+            }
+          })
+          : stickerMenuButton("收进表情包并允许参考", () => void collectChatImage(owner, attachmentId, true));
         imageCollectMenu.appendChild(button);
         placeImageCollectMenu(event);
-      } catch { /* 问不到就不给这个选项 */ }
+      } catch { /* 问不到授权状态，仍可单独收藏。 */ }
     }
 
-    async function collectChatImage(owner, attachmentId) {
+    async function collectChatImage(owner, attachmentId, allowReference = false) {
       closeImageCollectMenu();
       setStatus("正在收进表情包…");
+      let collected;
       try {
         const result = await api("POST", "library/collect-sticker", { agentId: owner, attachmentId });
-        // 面板开着就顺手刷新，新收的图立刻能看见。
-        if (!el.stickerPicker.hidden) await loadStickerLibrary();
         const fwd = result?.forwarded;
-        setStatus(fwd?.ok
+        collected = fwd?.ok
           ? (fwd?.duplicate ? "这张已经在「表情包」里了" : "已收进「表情包」")
-          : "已收进茶话会（没装表情包）");
+          : "已收进茶话会表情库";
       } catch (error) {
         setStatus(`没存上：${error.message}`);
+        return;
       }
+      if (allowReference) {
+        try {
+          const result = await api("POST", "library/reference-use", { agentId: owner, attachmentId, allowed: true });
+          if (result?.referenceUse?.allowed !== true) throw new Error("没收到授权确认");
+          collected += "，已允许作为动作参考";
+        } catch (error) {
+          collected += `，但没记下参考授权：${error.message}`;
+        }
+      }
+      setStatus(collected);
+      if (!el.stickerPicker.hidden) void loadStickerLibrary().catch(() => {});
     }
 
     el.stickerGrid.addEventListener("contextmenu", (event) => {
