@@ -607,25 +607,28 @@
     </section>
 
     <section id="panel-partners" data-settings-panel hidden>
-      <div class="section-head partner-heading" id="partner-heading" tabindex="-1">
-        <div><h2>选择一位伙伴</h2><p>点头像看 ta 的联系习惯、动作和记忆。</p></div>
-        <span class="heading-gap"></span>
-        <button class="soft-button" id="new-local-entry" type="button">新增茶话会角色</button>
-        <button class="soft-button" id="removed-entry" type="button" hidden>已移出的伙伴</button>
-      </div>
-      <div class="section-head roomy">
-        <div><h2>伙伴表达</h2><p>伙伴的回复长什么样、能不能改。整屋只这一处，改了对所有伙伴都算数。</p></div>
-      </div>
-      <article class="setting-card compact">
-        <div class="setting-copy">
-          <h3>修整伙伴回复</h3>
-          <p>打开后，悬停在伙伴气泡上可以重新生成、调整或删除最新一轮回复。默认关闭，不影响平常聊天。</p>
+      <!-- 名单这一层：只在没打开任何伙伴时显示；点进某位伙伴后连同它一起收起。 -->
+      <div id="partner-list-view">
+        <div class="section-head partner-heading" id="partner-heading" tabindex="-1">
+          <div><h2>选择一位伙伴</h2><p>点头像看 ta 的联系习惯、动作和记忆。</p></div>
+          <span class="heading-gap"></span>
+          <button class="soft-button" id="new-local-entry" type="button">新增茶话会角色</button>
+          <button class="soft-button" id="removed-entry" type="button" hidden>已移出的伙伴</button>
         </div>
-        <button class="switch" id="msg-refine-switch" type="button" role="switch" aria-checked="false">
-          <span class="track"><span></span></span><span class="switch-label">不显示</span>
-        </button>
-      </article>
-      <div class="partner-grid" id="partner-list"></div>
+        <div class="section-head roomy">
+          <div><h2>伙伴表达</h2><p>伙伴的回复长什么样、能不能改。整屋只这一处，改了对所有伙伴都算数。</p></div>
+        </div>
+        <article class="setting-card compact">
+          <div class="setting-copy">
+            <h3>修整伙伴回复</h3>
+            <p>打开后，悬停在伙伴气泡上可以重新生成、调整或删除最新一轮回复。默认关闭，不影响平常聊天。</p>
+          </div>
+          <button class="switch" id="msg-refine-switch" type="button" role="switch" aria-checked="false">
+            <span class="track"><span></span></span><span class="switch-label">不显示</span>
+          </button>
+        </article>
+        <div class="partner-grid" id="partner-list"></div>
+      </div>
       <div id="partner-body"></div>
     </section>
 
@@ -776,7 +779,7 @@
     import { hana as localHana } from "./assets/sdk.js";
     import { PROFILES, DEFAULT_PROFILE_ID, ensureAudio, normalizeSettings, play as playMessageSound } from "./assets/message-sound.js";
     import { mountMobileSettings } from "./assets/mobile-settings.js";
-    import { mountPartnerImageSettings } from "./assets/image-settings.js?v=20261125.2";
+    import { mountPartnerImageSettings } from "./assets/image-settings.js?v=20261125.3";
 
     // 嵌在聊天卡里时复用外层宿主桥；单独打开时仍保留原来的 SDK 兜底。
     const hana = window.parent !== window && window.parent.__chahuahuiHana ? window.parent.__chahuahuiHana : localHana;
@@ -794,7 +797,7 @@
 
     // 这一页自己的版本号：后端读同一个文件里的这一行，两边对不上就说明她眼前是旧的。
     // （以前用文件哈希当戳，但那个值是后端给的，页面旧了它照样显示新值，等于没测。）
-    const UI_BUILD = "20261125.2";
+    const UI_BUILD = "20261125.3";
 
     // 全局生图档位那一段说明：生效上限会拼在前面，这段是不变的部分。
     const GLOBAL_IMAGE_TIER_NOTE = "关闭／每天最多4张／8张／32张，本地时间零点更新。这是全体共用的一份额度；每位伙伴自己还有一档，两边都要有余额才出图——任一边关着就不发。生成成功才计入已出张数；等待结果的请求先占名额，超时不自动重试，结果未明时保留到次日。失败也可能产生上游费用。";
@@ -803,6 +806,7 @@
       status: document.getElementById("status"),
       backToChat: document.getElementById("back-to-chat"),
       partnerList: document.getElementById("partner-list"),
+      partnerListView: document.getElementById("partner-list-view"),
       partnerBody: document.getElementById("partner-body"),
       removedEntry: document.getElementById("removed-entry"),
       newLocalEntry: document.getElementById("new-local-entry"),
@@ -943,6 +947,68 @@
       pageTitle.textContent = detailTab === "directory" ? who : `${who} · ${partnerSectionLabel(detailTab)}`;
     }
 
+    // ── 伙伴页的三层：名单 → 某位伙伴的目录 → 某个分项 ──
+
+    /** 现在在哪一层：名单 / 目录 / 分项（不在伙伴页时返回 null）。 */
+    function partnerLevel() {
+      if (activeSetting !== "partners") return null;
+      if (!currentId) return "list";
+      return currentDetailTab === "directory" ? "directory" : "section";
+    }
+
+    /** 名单和它的附属内容（标题、新增/移出、伙伴表达）只在名单这一层出现。 */
+    function paintPartnerListVisibility() {
+      if (!el.partnerListView) return;
+      el.partnerListView.hidden = partnerLevel() !== "list";
+    }
+
+    /**
+     * 工具栏那一个返回：一层一层往上退，退到名单再退就是总目录。
+     * 文字跟着目标变，不让她猜这一下会去哪。
+     */
+    function paintIndexBackLabel() {
+      if (!indexBack) return;
+      const level = partnerLevel();
+      const target = level === "section" ? "这位伙伴的设置" : level === "directory" ? "伙伴名单" : "设置";
+      indexBack.textContent = level === "list" || level === null ? "‹ 设置" : "‹ 返回";
+      indexBack.setAttribute("aria-label", `返回${target}`);
+    }
+
+    /** 回到伙伴名单：清掉打开的那位，名单和它的附属内容一起回来。 */
+    function showPartnerList(options) {
+      const focusPartnerId = options && options.focusPartnerId ? String(options.focusPartnerId) : null;
+      // 在途的伙伴页回包一律作废，免得它晚一步又把人拽回分项。
+      partnerRequestSeq += 1;
+      currentId = null;
+      currentDetailTab = "directory";
+      el.partnerBody?.replaceChildren();
+      paintPartnerList();
+      paintPartnerListVisibility();
+      paintIndexBackLabel();
+      if (activeSetting !== "partners") return;
+      pageTitle.textContent = "伙伴设置";
+      window.scrollTo(0, 0);
+      const target = focusPartnerId ? el.partnerList.querySelector(`[data-partner-id="${focusPartnerId}"]`) : null;
+      if (target) target.focus({ preventScroll: true });
+      else pageTitle.focus({ preventScroll: true });
+    }
+
+    /** 工具栏那个返回：分项 → 该伙伴目录 → 伙伴名单 → 设置总目录，一层一层退。 */
+    function stepBack() {
+      if (activeSetting === "partners") {
+        const level = partnerLevel();
+        if (level === "section") {
+          void openPartner(currentId, "directory", { focusSection: currentDetailTab });
+          return;
+        }
+        if (level === "directory") {
+          showPartnerList({ focusPartnerId: currentId });
+          return;
+        }
+      }
+      showIndex();
+    }
+
     function setTab(name) {
       if (name !== "proactive") stopVideoQr();
       if (!el.panels[name]) return;
@@ -956,9 +1022,9 @@
       pageTitle.textContent = entry?.textContent.trim() || "设置";
       window.scrollTo(0, 0);
       pageTitle.focus({ preventScroll: true });
-      if (name === "partners" && !currentId && partners.length) void openPartner(partners[0].id);
-      // 回到伙伴页时标题跟着当前那一位走，不能停在泛泛的「伙伴设置」上。
-      else if (name === "partners" && currentId) paintPartnerContextTitle(partners.find((p) => p.id === currentId), currentDetailTab);
+      // 进「伙伴设置」只落到名单，不替她打开第一位。
+      if (name === "partners") showPartnerList();
+      paintIndexBackLabel();
       if (name === "usage") void loadUsage();
       if (name === "mobile") void mobilePanel?.refresh();
     }
@@ -974,14 +1040,15 @@
         indexNode.querySelector(`[data-tab-target="${activeSetting}"]`)?.focus();
         activeSetting = "";
       }
+      paintIndexBackLabel();
     }
 
     indexNode.addEventListener("click", (event) => {
       const link = event.target.closest(".index-link");
       if (link) setTab(link.dataset.tabTarget);
     });
-    // 工具栏这个「‹ 设置」永远回总目录；伙伴子页里那一层回退由页内的「返回」自己管。
-    indexBack.addEventListener("click", showIndex);
+    // 工具栏就这一个返回：分项 → 该伙伴目录 → 伙伴名单 → 设置总目录，一层一层退。
+    indexBack.addEventListener("click", stepBack);
 
     // ── 用量那一页 ──
     // 只读宿主账本：拿不到就说拿不到，不把空白画成一排零。
@@ -3727,6 +3794,7 @@
         const button = document.createElement("button");
         button.type = "button";
         button.className = `partner-pick${partner.id === currentId ? " on" : ""}`;
+        button.dataset.partnerId = partner.id;
         button.appendChild(avatar(partner));
         const copy = document.createElement("span");
         copy.className = "partner-pick-copy";
@@ -3736,7 +3804,7 @@
         state.textContent = partner.settings?.proactiveEnabled === false ? "不会主动来" : (TIERS.find(([id]) => id === (partner.settings?.tier ?? "sometimes"))?.[1] ?? "偶尔聊聊");
         copy.append(name, state);
         button.appendChild(copy);
-        button.addEventListener("click", () => openPartner(partner.id));
+        button.addEventListener("click", () => openPartner(partner.id, "directory", { focus: true }));
         el.partnerList.appendChild(button);
       }
       if (!partners.length) {
@@ -4010,9 +4078,12 @@
       currentId = agentId;
       currentDetailTab = detailTab;
       paintPartnerList();
+      paintPartnerListVisibility();
+      paintIndexBackLabel();
       paintPartnerSkinNote();
       const partner = partners.find((p) => p.id === agentId);
-      if (!partner) { el.partnerBody.replaceChildren(); return; }
+      // 这位伙伴已经不在名单里了（刚被移出/删掉）：退回名单，不留一张空页。
+      if (!partner) { showPartnerList(); return; }
       const root = document.createElement("div");
       root.className = "partner-detail";
       if (activeSetting === "partners") paintPartnerContextTitle(partner, detailTab);
@@ -4055,7 +4126,9 @@
         el.partnerBody.replaceChildren(root);
         if (activeSetting === "partners") {
           window.scrollTo(0, 0);
+          // 退回目录时焦点落回刚才那一行；从名单点进来时落在标题（念出这位伙伴的名字）。
           if (nav.focusSection) root.querySelector(`[data-partner-section="${nav.focusSection}"]`)?.focus();
+          else if (nav.focus) pageTitle?.focus({ preventScroll: true });
         }
         return;
       }
@@ -4082,15 +4155,7 @@
           detailPanels[id] = panel;
         }
       }
-      {
-        // 子页：只留一个「返回」，其余全是这一页自己的内容。
-        const back = document.createElement("button");
-        back.type = "button";
-        back.className = "soft-button partner-back";
-        back.textContent = "‹ 返回";
-        back.addEventListener("click", () => openPartner(agentId, "directory", { focusSection: detailTab }));
-        root.appendChild(back);
-      }
+      // 子页不另摆返回：退哪一层交给工具栏那一个返回。
       for (const panel of Object.values(detailPanels)) root.appendChild(panel);
 
       const s = partner.settings ?? {};
@@ -5715,19 +5780,11 @@
         hiddenPartners = hiddenPartners.filter((p) => p.id !== agentId);
         pendingRemoveId = null;
         partnerRequestSeq += 1;
-        currentId = partners[0]?.id ?? null;
         closeModal("purge-modal", false);
-        paintPartnerList();
         paintRemovedPartners();
-        // 删掉之后焦点落到新的当前伙伴上，这个是对的；
-        // 但守卫得先松手，不然它会把视口按在原处，焦点所在的地方反而看不到。
+        // 删完回名单：不自动替她打开下一位；焦点先松手，免得视口被按在原处。
         releaseViewport();
-        if (currentId) {
-          await openPartner(currentId);
-          document.querySelector(".partner-pick.on")?.focus();
-        } else {
-          el.partnerBody.replaceChildren();
-        }
+        showPartnerList({ focusPartnerId: partners[0]?.id ?? null });
         say(`「${partner.name}」在茶话会这边已经删干净了`, "ok");
       } catch (error) {
         say(`没删掉：${error.message}`, "err");
@@ -5749,17 +5806,10 @@
         partners = partners.filter((p) => p.id !== agentId);
         pendingRemoveId = null;
         partnerRequestSeq += 1;
-        currentId = partners[0]?.id ?? null;
         closeModal("remove-modal", false);
-        paintPartnerList();
+        // 移出后回名单：不自动替她打开下一位，焦点落到还剩下的伙伴上。
         releaseViewport();
-        if (currentId) {
-          await openPartner(currentId);
-          document.querySelector(".partner-pick.on")?.focus();
-        } else {
-          el.partnerBody.replaceChildren();
-          document.getElementById("partner-heading")?.focus();
-        }
+        showPartnerList({ focusPartnerId: partners[0]?.id ?? null });
         say(`已移出「${partner.name}」`, "ok");
       } catch (error) { say(`移出失败：${error.message}`, "err"); }
       finally { button.disabled = false; button.textContent = "只移出，内容留着"; }
@@ -5866,9 +5916,16 @@
             ? videoShareDraft.partnerIds.includes(p.id)
             : p.settings?.videoSharingEnabled === true).map((p) => p.id);
         }
-        if (currentId && !partners.some((p) => p.id === currentId)) currentId = partners[0]?.id ?? null;
+        // 打开着的那位被移出/删掉了：退回名单，不替她自动打开下一位。
+        if (currentId && !partners.some((p) => p.id === currentId)) {
+          currentId = null;
+          currentDetailTab = "directory";
+          el.partnerBody.replaceChildren();
+        }
         paintGlobal();
         paintPartnerList();
+        paintPartnerListVisibility();
+        paintIndexBackLabel();
         if (currentId) await openPartner(currentId, currentDetailTab);
         else el.partnerBody.replaceChildren();
         // 伙伴那一侧的皮肤跟人走：换人之后再把那句说明重写一遍

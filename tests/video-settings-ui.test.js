@@ -319,6 +319,9 @@ test("reload的慢旧GET与集中保存共用队列，两个调用顺序都不�
     if (first === "reload") server.partners.push({ id: "restored", name: "恢复伙伴", settings: { videoSharingEnabled: true } });
     h.context.currentId = "yes";
     h.context.currentDetailTab = "directory";
+    // reloadSettings 那段也会重画名单层和工具栏返回：给两个不做事的桩。
+    h.context.paintPartnerListVisibility = () => {};
+    h.context.paintIndexBackLabel = () => {};
     h.context.paintGlobal = () => h.run("paintVideoSharing()");
     h.context.paintPartnerList = () => {};
     // reloadSettings 末尾会重写「ta 那侧戴着 xx」那句话。这张测试只验队列顺序，

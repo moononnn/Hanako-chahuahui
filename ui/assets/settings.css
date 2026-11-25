@@ -200,10 +200,6 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 .partner-hero-copy { min-width: 0; flex: 1; }
 .partner-hero h2 { margin: 0; font-size: 18px; color: var(--mint-deep); }
 .partner-hero p { margin: 2px 0 0; color: var(--ink-soft); font-size: 12px; }
-/* 子页只留一个「返回」：轻字重、灰绿，不当成主操作 */
-.soft-button.partner-back { display: inline-flex; align-items: center; gap: 2px; margin: 0 0 14px; padding: 4px 2px; border: 0; background: transparent; color: #607769; font-size: 13px; font-weight: 400; }
-@media (hover: hover) and (pointer: fine) { .soft-button.partner-back:hover { background: transparent; color: var(--mint-deep); } }
-.soft-button.partner-back:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; border-radius: var(--r-xs); }
 .detail-card-head { margin-bottom: 15px; }
 
 /* ── 性格档案：只读展示当前画像与形成线索 ── */

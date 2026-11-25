@@ -973,9 +973,9 @@ test("设置页：整个页面的选项都不许把页面抽回最上面（2026-
   // 两个保存出口都要挂上：全局设置和单个伙伴的设置
   assert.match(settings, /say\(successText, "ok"\);\s*\n\s*holdViewport\(\);\s*\n\s*return true;/, "保存全局设置后要按住视口");
   assert.match(settings, /say\(successText, "ok"\);\s*\n\s*holdViewport\(\);\s*\n\s*return data\.settings;/, "保存伙伴设置后要按住视口");
-  // 移出 / 彻底删除之后焦点要落到新的当前伙伴上，这时守卫得先让位
+  // 移出 / 彻底删除之后回到名单，焦点落到还剩下的伙伴上；这时守卫得先让位
   assert.match(settings, /paintRemovedPartners\(\);[\s\S]{0,120}?releaseViewport\(\);/);
-  assert.match(settings, /paintPartnerList\(\);\s*\n\s*releaseViewport\(\);\s*\n\s*if \(currentId\) \{/);
+  assert.match(settings, /releaseViewport\(\);\s*\n\s*showPartnerList\(\{ focusPartnerId: partners\[0\]\?\.id \?\? null \}\);/, "移出/删除后回名单，不自动替她打开下一位");
   // 自定义下拉收起面板时也要叫一下：面板占的那块高度瞬间没了
   const dd = fs.readFileSync(new URL("../ui/assets/beautify-select.js", import.meta.url), "utf8");
   assert.match(dd, /typeof window\.holdViewport === "function"\) window\.holdViewport\(\);/, "下拉收起也要按住视口");

@@ -45,18 +45,19 @@ test('天气与日常：公共页天气置顶，生活城市跟伙伴走', () =>
   assert.match(settings, /function mountPartnerCitySettings/);
 });
 
-test('伙伴目录：三组八行、子页只有一个返回，标题带伙伴名', () => {
+test('伙伴目录：三组八行、分项不另摆返回，标题带伙伴名', () => {
   const start = settings.indexOf('const PARTNER_SECTIONS');
   assert.ok(start > 0, 'PARTNER_SECTIONS 得在');
   const sections = settings.slice(start, settings.indexOf('function partnerSectionLabel', start));
   const rows = [...sections.matchAll(/\["([a-z]+)", "([^"]+)"\]/g)].map((match) => match[1]);
   assert.deepEqual([...new Set(rows)], ['contact', 'relation', 'action', 'city', 'room', 'model', 'memory', 'manage']);
   assert.deepEqual([...sections.matchAll(/group: "([^"]+)"/g)].map((m) => m[1]), ['怎么相处', '她的日常', '管理']);
-  // 目录页点一行进子页，子页里只留一个「‹ 返回」。
-  assert.match(settings, /className = "soft-button partner-back"/);
+  // 分项页里不另摆「返回」：退哪一层交给工具栏那一个返回。
+  assert.doesNotMatch(settings, /className = "soft-button partner-back"/);
+  assert.doesNotMatch(settingsCss, /partner-back/);
   assert.match(settings, /openPartner\(agentId, id, \{ focus: true \}\)/);
-  assert.match(settings, /openPartner\(agentId, "directory", \{ focusSection: detailTab \}\)/);
-  // 标题能认出是哪位伙伴：目录页写名字，子页写「名字 · 这一块」。
+  assert.match(settings, /openPartner\(currentId, "directory", \{ focusSection: currentDetailTab \}\)/);
+  // 标题能认出是哪位伙伴：目录页写名字，分项页写「名字 · 这一块」。
   assert.match(settings, /const who = partner\?\.name \|\| "伙伴设置";/);
   assert.match(settings, /`\$\{who\} · \$\{partnerSectionLabel\(detailTab\)\}`/);
   // 旧标签名（personality 这些）落回目录，不留空页。
@@ -85,7 +86,9 @@ test('修整伙伴回复挪到伙伴表达，外观与称呼只留显示', () =>
 test('目录只是导航：老入口、setTab 副作用和面板懒加载都还在', () => {
   assert.match(settings, /id="back-to-chat"/, '返回聊天那个入口没动');
   assert.match(settings, /function setTab\(name\)/);
-  assert.match(settings, /if \(name === "partners" && !currentId && partners\.length\) void openPartner\(partners\[0\]\.id\)/, '伙伴页照旧自己挑一位');
+  // 进「伙伴设置」只落到名单，不替她打开第一位。
+  assert.match(settings, /if \(name === "partners"\) showPartnerList\(\);/);
+  assert.doesNotMatch(settings, /void openPartner\(partners\[0\]\.id\)/);
   assert.match(settings, /if \(name === "usage"\) void loadUsage\(\)/, '用量账本照旧进了再读');
   assert.match(settings, /if \(name === "mobile"\) void mobilePanel\?\.refresh\(\)/, '手机页照旧进了再刷');
   assert.match(settings, /id="video-share-card"/, 'B站分享那张卡在主设置里');
@@ -93,9 +96,8 @@ test('目录只是导航：老入口、setTab 副作用和面板懒加载都还�
   // 目录页与面板页来回切：目录藏起来、分类栏亮起来。
   assert.match(settings, /function showIndex\(\)/);
   assert.match(settings, /indexNode\.hidden = true;/);
-  assert.match(settings, /indexBack\.addEventListener\("click", showIndex\)/, '工具栏那个「‹ 设置」永远回总目录');
   assert.match(settings, /showIndex\(\);/, '打开设置先落在目录上');
-  assert.match(settings, /const UI_BUILD = "20261125\.2"/, '设置页版本戳要升，页面旧了才看得出来');
+  assert.match(settings, /const UI_BUILD = "20261125\.3"/, '设置页版本戳要升，页面旧了才看得出来');
 });
 
 test('目录在窄窗仍是单列整行，子页不摆分类条', () => {
