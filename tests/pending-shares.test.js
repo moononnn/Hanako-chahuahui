@@ -107,7 +107,7 @@ async function boot(t, {
       rhythmProactiveEnabled: true, imageTier: "less", quiet: { start: clock(far.getHours()), end: clock(far.getHours() + 1) },
       weatherEnabled: false, workfeedEnabled: false, rhythmEnabled: false,
       globalGate: { minGapMinutes: 0, maxPerDay: 24 },
-      lifeCity: city, lifeCityCode: "city-test-code", lifeCityDiscoveries: true,
+      lifeCity: city, lifeCityCode: "city-test-code", lifeCityDiscoveries: true, lifeCityIllustrations: true,
       ...(prep ? { backgroundSharePrepEnabled: true } : {}),
       ...(review ? { imageReviewEnabled: true } : {}),
       ...(vision ? { vision: { model: { provider: "test-provider", model: "test-model" }, status: "verified" } } : {}),

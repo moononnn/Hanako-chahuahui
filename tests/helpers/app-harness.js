@@ -281,7 +281,7 @@ export function fakeWavBase64() {
  * 起一个真装载的茶话会：走真的 apply(ctx)，路由是真的，数据目录是临时的。
  * 只有宿主接口是假的（模型、伙伴列表、网络）。
  */
-export async function bootChahuahui({ seed, entryUrl = new URL("../../index.js", import.meta.url), resources = null } = {}) {
+export async function bootChahuahui({ seed, entryUrl = new URL("../../index.js", import.meta.url), resources = null, partners = null } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "chahuahui-routes-"));
   const store = createStore(dataDir);
   const models = createModelStub();
@@ -293,6 +293,8 @@ export async function bootChahuahui({ seed, entryUrl = new URL("../../index.js",
   const serviceScope = new AsyncResource("AppHarnessService");
 
   const partner = { id: "nova", name: "小花", description: "测试用伙伴", personality: "嘴上不饶人，但心里有数" };
+  // 多位伙伴的用例（比如各自的生活城市）需要两份名单。
+  const partnerList = Array.isArray(partners) && partners.length ? partners : [partner];
   const ctx = {
     dataDir,
     routes: { register(callback) { callback(host.app); } },
@@ -308,8 +310,11 @@ export async function bootChahuahui({ seed, entryUrl = new URL("../../index.js",
             signal: options.signal ?? new AbortController().signal,
           }));
         }
-        if (type === "agent:list") return { agents: [partner] };
-        if (type === "agent:profile") return { agent: partner };
+        if (type === "agent:list") return { agents: partnerList };
+        if (type === "agent:profile") {
+          const wanted = String(payload?.agentId ?? payload?.id ?? "");
+          return { agent: partnerList.find((row) => row.id === wanted) ?? partnerList[0] };
+        }
         return { agents: [] };
       },
       subscribe() { return () => {}; },

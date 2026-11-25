@@ -531,7 +531,7 @@ import {
 import { createImageReferences } from "./lib/image-reference.js";
 import { registerImageReferenceRoutes } from "./lib/image-reference-routes.js";
 import { createStreetViewLibrary, STREET_VIEW_CHANCE, STREET_VIEW_COOLDOWN_MS } from "./lib/street-view.js";
-import { normalizeLifeCity, normalizeStreetViewConsent, lifeCityBlockers, lifePlacesPrompt, cityDiscoveryQuery, cityDiscoveryResults } from "./lib/life-city.js";
+import { normalizeLifeCity, normalizeStreetViewConsent, lifeCityBlockers, lifePlacesPrompt, cityDiscoveryQuery, cityDiscoveryResults, effectiveLifeCity, partnerCityOverride, PARTNER_CITY_KEYS } from "./lib/life-city.js";
 import {
   MAX_NUDGE_BUBBLES,
   nudgeDelay,
@@ -812,15 +812,78 @@ export function apply(ctx) {
    * 新闻是主动插进来的，一天两条封顶，再多就变成推送了。
    */
   const newCityDiscoveryEpoch = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  let cityDiscoveryEpoch = newCityDiscoveryEpoch();
-  function activeCityDiscovery() {
-    const global = store.getGlobalSettings();
-    const city = normalizeLifeCity(global.lifeCity);
-    const code = String(global.lifeCityCode ?? "");
-    return global.lifeCityDiscoveries === true && city ? { city, code, key: `${cityDiscoveryEpoch}:${city}:${code}` } : null;
+  // 发现候选的纪元按伙伴分开记（2026-11-24）：一个人换城不该把别人的旧候选一起作废。
+  // 没有条目就是这位伙伴这一轮才第一次用——当场发一个，跟以前装载时发的那一个等价。
+  const cityDiscoveryEpochs = new Map();
+  function cityDiscoveryEpochFor(agentId) {
+    const key = String(agentId ?? "");
+    let epoch = cityDiscoveryEpochs.get(key);
+    if (!epoch) {
+      epoch = newCityDiscoveryEpoch();
+      cityDiscoveryEpochs.set(key, epoch);
+    }
+    return epoch;
   }
-  function localNewsCurrent(row) {
-    return !row?.localKey || row.localKey === activeCityDiscovery()?.key;
+  /** 这位伙伴的城市设置真变了才换纪元：关掉再打开、A→B→A 也换，途中的旧候选全部对不上。 */
+  function bumpCityDiscoveryEpoch(agentId) {
+    cityDiscoveryEpochs.set(String(agentId ?? ""), newCityDiscoveryEpoch());
+  }
+  /**
+   * 这位伙伴此刻生效的城市（2026-11-24）。
+   *
+   * 伙伴自己设过的用伙伴的；没设过的沿用旧的全局设置，直到这位伙伴自己覆盖。
+   * 显式把 lifeCityCode 设成 null，就是这位伙伴没有生活城市——不回退全局。
+   */
+  function effectiveCityFor(agentId) {
+    const partner = agentId ? store.getPartnerSettings(agentId) : {};
+    return effectiveLifeCity(partner, store.getGlobalSettings());
+  }
+  // 三档“变没变”：只有真变了才动对应的旧东西，别为了保险把不相干的一并撤掉。
+  function cityDiscoveryChanged(before, after) {
+    return before.city !== after.city || String(before.code ?? "") !== String(after.code ?? "")
+      || before.discoveries !== after.discoveries;
+  }
+  function cityStreetViewChanged(before, after) {
+    return before.city !== after.city || String(before.code ?? "") !== String(after.code ?? "")
+      || before.streetView !== after.streetView;
+  }
+  function cityDraftsChanged(before, after) {
+    return before.city !== after.city || String(before.code ?? "") !== String(after.code ?? "")
+      || before.illustrations !== after.illustrations || before.discoveries !== after.discoveries;
+  }
+  /**
+   * 这位伙伴的城市设置变了：只撤她自己的发现候选、街景素材与待分享旧稿。
+   * 别人的队列和缓存一概不碰——她们的城没变，稿子就还作数。
+   */
+  function applyPartnerCityChange(agentId, before, after) {
+    if (cityDiscoveryChanged(before, after)) bumpCityDiscoveryEpoch(agentId);
+    if (cityStreetViewChanged(before, after)) {
+      streetViewLibrary?.release({ agentId });
+      diagnostics({ event: "streetview.partner-released", agentId, city: after.city, consent: after.streetView });
+    }
+    if (!cityDraftsChanged(before, after)) return;
+    try {
+      let referenceId = "";
+      try { referenceId = imageReferences.current(agentId)?.id ?? ""; } catch { referenceId = ""; }
+      store.savePendingShares(agentId, dropStalePendingShares(store.getPendingShares(agentId), {
+        referenceId,
+        cityCode: String(after.code ?? ""),
+        // 城市插画那一档：她自己关掉了插画或同城发现，这类稿子就不再适用。
+        cityIllustration: after.illustrations === true && after.discoveries === true,
+        // 表情稿还要看源图状态：不传这张表会被当成“源图不在手”整批误删。
+        sourceStates: pendingShareSourceStates(partnerAttachmentMetas(agentId), store.getThread(agentId).messages),
+      }));
+    } catch (error) {
+      diagnostics({ event: "pending-share.release.failed", agentId, error: describeError(error) });
+    }
+  }
+  /** 同城发现：按这位伙伴自己的城市来。key 里带着城市与代码，换城即换 key，旧候选自然作废。 */
+  function activeCityDiscovery(agentId) {
+    const city = effectiveCityFor(agentId);
+    return city.discoveries && city.city ? { city: city.city, code: String(city.code ?? ""), key: `${cityDiscoveryEpochFor(agentId)}:${city.city}:${String(city.code ?? "")}` } : null;
+  }
+  function localNewsCurrent(row, agentId) {
+    return !row?.localKey || row.localKey === activeCityDiscovery(agentId)?.key;
   }
   function newsQuota(now = new Date()) {
     const shared = newsShareLimit(store.getGlobalSettings().newsShareMaxPerDay);
@@ -1274,7 +1337,9 @@ export function apply(ctx) {
     // 生活城市：跟天气各算各的。城市她自己填；真实街景另有一个明确的授权开关。
     "lifeCity", "lifeCityCode", "lifeCityStreetView", "lifeCityDiscoveries", "lifeCityIllustrations",
   ]);
-  const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "vision", "voice", "partnerFeedEnabled", "videoSharingEnabled", "imageTier"]);
+  const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "vision", "voice", "partnerFeedEnabled", "videoSharingEnabled", "imageTier",
+    // 伙伴各自的生活城市（2026-11-24）：扁平五个字段，没设过的沿用全局。
+    "lifeCity", "lifeCityCode", "lifeCityDiscoveries", "lifeCityIllustrations", "lifeCityStreetView"]);
 
   function pickSettingsPatch(input, allowed, label) {
     const body = input && typeof input === "object" && !Array.isArray(input) ? input : {};
@@ -1428,6 +1493,23 @@ export function apply(ctx) {
   function normalizePartnerSettingsPatch(body) {
     const patch = pickSettingsPatch(body, PARTNER_SETTING_KEYS, "伙伴设置");
     if (Object.prototype.hasOwnProperty.call(patch, "imageTier")) patch.imageTier = normalizeImageTier(patch.imageTier);
+    // 伙伴各自的城市：城市名归一；行政代码只认字符串或 null（null＝明确取消这座城市），
+    // 开关只认真布尔——类型不对就当场报错，不静默改成默认值。
+    if (Object.prototype.hasOwnProperty.call(patch, "lifeCity")) patch.lifeCity = normalizeLifeCity(patch.lifeCity);
+    if (Object.prototype.hasOwnProperty.call(patch, "lifeCityCode")) {
+      if (patch.lifeCityCode !== null && typeof patch.lifeCityCode !== "string") {
+        throw new Error("生活城市的行政代码只收城市表里的代码，或者 null 表示没有城市");
+      }
+      patch.lifeCityCode = typeof patch.lifeCityCode === "string" ? patch.lifeCityCode.trim() : null;
+    }
+    for (const key of ["lifeCityDiscoveries", "lifeCityIllustrations", "lifeCityStreetView"]) {
+      if (Object.prototype.hasOwnProperty.call(patch, key) && typeof patch[key] !== "boolean") {
+        throw new Error("生活城市的开关只收 true 或 false");
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "lifeCityDiscoveries")) patch.lifeCityDiscoveries = patch.lifeCityDiscoveries === true;
+    if (Object.prototype.hasOwnProperty.call(patch, "lifeCityIllustrations")) patch.lifeCityIllustrations = patch.lifeCityIllustrations === true;
+    if (Object.prototype.hasOwnProperty.call(patch, "lifeCityStreetView")) patch.lifeCityStreetView = normalizeStreetViewConsent(patch.lifeCityStreetView);
     if (Object.prototype.hasOwnProperty.call(patch, "videoSharingEnabled") && typeof patch.videoSharingEnabled !== "boolean") {
       throw new Error("浏览B站并分享视频请选择开启或关闭");
     }
@@ -4124,7 +4206,7 @@ export function apply(ctx) {
     const shareableVideo = interestContent && video && videoPartnerEnabled(agentId) && videoQuota() ? video : null;
     // 新闻排在观察式前面（2026-10-20）：它一天最多两条、有冷却，而观察式已经限了每日一条。
     // 这样“有话想说”的名额优先给外面正在发生的事，种子和探索发现留在账上等下一次。
-    const shareableNews = interestContent && !shareableVideo && news && localNewsCurrent(news) && newsQuota() ? news : null;
+    const shareableNews = interestContent && !shareableVideo && news && localNewsCurrent(news, agentId) && newsQuota() ? news : null;
     const shareableDiscovery = interestContent && !shareableVideo && !shareableNews ? discoveryForProactiveMessage(discovery, { exception }) : null;
     const shareableSeed = interestContent && !shareableVideo && !shareableNews ? seed ?? null : null;
     const shareableHobby = shareableSeed
@@ -4332,9 +4414,12 @@ export function apply(ctx) {
     // 待分享队列：这位伙伴自己早先备好的稿子。身份或城市变了就不再给（旧稿对不上了）。
     let currentReferenceId = "";
     try { currentReferenceId = imageReferences.current(agentId)?.id ?? ""; } catch { currentReferenceId = ""; }
+    const pendingCity = effectiveCityFor(agentId);
     const pendingShares = dropStalePendingShares(store.getPendingShares(agentId), {
       referenceId: currentReferenceId,
-      cityCode: String(store.getGlobalSettings().lifeCityCode ?? ""),
+      cityCode: String(pendingCity.code ?? ""),
+      // 城市插画要求她自己开着插画与同城发现；关掉后这类旧稿不再适用。
+      cityIllustration: pendingCity.illustrations === true && pendingCity.discoveries === true,
       sourceStates: pendingShareSourceStates(playContext.metas, store.getThread(agentId).messages),
     });
     // 身份或城市变了：旧稿当场作废，不留在队列里。
@@ -4354,7 +4439,7 @@ export function apply(ctx) {
     try {
       // 主动来找这一路同样得报出当前佩戴结果：ta 得知道「自己现在是什么状态」才谈得上换。
       const badgeHint = badgeGuide({ current: store.getPartnerSettings(agentId).badge });
-      const places = lifePlacesPrompt(store.getGlobalSettings());
+      const places = lifePlacesPrompt({ ...store.getGlobalSettings(), lifeCity: effectiveCityFor(agentId).city });
       if (ordinaryProactive || shareableVideo || videoLoginNotice) {
         // 普通主动消息与视频分享都由伙伴聊天模型出声，留足照片标记的输出空间。
         const catalog = await ctx.models.list();
@@ -4541,7 +4626,7 @@ export function apply(ctx) {
       bubbles = [...bubbles.filter(bubble => !/https?:\/\//iu.test(bubble)).slice(0, 3), `出处：${shareableNews.url}`];
       if (bubbles.length < 2) return { ok: false, reason: "news-empty" };
     }
-    if (shareableNews && (!localNewsCurrent(shareableNews) || !newsQuota() || !store.getProactiveState(agentId).newsBook
+    if (shareableNews && (!localNewsCurrent(shareableNews, agentId) || !newsQuota() || !store.getProactiveState(agentId).newsBook
       || !normalizeNewsBook(store.getProactiveState(agentId).newsBook).items.some((row) => row.id === shareableNews.id && !row.sharedAt && !row.rejectedAt))) {
       diagnostics({ event: "news.share.stale", agentId, newsId: shareableNews.id });
       return { ok: false, reason: "news-stale" };
@@ -4549,27 +4634,27 @@ export function apply(ctx) {
 
     const cityIllustrationStillCurrent = (source) => {
       try {
-        const global = store.getGlobalSettings();
-        const localCity = activeCityDiscovery();
+        const city = effectiveCityFor(agentId);
+        const localCity = activeCityDiscovery(agentId);
         const candidate = pickCityIllustration({
-          enabled: global.lifeCityIllustrations === true,
-          authorized: global.lifeCityDiscoveries === true,
-          city: global.lifeCity,
-          cityCode: global.lifeCityCode,
+          enabled: city.illustrations === true,
+          authorized: city.discoveries === true,
+          city: city.city,
+          cityCode: city.code,
           localKey: localCity?.key,
           items: normalizeNewsBook(store.getProactiveState(agentId).newsBook).items,
         });
         return Boolean(candidate && candidate.url === source?.url && candidate.title === source?.title
-          && String(global.lifeCityCode ?? "") === String(source?.cityCode ?? ""));
+          && String(city.code ?? "") === String(source?.cityCode ?? ""));
       } catch { return false; }
     };
     // 街景那一路还要多核几道：城市没换、授权没关、参考照没换、素材还在。
     const streetStillCurrent = (street) => {
       try {
-        const global = store.getGlobalSettings();
-        if (normalizeLifeCity(global.lifeCity) !== normalizeLifeCity(street?.city ?? "")) return false;
-        if (String(global.lifeCityCode ?? "") !== String(street?.lifeCityCode ?? "")) return false;
-        if (normalizeStreetViewConsent(global.lifeCityStreetView) !== true) return false;
+        const city = effectiveCityFor(agentId);
+        if (normalizeLifeCity(city.city) !== normalizeLifeCity(street?.city ?? "")) return false;
+        if (String(city.code ?? "") !== String(street?.lifeCityCode ?? "")) return false;
+        if (normalizeStreetViewConsent(city.streetView) !== true) return false;
         if (imageReferences.view(agentId).currentId !== street?.referenceId) return false;
         return Boolean(street?.path) && fs.existsSync(street.path);
       } catch { return false; }
@@ -4624,7 +4709,7 @@ export function apply(ctx) {
       releaseVoiceGeneration(preparedVoice);
       return { ok: false, reason: "stale" };
     }
-    if (!localNewsCurrent(shareableNews)) {
+    if (!localNewsCurrent(shareableNews, agentId)) {
       if (preparedImage.attachment) removeAttachment(preparedImage.attachment.id);
       releaseVoiceGeneration(preparedVoice);
       return { ok: false, reason: "news-stale" };
@@ -4728,7 +4813,7 @@ export function apply(ctx) {
         streetView: { usedAt: new Date(stored.at).toISOString(), city: streetView.city, lifeCityCode: streetView.lifeCityCode, title: streetView.scene?.title ?? "", placeEvidence: streetView.scene?.placeEvidence ?? "" },
       });
       diagnostics({ event: "proactive.streetview.sent", agentId, city: streetView.city, title: streetView.scene?.title ?? "", license: streetView.scene?.license ?? "" });
-      streetViewLibrary?.release({ city: streetView.city, lifeCityCode: streetView.lifeCityCode });
+      streetViewLibrary?.release({ city: streetView.city, lifeCityCode: streetView.lifeCityCode, agentId });
     }
     recordPartnerStickerUsage(agentId, bubbles, stored.at);
     // 生理期这一段真的送出去了，这一轮就算已经关心过：没送出去（空正文、重复措辞、
@@ -5406,18 +5491,19 @@ export function apply(ctx) {
       if (globalSettings.rhythmProactiveEnabled !== true) continue;
       // 真实街景的素材先在后台备着：这一轮不等网络，备好了就用，没备好就当没有这一条。
       // 放在各个门之前，免得这一轮被门挡住时素材永远备不上。
-      const lifeCity = normalizeLifeCity(globalSettings.lifeCity);
-      const streetConsent = normalizeStreetViewConsent(globalSettings.lifeCityStreetView);
-      const streetBlockers = lifeCityBlockers(globalSettings);
+      const partnerCity = effectiveCityFor(agentId);
+      const lifeCity = normalizeLifeCity(partnerCity.city);
+      const streetConsent = normalizeStreetViewConsent(partnerCity.streetView);
+      const streetBlockers = lifeCityBlockers({ lifeCity, lifeCityStreetView: partnerCity.streetView });
       let streetReference = null;
       if (streetConsent && !streetBlockers.length && settings.proactiveEnabled !== false && chatImageServiceReady && imageQuota?.available(agentId) === true) {
         try { streetReference = imageReferences.current(agentId); } catch { /* 参考照读不到就不出镜 */ }
-        // 城市素材与人物无关，所有伙伴共用；实际生成仍核当前参考照。
+        // 城市素材与人物无关，可以多人共用；分区只按伙伴算，免得一人换城把别人的撤掉。实际生成仍核当前参考照。
         if (streetReference) {
           const last = store.getProactiveState(agentId).streetView;
-          streetViewLibrary?.warm({ city: lifeCity, lifeCityCode: globalSettings.lifeCityCode,
-            previousTitle: last?.city === lifeCity && String(last?.lifeCityCode ?? "") === String(globalSettings.lifeCityCode ?? "") ? last.title : null,
-            previousPlace: last?.city === lifeCity && String(last?.lifeCityCode ?? "") === String(globalSettings.lifeCityCode ?? "") ? last.placeEvidence : null });
+          streetViewLibrary?.warm({ city: lifeCity, lifeCityCode: partnerCity.code, agentId,
+            previousTitle: last?.city === lifeCity && String(last?.lifeCityCode ?? "") === String(partnerCity.code ?? "") ? last.title : null,
+            previousPlace: last?.city === lifeCity && String(last?.lifeCityCode ?? "") === String(partnerCity.code ?? "") ? last.placeEvidence : null });
         }
       }
 
@@ -5576,7 +5662,7 @@ export function apply(ctx) {
       const discoveryReady = followup?.read ? null : nextDiscovery(state.interestLearning, now);
       const newsReady = followup?.read || !newsQuota(now)
         ? null
-        : nextNewsItem(state.newsBook, now, activeCityDiscovery()?.key);
+        : nextNewsItem(state.newsBook, now, activeCityDiscovery(agentId)?.key);
       const mixHistory = recentMixGroups(state.proactiveSources);
       const mixPlan = !PROACTIVE_MIX ? null : planSourceMix({
         // 交错账还是空的时候拿聊天账兜底：头一轮就接着历史往下交替，不用等它自己攒几轮。
@@ -5630,7 +5716,7 @@ export function apply(ctx) {
       // 观察式当天已经发满时种子根本不会上，新闻不该被一个上不了的候选挤掉。
       const candidateNews = followup?.read || candidateVideo || cappedSeed || !newsQuota(now)
         ? null
-        : nextNewsItem(newsBook, now, activeCityDiscovery()?.key);
+        : nextNewsItem(newsBook, now, activeCityDiscovery(agentId)?.key);
       const topic = null;
       // 电脑那边此刻的动静：两边本来就是同一个伙伴，晨间第一句、睡前收尾、被薅起来都靠它落地。
       const workActivity = workfeedOn()
@@ -5947,23 +6033,23 @@ export function apply(ctx) {
         recentPhoto: photoRecent3 || photoSceneUsed,
       })) && !photoBlocked && photoSceneKey ? { key: photoSceneKey, source: "scene" } : null;
       let cityIllustration = null;
-      if (photoShare && globalSettings.lifeCityIllustrations === true) {
-        const localCity = activeCityDiscovery();
+      if (photoShare && partnerCity.illustrations === true) {
+        const localCity = activeCityDiscovery(agentId);
         let hasReference = false;
         try { hasReference = Boolean(imageReferences.current(agentId)?.id); } catch { /* 没角色参考照就沿用普通照片候选 */ }
         const illustrationItems = normalizeNewsBook(state.newsBook, now).items;
         cityIllustration = pickCityIllustration({
-          enabled: globalSettings.lifeCityIllustrations === true,
-          authorized: globalSettings.lifeCityDiscoveries === true,
+          enabled: partnerCity.illustrations === true,
+          authorized: partnerCity.discoveries === true,
           city: lifeCity,
-          cityCode: globalSettings.lifeCityCode,
+          cityCode: partnerCity.code,
           localKey: localCity?.key,
           items: illustrationItems,
           now: now.getTime(),
         });
-        diagnostics({ event: "proactive.photo.city-illustration.checked", enabled: globalSettings.lifeCityIllustrations === true,
-          authorized: globalSettings.lifeCityDiscoveries === true, hasReference, city: lifeCity,
-          cityCode: String(globalSettings.lifeCityCode ?? ""), localKeyReady: Boolean(localCity?.key), items: illustrationItems.length,
+        diagnostics({ event: "proactive.photo.city-illustration.checked", enabled: partnerCity.illustrations === true,
+          authorized: partnerCity.discoveries === true, hasReference, city: lifeCity,
+          cityCode: String(partnerCity.code ?? ""), localKeyReady: Boolean(localCity?.key), items: illustrationItems.length,
           selected: Boolean(cityIllustration) });
         if (cityIllustration) {
           photoShare = { key: photoSceneKey, source: "city-illustration", illustration: cityIllustration };
@@ -5979,9 +6065,9 @@ export function apply(ctx) {
         const usedAt = Date.parse(String(store.getProactiveState(agentId).streetView?.usedAt ?? "") || "") || 0;
         const cooled = now.getTime() - usedAt >= STREET_VIEW_COOLDOWN_MS;
         if (cooled && Math.random() < STREET_VIEW_CHANCE) {
-          const entry = streetViewLibrary?.peek({ city: lifeCity, lifeCityCode: globalSettings.lifeCityCode });
+          const entry = streetViewLibrary?.peek({ city: lifeCity, lifeCityCode: partnerCity.code, agentId });
           if (entry) {
-            photoShare = { key: photoSceneKey, source: "street", street: { city: lifeCity, lifeCityCode: globalSettings.lifeCityCode, referenceId: streetReference.id, path: entry.path, scene: entry.scene } };
+            photoShare = { key: photoSceneKey, source: "street", street: { city: lifeCity, lifeCityCode: partnerCity.code, referenceId: streetReference.id, path: entry.path, scene: entry.scene } };
             cityIllustration = null;
             diagnostics({ event: "proactive.streetview.selected", agentId, city: lifeCity, title: entry.scene?.title ?? "", license: entry.scene?.license ?? "" });
           } else {
@@ -6812,7 +6898,7 @@ export function apply(ctx) {
     const book0 = normalizeNewsBook(store.getProactiveState(agentId).newsBook, now);
     if (!newsQuota(now)) return { fetched: false, reason: "daily-limit" };
     if (!newsFetchDue(book0, now)) return { fetched: false, reason: "not-due" };
-    const currentCity = activeCityDiscovery();
+    const currentCity = activeCityDiscovery(agentId);
     const state = store.getProactiveState(agentId);
     const localQuery = currentCity && (now.getTime() - (Date.parse(state.localNewsFetchAt) || 0) >= 24 * 3600_000)
       ? cityDiscoveryQuery(currentCity.city, now) : "";
@@ -6827,11 +6913,11 @@ export function apply(ctx) {
     try {
       await loadUserName();
       const enhancement = await searchEnhancementConfig();
-      if (local && local.key !== activeCityDiscovery()?.key) return { fetched: false, reason: "local-stale" };
+      if (local && local.key !== activeCityDiscovery(agentId)?.key) return { fetched: false, reason: "local-stale" };
       if (local) store.setProactiveState(agentId, { localNewsFetchAt: now.toISOString() });
       const search = await searchWeb(fetcher, { query, enhancement, privateTerms: [USER_NAME] });
       bookSearchOutcome(search);
-      if (local && local.key !== activeCityDiscovery()?.key) return { fetched: false, reason: "local-stale" };
+      if (local && local.key !== activeCityDiscovery(agentId)?.key) return { fetched: false, reason: "local-stale" };
       if (!search.ok || !search.results?.length) {
         diagnostics({ event: "news.fetch.failed", agentId, domain: domain.name, reason: search.reason ?? "no-results" });
         store.setProactiveState(agentId, { newsBook: markNewsFetched(book0, domain.id, now) });
@@ -6860,13 +6946,16 @@ export function apply(ctx) {
     if (global.backgroundSharePrepEnabled !== true) return { prepared: 0, reason: "off" };
     let referenceId = "";
     try { referenceId = imageReferences.current(agentId)?.id ?? ""; } catch { referenceId = ""; }
-    const cityCode = String(global.lifeCityCode ?? "");
+    const partnerCity = effectiveCityFor(agentId);
+    const cityCode = String(partnerCity.code ?? "");
     // 先清旧稿：身份、城市、授权变了就当场作废，不留在队列里。
     // 这一步排在冷却与退避前面：该作废的稿子不能因为「刚备过」而多留一阵。
     const metas = partnerAttachmentMetas(agentId);
     const messages = store.getThread(agentId).messages;
     const stored = store.getPendingShares(agentId);
-    const list = dropStalePendingShares(stored, { referenceId, cityCode, sourceStates: pendingShareSourceStates(metas, messages) });
+    const list = dropStalePendingShares(stored, { referenceId, cityCode,
+      cityIllustration: partnerCity.illustrations === true && partnerCity.discoveries === true,
+      sourceStates: pendingShareSourceStates(metas, messages) });
     if (list.length !== stored.length) store.savePendingShares(agentId, list);
     if (list.length >= PENDING_SHARE_CAP) return { prepared: 0, reason: "full" };
     // 审图不可用就不备：没人审的稿不算库存。
@@ -6882,10 +6971,15 @@ export function apply(ctx) {
     }
     const failedAt = Date.parse(String(pendingState.lastFailedAt ?? "") || "") || 0;
     if (failedAt && now.getTime() - failedAt < PENDING_SHARE_BACKOFF_MS) return { prepared: 0, reason: "backoff" };
-    const city = normalizeLifeCity(global.lifeCity);
+    const city = normalizeLifeCity(partnerCity.city);
+    const cityDiscovery = activeCityDiscovery(agentId);
     const source = pickPendingShareSource({
       items: normalizeNewsBook(state.newsBook, now).items,
       city,
+      cityCode: String(partnerCity.code ?? ""),
+      localKey: cityDiscovery?.key ?? "",
+      // 同城发现与城市插画都开着，本地那条才算她此刻的、能画的东西。
+      allowLocal: partnerCity.discoveries === true && partnerCity.illustrations === true,
       usedTitles: list.map((row) => row.title),
     });
     // 自制表情的候选：两处来。
@@ -6905,8 +6999,9 @@ export function apply(ctx) {
     const itemId = `pending_${now.getTime().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
     const draftCurrent = () => {
       const current = store.getGlobalSettings();
+      const nowCity = effectiveCityFor(agentId);
       return current.backgroundSharePrepEnabled === true && current.imageReviewEnabled === true
-        && String(current.lifeCityCode ?? "") === cityCode && normalizeLifeCity(current.lifeCity) === city
+        && String(nowCity.code ?? "") === cityCode && normalizeLifeCity(nowCity.city) === city
         && (imageReferences.current(agentId)?.id ?? "") === referenceId;
     };
     if (wantSticker) {
@@ -7886,7 +7981,7 @@ export function apply(ctx) {
         if (!seesImages) await describeImagesForDegradedModel(agentId, messages, signal);
         try {
           const out = await generateReply(ctx, {
-            systemPrompt: [system, lifePlacesPrompt(store.getGlobalSettings()), imagePromptText, focusText, feedbackPrompt].filter(Boolean).join('\n\n'),
+            systemPrompt: [system, lifePlacesPrompt({ ...store.getGlobalSettings(), lifeCity: effectiveCityFor(agentId).city }), imagePromptText, focusText, feedbackPrompt].filter(Boolean).join('\n\n'),
             messages: seesImages ? messagesWithBody : attachNativeImage(messages, agentId, { withBody: false }),
             diagnostics,
             // 图组/已有玩法留足标记空间；普通文字沿用原预算，不另开学习请求。
@@ -9978,6 +10073,8 @@ export function apply(ctx) {
               lastMessage: last
                 ? { text: String(last.text ?? "").slice(0, 60), at: last.at, role: last.role }
                 : null,
+              // 伙伴各自的生活城市（2026-11-24）：生效的那份 + 她自己覆盖过哪些字段。
+              lifeCity: { ...effectiveCityFor(row.id), override: partnerCityOverride(settings) },
             };
           });
           return c.json({
@@ -11316,11 +11413,20 @@ export function apply(ctx) {
           } else if (Object.hasOwn(globalPatch, "lifeCity")) {
             globalPatch.lifeCityCode = null;
           }
-          const beforeLocalKey = activeCityDiscovery()?.key;
-          const beforeGlobal = store.getGlobalSettings();
-          const beforeCity = normalizeLifeCity(beforeGlobal.lifeCity);
-          const beforeCityCode = String(beforeGlobal.lifeCityCode ?? "");
-          const beforeConsent = normalizeStreetViewConsent(beforeGlobal.lifeCityStreetView);
+          // 全局这五个字段现在只是“兼容默认”：伙伴自己设过城市的就不受它影响。
+          // 所以先把每个人此刻生效的那份拍下来，改完逐位比，谁真变了才撤谁的旧东西。
+          const cityTouched = PARTNER_CITY_KEYS.some((key) => Object.hasOwn(globalPatch, key));
+          const beforeEffective = new Map();
+          let cityPartners = [];
+          if (cityTouched) {
+            try {
+              cityPartners = await listAllPartners();
+              for (const partner of cityPartners) beforeEffective.set(partner.id, effectiveCityFor(partner.id));
+            } catch (error) {
+              cityPartners = [];
+              diagnostics({ event: "settings.city.partners.failed", error: describeError(error) });
+            }
+          }
           if (globalPatch.voiceProfiles) {
             const currentProfiles = store.getGlobalSettings().voiceProfiles || {};
             for (const [id, profile] of Object.entries(globalPatch.voiceProfiles)) {
@@ -11340,28 +11446,13 @@ export function apply(ctx) {
             return c.json({ ok: false, error: { message: "搜索设置请用搜索那一页自己改" } }, 400);
           }
           store.setGlobalSettings(globalPatch);
-          if (beforeLocalKey !== activeCityDiscovery()?.key) cityDiscoveryEpoch = newCityDiscoveryEpoch();
-          // 换城市、关掉授权：旧素材一律作废（临时文件也删掉），不让旧城的街景继续用着。
-          const afterCity = normalizeLifeCity(store.getGlobalSettings().lifeCity);
-          const afterCityCode = String(store.getGlobalSettings().lifeCityCode ?? "");
-          const afterConsent = normalizeStreetViewConsent(store.getGlobalSettings().lifeCityStreetView);
-          if (beforeCity !== afterCity || beforeCityCode !== afterCityCode || beforeConsent !== afterConsent) {
-            streetViewLibrary?.release();
-            diagnostics({ event: "streetview.released", city: afterCity, consent: afterConsent });
-          }
-          // 换城市：待分享的稿子是对着当时那座城市备的，当场作废（每位伙伴各清各的）。
-          if (beforeCity !== afterCity || beforeCityCode !== afterCityCode) {
-            try {
-              for (const partner of await listAllPartners()) {
-                store.savePendingShares(partner.id, dropStalePendingShares(store.getPendingShares(partner.id), {
-                  referenceId: "",
-                  cityCode: afterCityCode,
-                }));
-              }
-              diagnostics({ event: "pending-share.released", city: afterCity });
-            } catch (error) {
-              diagnostics({ event: "pending-share.release.failed", error: describeError(error) });
+          if (cityTouched) {
+            // 换城、改授权都只发生在“跟着全局走”的那些伙伴身上；自己设过的不动。
+            for (const partner of cityPartners) {
+              const before = beforeEffective.get(partner.id);
+              if (before) applyPartnerCityChange(partner.id, before, effectiveCityFor(partner.id));
             }
+            diagnostics({ event: "settings.city.applied", partners: cityPartners.length });
           }
           // 今日情境从关到开：清掉「今天已经露过」的记账。
           // 她打开就是为了让伙伴知道今天的事，不该因为同一天早先露过而当场没反应。
@@ -11387,12 +11478,35 @@ export function apply(ctx) {
         }
       });
 
+      app.get("/settings/partner/:agentId", (c) => {
+        const agentId = c.req.param("agentId");
+        if (!isValidPartnerId(agentId)) return c.json({ ok: false, error: { code: "INVALID_PARTNER_ID", message: "伙伴 ID 不合法" } }, 400);
+        const settings = store.getPartnerSettings(agentId);
+        return c.json({ ok: true, settings, city: effectiveCityFor(agentId), override: partnerCityOverride(settings) });
+      });
+
       app.put("/settings/partner/:agentId", async (c) => {
         const agentId = c.req.param("agentId");
         if (!isValidPartnerId(agentId)) return c.json({ ok: false, error: { code: "INVALID_PARTNER_ID", message: "伙伴 ID 不合法" } }, 400);
         try {
           const body = await c.req.json();
-          return c.json({ ok: true, settings: store.setPartnerSettings(agentId, normalizePartnerSettingsPatch(body)) });
+          const patch = normalizePartnerSettingsPatch(body);
+          // 城市：行政代码只认列表里有的；null ＝ 明确取消这座城市（不回退全局）。
+          if (Object.hasOwn(patch, "lifeCityCode")) {
+            const code = patch.lifeCityCode;
+            const selected = typeof code === "string" && lifeCityOptions().find(row => row.code === code);
+            if (code !== null && !selected) return c.json({ ok: false, error: { message: "请从列表选一座城市" } }, 400);
+            patch.lifeCity = selected ? selected.city : "";
+          } else if (Object.hasOwn(patch, "lifeCity")) {
+            patch.lifeCityCode = null;
+          }
+          const before = effectiveCityFor(agentId);
+          const settings = store.setPartnerSettings(agentId, patch);
+          const after = effectiveCityFor(agentId);
+          // 换城、改授权、关插画：这位伙伴的旧发现候选、旧素材与旧稿当场作废。
+          // 谁的设置变了才动谁——别的伙伴一点不受影响。
+          applyPartnerCityChange(agentId, before, after);
+          return c.json({ ok: true, settings, city: after });
         } catch (error) {
           return c.json({ ok: false, error: describeError(error) }, 400);
         }

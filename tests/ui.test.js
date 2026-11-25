@@ -456,7 +456,9 @@ test("设置接口只接受用户设置字段", () => {
   assert.match(app, /app\.use\("\*", async \(c, next\) =>/);
   assert.match(app, /INVALID_PARTNER_ID/);
   assert.match(app, /const GLOBAL_SETTING_KEYS = new Set\(\[/);
-  assert.match(app, /const PARTNER_SETTING_KEYS = new Set\(\[[\s\S]{0,240}?"videoSharingEnabled"[\s\S]{0,40}?\]\)/);
+  const partnerKeys = app.match(/const PARTNER_SETTING_KEYS = new Set\(\[([^\]]*)\]\)/)?.[1] ?? "";
+  assert.match(partnerKeys, /"videoSharingEnabled"/);
+  assert.match(partnerKeys, /"lifeCityCode"|\.\.\.PARTNER_CITY_KEYS/);
   assert.match(app, /code = "UNKNOWN_SETTING"/);
   assert.match(app, /pickSettingsPatch\(body, PARTNER_SETTING_KEYS, "伙伴设置"\)/);
   assert.doesNotMatch(app, /function normalizePartnerSettingsPatch\(body\) \{\n\s*const patch = \{ \.\.\.\(body/);
@@ -875,7 +877,7 @@ test("设置页的日上限兜底值跟主动那层的默认一致", () => {
 });
 
 test("性格页收束为只读伙伴档案，不把关系账和爱好带上页面", () => {
-  assert.match(settings, /\["personality", "性格"\]/, "设置页要有性格这栏");
+  assert.match(settings, /\["relation", "关系与性格"\]/, "伙伴目录里要有关系与性格这一行");
   assert.match(settings, /knowing\/\$\{encodeURIComponent\(agentId\)\}/, "预设要从后端读，不能在页面里写死一份");
   assert.match(settings, /ta 在茶话会里的样子/, "页面标题要回到伙伴档案");
   assert.match(settings, /现在的 ta/, "要展示当前画像");
@@ -992,7 +994,7 @@ test("设置页：保存后重开同一页不许把页面抽回最上面（2026-
   );
   assert.match(
     settings,
-    /switchDetail\(detailTab\);\s*\n\s*if \(keepScrollY > 0\) \{\s*\n\s*requestAnimationFrame\(\(\) => \{ window\.scrollTo\(0, keepScrollY\); \}\);/,
+    /if \(activePanel\) activePanel\.hidden = false;\s*if \(activeSetting !== "partners"\) return;\s*if \(keepScrollY > 0\) \{\s*requestAnimationFrame\(\(\) => \{\s*if \(activeSetting === "partners" && requestSeq === partnerRequestSeq\) window\.scrollTo\(0, keepScrollY\);/,
     "内容挂回去后把滚动位置还回来",
   );
   // 音色能局部改就局部改，根本不用重开这一页
@@ -2164,7 +2166,7 @@ test("每位伙伴一间房：设置页挑图，聊天窗按浓度铺上去", ()
   assert.match(app, /const bytes = base64\s*\n\s*\? Buffer\.from\(base64, "base64"\)/, "图直接收字节；本地路径那条留着备用");
 
   // 设置页：房间 tab；选图走浏览器自带的文件选择框（不欠宿主一个能力声明）
-  assert.match(settings, /\["room", "场景"\]/);
+  assert.match(settings, /\["room", "聊天场景"\]/);
   assert.match(settings, /id="back-to-chat"[^>]*>← 返回聊天/);
   assert.match(settings, /hana\.cards\.open\("panel"\)/, "设置页要能回聊天页");
   assert.match(settings, /roomFileInput\.type = "file";/);

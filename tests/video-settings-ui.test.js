@@ -6,7 +6,7 @@ import vm from "node:vm";
 const html = fs.readFileSync(new URL("../ui/settings.html", import.meta.url), "utf8");
 const client = html.match(/<script type="module">([\s\S]*?)<\/script>/)[1];
 const loginCode = client.slice(client.indexOf("    // 扫码登录局部状态"), client.indexOf('    document.getElementById("msg-avatars-switch").addEventListener'));
-const partnerCode = client.slice(client.indexOf("    function partnerVideoField("), client.indexOf("    async function openPartner("));
+const partnerCode = client.slice(client.indexOf("    function partnerVideoField("), client.indexOf("    // ── 城市与日常："));
 const plain = (value) => JSON.parse(JSON.stringify(value));
 function element() {
   const classes = new Set();
@@ -316,6 +316,7 @@ test("reload的慢旧GET与集中保存共用队列，两个调用顺序都不�
     server = { global: plain(h.run("globalSettings")), partners: plain(h.run("partners")) };
     if (first === "reload") server.partners.push({ id: "restored", name: "恢复伙伴", settings: { videoSharingEnabled: true } });
     h.context.currentId = "yes";
+    h.context.currentDetailTab = "directory";
     h.context.paintGlobal = () => h.run("paintVideoSharing()");
     h.context.paintPartnerList = () => {};
     // reloadSettings 末尾会重写「ta 那侧戴着 xx」那句话。这张测试只验队列顺序，

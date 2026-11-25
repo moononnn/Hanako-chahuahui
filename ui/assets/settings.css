@@ -200,9 +200,10 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 .partner-hero-copy { min-width: 0; flex: 1; }
 .partner-hero h2 { margin: 0; font-size: 18px; color: var(--mint-deep); }
 .partner-hero p { margin: 2px 0 0; color: var(--ink-soft); font-size: 12px; }
-.detail-tabs { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; margin-bottom: 12px; padding: 4px; border-radius: var(--r-lg); background: var(--paper-deep); }
-.detail-tabs button { border: 0; border-radius: var(--r-sm); padding: 8px 7px; background: transparent; color: var(--ink-soft); cursor: pointer; white-space: nowrap; transition: color 160ms ease, background 160ms ease, transform 120ms var(--ease-out); }
-.detail-tabs button.on { background: var(--surface); color: var(--mint-deep); font-weight: 700; box-shadow: 0 3px 10px rgba(92, 78, 55, .08); }
+/* 子页只留一个「返回」：轻字重、灰绿，不当成主操作 */
+.soft-button.partner-back { display: inline-flex; align-items: center; gap: 2px; margin: 0 0 14px; padding: 4px 2px; border: 0; background: transparent; color: #607769; font-size: 13px; font-weight: 400; }
+@media (hover: hover) and (pointer: fine) { .soft-button.partner-back:hover { background: transparent; color: var(--mint-deep); } }
+.soft-button.partner-back:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; border-radius: var(--r-xs); }
 .detail-card-head { margin-bottom: 15px; }
 
 /* ── 性格档案：只读展示当前画像与形成线索 ── */
@@ -424,10 +425,8 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 @media (max-width: 620px) {
   .wrap { width: min(100% - 22px, 820px); padding-top: 20px; }
   .tea-mark { display: none; }
-  /* 六格排一行在窄屏太挤，换两行 */
   .tabs { gap: 5px; padding: 4px; }
   .tab { padding: 5px 10px; font-size: 12px; }
-  .detail-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .style-picks { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .switch-grid { grid-template-columns: 1fr; }
   .partner-heading { align-items: stretch; flex-wrap: wrap; }

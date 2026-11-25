@@ -392,10 +392,69 @@ test("素材库：失败后六小时内不重新探测", async t => {
   assert.equal(calls, 2);
 });
 
+test("素材库：按伙伴分区，撤一个伙伴的授权不碰同城的别人", async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "street-view-scope-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const net = fakeNetwork({
+    city: "Chengdu",
+    places: ["Category:Wide and Narrow Alleys", "Category:Streets in Chengdu", "Category:Chunxi Road", "Category:1991 in Chengdu"],
+    files: [filePage()],
+    categories: {
+      "File:Street scene - Kuanzhai Alleys - Chengdu, China - DSC05311.jpg": ["Category:CC-Zero", "Category:Wide and Narrow Alleys"],
+      "Category:Wide and Narrow Alleys": ["Category:Streets in Chengdu"],
+    },
+  });
+  const lib = createStreetViewLibrary({ dataDir, fetchImpl: net.fetchImpl });
+  const input = { city: "成都", lifeCityCode: "city-a" };
+  const alpha = await lib.resolve({ ...input, agentId: "alpha" });
+  const beta = await lib.resolve({ ...input, agentId: "beta" });
+  assert.ok(alpha && beta, "两个人各自都该备得出来");
+  assert.notEqual(alpha.path, beta.path, "分区不同，临时文件各归各的");
+  // 换城、关授权：只撤自己那一份。
+  lib.release({ agentId: "alpha" });
+  assert.equal(lib.peek({ ...input, agentId: "alpha" }), null);
+  assert.equal(fs.existsSync(alpha.path), false, "自己那份临时文件要删");
+  const alive = lib.peek({ ...input, agentId: "beta" });
+  assert.equal(alive?.scene?.title, beta.scene.title, "同城别人的素材不能跟着被撤");
+  assert.equal(fs.existsSync(beta.path), true);
+  // 老调用不传 agentId：仍然是原先那个全局分区，同城同参考照照样能取。
+  const legacy = await lib.resolve(input);
+  assert.ok(legacy);
+  lib.release({ city: "成都" });
+  assert.equal(lib.peek(input), null, "老的按城撤写法仍然按城撤（兼容原调用）");
+  lib.release();
+  assert.equal(lib.peek({ ...input, agentId: "beta" }), null, "全清仍然全清");
+});
+
+test("素材库：换参考照只作废自己分区里那份", async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "street-view-scope-ref-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const net = fakeNetwork({
+    city: "Chengdu",
+    places: ["Category:Wide and Narrow Alleys", "Category:Streets in Chengdu", "Category:Chunxi Road", "Category:1991 in Chengdu"],
+    files: [filePage()],
+    categories: {
+      "File:Street scene - Kuanzhai Alleys - Chengdu, China - DSC05311.jpg": ["Category:CC-Zero", "Category:Wide and Narrow Alleys"],
+      "Category:Wide and Narrow Alleys": ["Category:Streets in Chengdu"],
+    },
+  });
+  const lib = createStreetViewLibrary({ dataDir, fetchImpl: net.fetchImpl });
+  const input = { city: "成都", lifeCityCode: "city-a" };
+  const betaEntry = await lib.resolve({ ...input, agentId: "beta", referenceId: "ref_beta" });
+  const alphaOld = await lib.resolve({ ...input, agentId: "alpha", referenceId: "ref_old" });
+  assert.ok(betaEntry && alphaOld);
+  await lib.warm({ ...input, agentId: "alpha", referenceId: "ref_new" });
+  assert.equal(lib.peek({ ...input, agentId: "alpha", referenceId: "ref_old" }), null, "自己换了参考照，旧的那份作废");
+  assert.equal(fs.existsSync(alphaOld.path), false);
+  assert.ok(lib.peek({ ...input, agentId: "beta", referenceId: "ref_beta" }), "别人的参考照没换，素材该在还是在");
+});
+
 test("设置页：城市从本地城市表里选，授权另有一个开关，并且说清楚会请求 Wikimedia", () => {
   const html = fs.readFileSync(new URL("../ui/settings.html", import.meta.url), "utf8");
-  assert.match(html, /id="life-city-pick"/);
-  assert.match(html, /id="life-city-street-switch"/);
+  // 城市跟着伙伴走：卡片画在她的「城市与日常」那一页上。
+  assert.match(html, /function mountPartnerCitySettings/);
+  assert.match(html, /"life-city-pick"/);
+  assert.match(html, /"life-city-street-switch"/);
   assert.match(html, /Wikimedia Commons/);
   // 城市不再自己手写：从城市表里选，街景那项要先有城市才生效。
   assert.doesNotMatch(html, /id="life-city-input"/);

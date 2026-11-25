@@ -83,7 +83,7 @@
         <div class="index-list">
           <button class="index-link" type="button" data-tab-target="partners"><svg class="index-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="8" r="3"/><path d="M5 20v-2a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v2"/></svg><span>伙伴设置</span><span class="index-arrow" aria-hidden="true"></span></button>
           <button class="index-link" type="button" data-tab-target="proactive"><svg class="index-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16v12H9l-5 4z M8 10h8m-8 3h5"/></svg><span>主动联系</span><span class="index-arrow" aria-hidden="true"></span></button>
-          <button class="index-link" type="button" data-tab-target="immersion"><svg class="index-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 18h11a3 3 0 1 0-.6-5.9 5 5 0 0 0-9.5.5A3 3 0 1 0 7 18z M5 9a3 3 0 0 1 5-3"/></svg><span>城市与天气</span><span class="index-arrow" aria-hidden="true"></span></button>
+          <button class="index-link" type="button" data-tab-target="immersion"><svg class="index-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 18h11a3 3 0 1 0-.6-5.9 5 5 0 0 0-9.5.5A3 3 0 1 0 7 18z M5 9a3 3 0 0 1 5-3"/></svg><span>天气与日常</span><span class="index-arrow" aria-hidden="true"></span></button>
           <button class="index-link" type="button" data-tab-target="image"><svg class="index-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="9" cy="9" r="1.5"/><path d="m5 17 4-4 3 3 3-4 4 5"/></svg><span>照片与表情</span><span class="index-arrow" aria-hidden="true"></span></button>
         </div>
       </section>
@@ -323,50 +323,37 @@
 
     <section id="panel-immersion" data-settings-panel hidden>
       <div class="section-head">
-        <div><h2>沉浸感</h2><p>让伙伴多知道一点你这边今天的事。装了对应的插件才有这一项。</p></div>
+        <div><h2>我的天气</h2><p>你这边窗外什么样，所有伙伴都看这一份。每位伙伴自己待在哪座城，在「伙伴设置 → 她的日常 → 城市与日常」里。</p></div>
       </div>
-      <div class="section-head roomy">
-        <div><h2>城市</h2><p>伙伴待在哪座城市、要不要知道点你那边的日常。</p></div>
-      </div>
-      <article class="setting-card" id="life-city-card">
+      <article class="setting-card weather-region-card">
         <div class="setting-copy">
-          <h3>生活城市</h3>
-          <p>伙伴生活里待的那座城市。跟天气各算各的：在下面的城市表里选一座，选中才作数。</p>
+          <h3>茶话会自己的天气</h3>
+          <p id="own-weather-copy">选一下你所在的地方，伙伴就知道窗外什么样；不选就不查。跟拾光记各算各的。</p>
         </div>
-        <div class="detail-field">
-          <small class="detail-field-note" id="life-city-current" role="status">尚未设置生活城市。</small>
-          <div class="detail-actions">
-            <button class="soft-button" id="life-city-pick" type="button">选择城市</button>
-            <button class="soft-button" id="life-city-clear" type="button">清空</button>
+        <div class="detail-field weather-region-field">
+          <label class="weather-region-cell">
+            <span class="weather-region-label">省份</span>
+            <select id="weather-province" aria-label="省份"></select>
+          </label>
+          <label class="weather-region-cell">
+            <span class="weather-region-label">城市</span>
+            <select id="weather-city" aria-label="城市"></select>
+          </label>
+          <label class="weather-region-cell">
+            <span class="weather-region-label">区县</span>
+            <select id="weather-district" aria-label="区县"></select>
+          </label>
+          <div class="detail-actions weather-region-actions">
+            <button class="soft-button" id="own-weather-save" type="button">保存地点</button>
+            <button class="soft-button" id="own-weather-test" type="button">测试一下</button>
+            <button class="soft-button" id="own-weather-clear" type="button">清除</button>
           </div>
-        </div>
-      </article>
-      <article class="setting-card" id="life-city-discoveries-card">
-        <div class="setting-copy"><h3>同城发现</h3><p>伙伴偶尔挑一条本地展讯、书店活动或街区消息来聊，消息会带原出处。搜索只用你填的城市和固定话题词，不发送聊天内容。</p></div>
-        <div class="detail-field">
-          <button class="switch" id="life-city-discoveries-switch" type="button" role="switch" aria-label="同城发现" aria-checked="false"><span class="track"><span></span></span><span class="switch-label">关闭</span></button>
-        </div>
-      </article>
-      <article class="setting-card" id="life-city-illustrations-card">
-        <div class="setting-copy"><h3>城市插画</h3><p>独立开关，默认关闭。只在「同城发现」也已打开时复用已有城市资料，不会为插画另发搜索；有同城来源且已设置角色参考照时，普通照片候选可画成风格化城市插画。它不代表到访或亲眼见过，图片下会保留可点开的来源。资料或参考照不足时照常走普通照片，不编造具名地标。</p></div>
-        <div class="detail-field">
-          <button class="switch" id="life-city-illustrations-switch" type="button" role="switch" aria-label="城市插画" aria-checked="false"><span class="track"><span></span></span><span class="switch-label">关闭</span></button>
-        </div>
-      </article>
-      <article class="setting-card" id="life-city-street-card">
-        <div class="setting-copy">
-          <h3>真实街景自拍</h3>
-          <p id="life-city-street-copy">打开后，伙伴偶尔会发一张「站在真街上」的照片。背景是 Wikimedia Commons 上的真实街景，只用明确允许自由使用的那种（CC0，或作者自己奉献的公共领域作品），每次都把出处留在照片记录里。检索时只发城市名，不发聊天内容。</p>
-        </div>
-        <div class="detail-field">
-          <button class="switch" id="life-city-street-switch" type="button" role="switch" aria-checked="false">
-            <span class="track"><span></span></span><span class="switch-label">关闭</span>
-          </button>
-          <small class="detail-field-note" id="life-city-street-note">这类素材很少，很多城市一张都找不到。找不到就不发——不会拿编出来的街景充数。</small>
+          <small class="detail-field-note" id="own-weather-note">按区县中心点查，精度到区域附近，不代表具体门牌。Open-Meteo 免费查询，只用来查天气，不会发到别处。</small>
+          <small class="detail-field-note weather-region-status" id="own-weather-status" role="status" aria-live="polite"></small>
         </div>
       </article>
       <div class="section-head roomy">
-        <div><h2>天气与日常感知</h2><p>天气、今天的日子、你和伙伴最近在做的事。</p></div>
+        <div><h2>日常设置</h2><p>对所有伙伴都算数。装了对应的插件才有那几项。</p></div>
       </div>
       <div class="switch-grid">
         <article class="setting-card compact">
@@ -424,33 +411,6 @@
           </button>
         </article>
       </div>
-      <article class="setting-card weather-region-card">
-        <div class="setting-copy">
-          <h3>茶话会自己的天气</h3>
-          <p id="own-weather-copy">选一下你所在的地方，伙伴就知道窗外什么样；不选就不查。跟拾光记各算各的。</p>
-        </div>
-        <div class="detail-field weather-region-field">
-          <label class="weather-region-cell">
-            <span class="weather-region-label">省份</span>
-            <select id="weather-province" aria-label="省份"></select>
-          </label>
-          <label class="weather-region-cell">
-            <span class="weather-region-label">城市</span>
-            <select id="weather-city" aria-label="城市"></select>
-          </label>
-          <label class="weather-region-cell">
-            <span class="weather-region-label">区县</span>
-            <select id="weather-district" aria-label="区县"></select>
-          </label>
-          <div class="detail-actions weather-region-actions">
-            <button class="soft-button" id="own-weather-save" type="button">保存地点</button>
-            <button class="soft-button" id="own-weather-test" type="button">测试一下</button>
-            <button class="soft-button" id="own-weather-clear" type="button">清除</button>
-          </div>
-          <small class="detail-field-note" id="own-weather-note">按区县中心点查，精度到区域附近，不代表具体门牌。Open-Meteo 免费查询，只用来查天气，不会发到别处。</small>
-          <small class="detail-field-note weather-region-status" id="own-weather-status" role="status" aria-live="polite"></small>
-        </div>
-      </article>
       <article class="setting-card compact">
         <div class="setting-copy">
           <h3>已收集的生活记录</h3>
@@ -803,7 +763,7 @@
     import { hana as localHana } from "./assets/sdk.js";
     import { PROFILES, DEFAULT_PROFILE_ID, ensureAudio, normalizeSettings, play as playMessageSound } from "./assets/message-sound.js";
     import { mountMobileSettings } from "./assets/mobile-settings.js";
-    import { mountPartnerImageSettings } from "./assets/image-settings.js?v=20261125.1";
+    import { mountPartnerImageSettings } from "./assets/image-settings.js?v=20261125.2";
 
     // 嵌在聊天卡里时复用外层宿主桥；单独打开时仍保留原来的 SDK 兜底。
     const hana = window.parent !== window && window.parent.__chahuahuiHana ? window.parent.__chahuahuiHana : localHana;
@@ -821,7 +781,7 @@
 
     // 这一页自己的版本号：后端读同一个文件里的这一行，两边对不上就说明她眼前是旧的。
     // （以前用文件哈希当戳，但那个值是后端给的，页面旧了它照样显示新值，等于没测。）
-    const UI_BUILD = "20261125.1";
+    const UI_BUILD = "20261125.2";
 
     const el = {
       status: document.getElementById("status"),
@@ -844,6 +804,10 @@
     let lifeCityError = "";
     /** 弹窗里选到哪一省了；空着就是还在省这一层。 */
     let lifeCityDialogProvince = "";
+    /** 这次点开城市弹窗是为了给谁挑城：一个函数（giver）；不接全局那一套。 */
+    let lifeCityPickTarget = null;
+    /** 弹窗标题的默认值：每位伙伴那里会换成「她的名字」。 */
+    const LIFE_CITY_MODAL_TITLE = "选择生活城市";
     // 次数和可见伙伴共用一份页面草稿，不另存参与名单。
     let videoShareDraft = null;
     let videoShareSaving = false;
@@ -881,7 +845,7 @@
     let pendingResetId = null;
     let partnerRequestSeq = 0;
     let disposeImageSettings = null;
-    let currentDetailTab = "contact";
+    let currentDetailTab = "directory";
     let personDraftTimer = null;
     let lastModalTrigger = null;
     let globalSaveChain = Promise.resolve();
@@ -944,6 +908,25 @@
     const pageTitle = document.getElementById("settings-page-title");
     let activeSetting = "";
 
+    // 这位伙伴的目录：三个分组、八行整行。点一行进子页，子页只留一个「返回」。
+    const PARTNER_SECTIONS = [
+      { group: "怎么相处", rows: [["contact", "联系与消息"], ["relation", "关系与性格"], ["action", "小动作"]] },
+      { group: "她的日常", rows: [["city", "城市与日常"], ["room", "聊天场景"]] },
+      { group: "管理", rows: [["model", "模型与识图"], ["memory", "记忆"], ["manage", "伙伴管理"]] },
+    ];
+
+    /** 这一块叫什么：目录行上的名字。 */
+    function partnerSectionLabel(id) {
+      return PARTNER_SECTIONS.flatMap((group) => group.rows).find((row) => row[0] === id)?.[1] ?? "伙伴设置";
+    }
+
+    /** 标题按上下文来：目录页只写这位伙伴的名字，子页前面也带上名字，免得不知道在改谁的设置。 */
+    function paintPartnerContextTitle(partner, detailTab) {
+      if (!pageTitle) return;
+      const who = partner?.name || "伙伴设置";
+      pageTitle.textContent = detailTab === "directory" ? who : `${who} · ${partnerSectionLabel(detailTab)}`;
+    }
+
     function setTab(name) {
       if (name !== "proactive") stopVideoQr();
       if (!el.panels[name]) return;
@@ -958,6 +941,8 @@
       window.scrollTo(0, 0);
       pageTitle.focus({ preventScroll: true });
       if (name === "partners" && !currentId && partners.length) void openPartner(partners[0].id);
+      // 回到伙伴页时标题跟着当前那一位走，不能停在泛泛的「伙伴设置」上。
+      else if (name === "partners" && currentId) paintPartnerContextTitle(partners.find((p) => p.id === currentId), currentDetailTab);
       if (name === "usage") void loadUsage();
       if (name === "mobile") void mobilePanel?.refresh();
     }
@@ -979,6 +964,7 @@
       const link = event.target.closest(".index-link");
       if (link) setTab(link.dataset.tabTarget);
     });
+    // 工具栏这个「‹ 设置」永远回总目录；伙伴子页里那一层回退由页内的「返回」自己管。
     indexBack.addEventListener("click", showIndex);
 
     // ── 用量那一页 ──
@@ -1152,6 +1138,8 @@
     }
     function closeModal(id, restoreFocus = true) {
       document.getElementById(id).hidden = true;
+      // 城市弹窗关掉就不再记着它要替谁选城：下次点开是新一轮。
+      if (id === "life-city-modal") lifeCityPickTarget = null;
       if (!document.querySelector(".modal-layer:not([hidden])")) {
         document.documentElement.classList.remove("modal-open");
         document.body.classList.remove("modal-open");
@@ -1377,36 +1365,9 @@
     }
 
     /**
-     * 生活城市与真实街景：城市从本地城市表里选，街景另有一个明确的授权开关。
-     * 城市没选时，街景开关还是能按——但那只是记下她的意愿，
-     * 真正去找街景还得等城市选上（那时才会去问素材服务）。
+     * 全局设置这一页：生活城市已经搬到「伙伴设置 → 她的日常 → 城市与日常」，
+     * 那是每位伙伴自己的城，这里不再有全局城市按钮。
      */
-    function paintLifeCity() {
-      const saved = lifeCityCurrentLabel();
-      document.getElementById("life-city-current").textContent = saved ? `当前：${saved}` : "尚未设置生活城市。";
-      document.getElementById("life-city-clear").disabled = !saved;
-      void loadLifeCityItems();
-      const discoveries = document.getElementById("life-city-discoveries-switch");
-      const localOn = globalSettings.lifeCityDiscoveries === true;
-      discoveries.classList.toggle("on", localOn);
-      discoveries.setAttribute("aria-checked", String(localOn));
-      discoveries.querySelector(".switch-label").textContent = localOn ? "打开" : "关闭";
-      const illustrations = document.getElementById("life-city-illustrations-switch");
-      const illustrationsOn = globalSettings.lifeCityIllustrations === true;
-      illustrations.classList.toggle("on", illustrationsOn);
-      illustrations.setAttribute("aria-checked", String(illustrationsOn));
-      illustrations.querySelector(".switch-label").textContent = illustrationsOn ? "打开" : "关闭";
-      const button = document.getElementById("life-city-street-switch");
-      const on = Boolean(globalSettings.lifeCityStreetView);
-      const city = String(globalSettings.lifeCity ?? "").trim();
-      button.classList.toggle("on", on);
-      button.setAttribute("aria-checked", String(on));
-      button.querySelector(".switch-label").textContent = on ? "打开" : "关闭";
-      document.getElementById("life-city-street-note").textContent = city
-        ? "这类素材很少，很多城市一张都找不到。找不到就不发——不会拿编出来的街景充数。"
-        : "先在上面选一座城市，再打开这一项。没选城市就打开也不会去找街景。";
-    }
-
     function paintGlobal() {
       const avatarSwitch = document.getElementById("msg-avatars-switch");
       const avatarsOn = Boolean(globalSettings.messageAvatars);
@@ -1474,7 +1435,6 @@
       }
       // 自己的天气：三个下拉跟着设置回填。
       void paintWeatherRegion();
-      paintLifeCity();
       const workfeedSwitch = document.getElementById("workfeed-switch");
       const workfeedOn = globalSettings.workfeedEnabled !== false;
       workfeedSwitch.classList.toggle("on", workfeedOn);
@@ -3461,11 +3421,11 @@
     }
 
     /** 当前城市显示成「省 · 市」；老数据只有城市名时退回那个名字。 */
-    function lifeCityCurrentLabel() {
-      const code = String(globalSettings.lifeCityCode ?? "");
-      const hit = (lifeCityItems ?? []).find(row => String(row?.code ?? "") === code);
+    function lifeCityLabelFor(code, fallbackCity = "") {
+      const key = String(code ?? "");
+      const hit = key ? (lifeCityItems ?? []).find(row => String(row?.code ?? "") === key) : null;
       if (hit?.name) return String(hit.name);
-      return String(globalSettings.lifeCity ?? "").trim();
+      return String(fallbackCity ?? "").trim();
     }
 
     /** 城市表只读一次；读不到时把话说明白，不静默空着。 */
@@ -3483,8 +3443,6 @@
       }).finally(() => {
         lifeCityLoading = null;
         renderLifeCityDialog();
-        // 城市表到了就把当前城市补成「省 · 市」：先前只拿得到城市名。
-        paintLifeCity();
       });
       return lifeCityLoading;
     }
@@ -3575,22 +3533,28 @@
       }
     }
 
-    /** 选中一座城：走现成的设置保存管道。没存上就留在弹窗里，让她能再试一次。 */
-    async function pickLifeCity(code, label) {
-      if (!code || !lifeCityItems?.some(row => String(row?.code ?? "") === String(code))) return;
-      if (!await saveGlobal({ lifeCityCode: code }, `生活城市已保存：${label}`)) return;
-      closeModal("life-city-modal");
-      paintLifeCity();
-    }
-
-    document.getElementById("life-city-pick").addEventListener("click", () => {
+    /** 点开城市弹窗：谁点开谁接结果。onPick 返回 false 就留在弹窗里，让她再试一次。 */
+    function openLifeCityDialog({ title = LIFE_CITY_MODAL_TITLE, onPick } = {}) {
+      lifeCityPickTarget = typeof onPick === "function" ? onPick : null;
       lifeCityDialogProvince = "";
+      const heading = document.getElementById("life-city-modal-title");
+      if (heading) heading.textContent = title || LIFE_CITY_MODAL_TITLE;
       document.getElementById("life-city-modal-search").value = "";
       void loadLifeCityItems(true);
       renderLifeCityDialog();
       openModal("life-city-modal");
       document.getElementById("life-city-modal-search")?.focus();
-    });
+    }
+
+    /** 选中一座城：交给点开弹窗的那一位去存。没存上就留在弹窗里，让她能再试一次。 */
+    async function pickLifeCity(code, label) {
+      if (!code || !lifeCityItems?.some(row => String(row?.code ?? "") === String(code))) return;
+      const target = lifeCityPickTarget;
+      if (!target) { closeModal("life-city-modal"); return; }
+      if (!await target({ code, label })) return;
+      closeModal("life-city-modal");
+    }
+
     document.getElementById("life-city-modal-search").addEventListener("input", () => {
       lifeCityDialogProvince = "";
       renderLifeCityDialog();
@@ -3601,22 +3565,6 @@
     });
     // 取消与 Esc 都不保存：弹窗只是让她挑一座城，没挑中就当没来过。
     document.getElementById("life-city-modal-cancel").addEventListener("click", () => closeModal("life-city-modal"));
-    document.getElementById("life-city-clear").addEventListener("click", async () => {
-      if (!await saveGlobal({ lifeCityCode: null }, "已清空生活城市")) return;
-      paintLifeCity();
-    });
-    document.getElementById("life-city-discoveries-switch").addEventListener("click", async () => {
-      const next = !globalSettings.lifeCityDiscoveries;
-      if (await saveGlobal({ lifeCityDiscoveries: next }, next ? "同城发现已打开" : "同城发现已关闭")) paintLifeCity();
-    });
-    document.getElementById("life-city-illustrations-switch").addEventListener("click", async () => {
-      const next = !globalSettings.lifeCityIllustrations;
-      if (await saveGlobal({ lifeCityIllustrations: next }, next ? "城市插画已打开" : "城市插画已关闭")) paintLifeCity();
-    });
-    document.getElementById("life-city-street-switch").addEventListener("click", async () => {
-      const next = !Boolean(globalSettings.lifeCityStreetView);
-      if (await saveGlobal({ lifeCityStreetView: next }, next ? "真实街景自拍已打开" : "真实街景自拍已关闭")) paintGlobal();
-    });
 
     async function saveQuiet() {
       const startEl = document.getElementById("quiet-start");
@@ -3765,9 +3713,194 @@
       return row;
     }
 
-    async function openPartner(agentId, detailTab = "contact") {
+    // ── 城市与日常：每位伙伴自己的城；三个开关各自记在她自己身上 ──
+
+    /** PUT 回包里那份 settings 重算「她自己覆盖过哪些字段」：页面不等下一次 GET 就能画对。 */
+    function partnerCityOverrideFrom(settings) {
+      const raw = settings && typeof settings === "object" ? settings : {};
+      const out = {};
+      for (const key of ["lifeCity", "lifeCityCode", "lifeCityDiscoveries", "lifeCityIllustrations", "lifeCityStreetView"]) {
+        if (!Object.prototype.hasOwnProperty.call(raw, key)) continue;
+        if (key === "lifeCityCode") out[key] = typeof raw[key] === "string" && raw[key] ? raw[key] : null;
+        else if (key === "lifeCity") out[key] = String(raw[key] ?? "");
+        else out[key] = raw[key] === true;
+      }
+      return out;
+    }
+
+    /** 只改这一位伙伴的城市设置；回包里带了新的生效值就当场接住。 */
+    async function savePartnerCity(agentId, patch, successText) {
+      try {
+        const data = await api("PUT", `settings/partner/${encodeURIComponent(agentId)}`, patch);
+        const row = partners.find((p) => p.id === agentId);
+        if (row) {
+          const previous = row.settings ?? {};
+          const next = { ...(data.settings ?? previous) };
+          // 同一道理：B站分享的慢回包不能盖掉集中保存刚写进去的参与状态。
+          if (Object.prototype.hasOwnProperty.call(previous, "videoSharingEnabled")) next.videoSharingEnabled = previous.videoSharingEnabled;
+          else delete next.videoSharingEnabled;
+          row.settings = next;
+          if (data.city) row.lifeCity = { ...data.city, override: partnerCityOverrideFrom(next) };
+        }
+        say(successText, "ok");
+        holdViewport();
+        return data;
+      } catch (error) {
+        say(`没存上：${error.message}`, "err");
+        return null;
+      }
+    }
+
+    /** 一张带开关的城市卡。 */
+    function citySwitchCard(id, title, copy, switchId, noteId = "") {
+      const card = detailCard(title, copy);
+      card.id = id;
+      const holder = document.createElement("div");
+      holder.className = "detail-field";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "switch";
+      button.id = switchId;
+      button.setAttribute("role", "switch");
+      button.setAttribute("aria-checked", "false");
+      button.innerHTML = '<span class="track"><span></span></span><span class="switch-label">关闭</span>';
+      holder.appendChild(button);
+      let note = null;
+      if (noteId) {
+        note = document.createElement("small");
+        note.className = "detail-field-note";
+        note.id = noteId;
+        holder.appendChild(note);
+      }
+      card.appendChild(holder);
+      return { card, button, note };
+    }
+
+    /**
+     * 「城市与日常」这一页。stillCurrent() 表示这一页还有效：
+     * 换到别的伙伴之后，再晚的回包也不能改到别人那一页上。
+     */
+    function mountPartnerCitySettings(agentId, partner, panel, stillCurrent) {
+      const cityCard = detailCard("生活城市", "伙伴生活里待的那座城市。跟你的天气各算各的：从城市表里选一座，选中才作数。");
+      cityCard.id = "life-city-card";
+      const cityField = document.createElement("div");
+      cityField.className = "detail-field";
+      const state = document.createElement("small");
+      state.className = "detail-field-note";
+      state.id = "life-city-current";
+      state.setAttribute("role", "status");
+      const actions = document.createElement("div");
+      actions.className = "detail-actions";
+      const pick = document.createElement("button");
+      pick.type = "button"; pick.className = "soft-button"; pick.id = "life-city-pick"; pick.textContent = "选择城市";
+      const clear = document.createElement("button");
+      clear.type = "button"; clear.className = "soft-button"; clear.id = "life-city-clear"; clear.textContent = "清空";
+      actions.append(pick, clear);
+      cityField.append(state, actions);
+      cityCard.appendChild(cityField);
+      panel.appendChild(cityCard);
+
+      const discoveries = citySwitchCard("life-city-discoveries-card", "同城发现", "伙伴偶尔挑一条本地展讯、书店活动或街区消息来聊，消息会带原出处。搜索只用这座城市和固定话题词，不发送聊天内容。", "life-city-discoveries-switch");
+      const illustrations = citySwitchCard("life-city-illustrations-card", "城市插画", "独立开关，默认关闭。只在「同城发现」也打开时复用已有城市资料，不会为插画另发搜索；有同城来源且已设置角色参考照时，普通照片候选可画成风格化城市插画。它不代表到访或亲眼见过，图片下会保留可点开的来源。资料或参考照不足时照常走普通照片，不编造具名地标。", "life-city-illustrations-switch");
+      const street = citySwitchCard("life-city-street-card", "真实街景自拍", "打开后，伙伴偶尔会发一张「站在真街上」的照片。背景是 Wikimedia Commons 上的真实街景，只用明确允许自由使用的那种（CC0，或作者自己奉献的公共领域作品），每次都把出处留在照片记录里。检索时只发城市名，不发聊天内容。", "life-city-street-switch", "life-city-street-note");
+      panel.append(discoveries.card, illustrations.card, street.card);
+
+      /** 这位伙伴此刻生效的城市与「她自己改过哪些」。 */
+      function cityNow() {
+        const row = partners.find((p) => p.id === agentId);
+        const city = row?.lifeCity ?? {};
+        const override = city.override ?? {};
+        return { city, own: (key) => Object.prototype.hasOwnProperty.call(override, key) };
+      }
+
+      function paintSwitch(button, on, inherited) {
+        button.classList.toggle("on", on);
+        button.setAttribute("aria-checked", String(on));
+        button.querySelector(".switch-label").textContent = on ? "打开" : "关闭";
+        button.title = inherited ? "现在跟着你的全局设置；按下就是这位伙伴自己的选择" : "";
+      }
+
+      function paint() {
+        const { city, own } = cityNow();
+        const saved = lifeCityLabelFor(city.code, city.city);
+        state.textContent = saved
+          ? (own("lifeCityCode") ? `当前：${saved}` : `当前：${saved}（没单独设过，跟着「我的天气」那座城）`)
+          : (own("lifeCityCode") ? "现在没有生活城市：这一项清空了，也不再跟着全局那座城。" : "尚未设置生活城市。");
+        clear.disabled = !saved;
+        paintSwitch(discoveries.button, city.discoveries === true, !own("lifeCityDiscoveries"));
+        paintSwitch(illustrations.button, city.illustrations === true, !own("lifeCityIllustrations"));
+        paintSwitch(street.button, city.streetView === true, !own("lifeCityStreetView"));
+        if (street.note) {
+          street.note.textContent = saved
+            ? "这类素材很少，很多城市一张都找不到。找不到就不发——不会拿编出来的街景充数。"
+            : "先在上面选一座城市，再打开这一项。没选城市就打开也不会去找街景。";
+        }
+      }
+
+      pick.addEventListener("click", () => {
+        if (!stillCurrent()) return;
+        void openLifeCityDialog({
+          title: `${partner.name} 的生活城市`,
+          onPick: async ({ code, label }) => {
+            if (!stillCurrent()) { say("已经换到别的伙伴了，这次没写进去", "err"); return false; }
+            const data = await savePartnerCity(agentId, { lifeCityCode: code }, `生活城市已保存：${label}`);
+            if (!data) return false;
+            paint();
+            return true;
+          },
+        });
+      });
+      clear.addEventListener("click", async () => {
+        if (!stillCurrent()) return;
+        clear.disabled = true;
+        await savePartnerCity(agentId, { lifeCityCode: null }, "已清空这位伙伴的生活城市");
+        if (!stillCurrent()) return;
+        paint();
+      });
+      for (const [card, key, fieldName, label] of [
+        [discoveries, "lifeCityDiscoveries", "discoveries", "同城发现"],
+        [illustrations, "lifeCityIllustrations", "illustrations", "城市插画"],
+        [street, "lifeCityStreetView", "streetView", "真实街景自拍"],
+      ]) {
+        card.button.addEventListener("click", async () => {
+          const { city } = cityNow();
+          const next = city[fieldName] !== true;
+          card.button.disabled = true;
+          await savePartnerCity(agentId, { [key]: next }, next ? `${label}已打开` : `${label}已关闭`);
+          card.button.disabled = false;
+          if (!stillCurrent()) return;
+          paint();
+        });
+      }
+      paint();
+      // 城市表是异步的：到了以后把「省 · 市」补全，不留一个只有市名的旧值。
+      void loadLifeCityItems().then(() => { if (stillCurrent()) paint(); });
+    }
+
+    /** 「伙伴管理」这一页：移出 / 删除收在这里，不在目录上把危险按钮摆得太显眼。 */
+    function mountPartnerManage(agentId, partner, panel) {
+      const card = detailCard("移出茶话会", "移出后 ta 不再出现在伙伴列表里，你们的聊天和记忆都还留着，想再放回来从「已移出的伙伴」里找。彻底删除是另一回事，会连同记忆一起清掉。");
+      const actions = document.createElement("div");
+      actions.className = "detail-actions";
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "remove-link";
+      remove.textContent = "移出 / 删除";
+      remove.addEventListener("click", () => {
+        pendingRemoveId = agentId;
+        document.getElementById("remove-copy").textContent = `要把「${partner.name}」从茶话会移出去吗？选一种方式。`;
+        openModal("remove-modal");
+      });
+      actions.appendChild(remove);
+      card.appendChild(actions);
+      panel.appendChild(card);
+    }
+
+    async function openPartner(agentId, detailTab = "directory", nav = {}) {
       disposeImageSettings?.(); disposeImageSettings = null;
       const requestSeq = ++partnerRequestSeq;
+      // 旧的标签名（personality / contact 这些）还可能有入口在叫；认不出来的就落回目录，不留一张空页。
+      if (!PARTNER_SECTIONS.some((group) => group.rows.some(([id]) => id === detailTab))) detailTab = "directory";
       if (personDraftTimer && currentId !== agentId) { clearInterval(personDraftTimer); personDraftTimer = null; }
       // 保存后重开这一页时，别把滚动位置弄丢：partnerBody 清空的那一瞬内容塌到零高，
       // 文档滚动会被浏览器 clamp 回 0，等内容回来人已经站在最上面了。
@@ -3780,6 +3913,53 @@
       paintPartnerSkinNote();
       const partner = partners.find((p) => p.id === agentId);
       if (!partner) { el.partnerBody.replaceChildren(); return; }
+      const root = document.createElement("div");
+      root.className = "partner-detail";
+      if (activeSetting === "partners") paintPartnerContextTitle(partner, detailTab);
+      if (detailTab === "directory") {
+        // 目录：先说清这是谁，再列八行；每行进去是一个子页。
+        const hero = document.createElement("div");
+        hero.className = "partner-hero";
+        hero.appendChild(avatar(partner, "large"));
+        const heroCopy = document.createElement("div");
+        heroCopy.className = "partner-hero-copy";
+        const heroTitle = document.createElement("h2"); heroTitle.textContent = partner.name;
+        const heroNote = document.createElement("p"); heroNote.textContent = "这里只改变茶话会里的相处方式。";
+        heroCopy.append(heroTitle, heroNote);
+        hero.appendChild(heroCopy);
+        root.appendChild(hero);
+        for (const group of PARTNER_SECTIONS) {
+          const box = document.createElement("section");
+          box.className = "index-group";
+          const head = document.createElement("h2");
+          head.textContent = group.group;
+          const list = document.createElement("div");
+          list.className = "index-list";
+          for (const [id, label] of group.rows) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "index-link";
+            button.dataset.partnerSection = id;
+            const text = document.createElement("span");
+            text.textContent = label;
+            const arrow = document.createElement("span");
+            arrow.className = "index-arrow";
+            arrow.setAttribute("aria-hidden", "true");
+            button.append(text, arrow);
+            button.addEventListener("click", () => openPartner(agentId, id, { focus: true }));
+            list.appendChild(button);
+          }
+          box.append(head, list);
+          root.appendChild(box);
+        }
+        el.partnerBody.replaceChildren(root);
+        if (activeSetting === "partners") {
+          window.scrollTo(0, 0);
+          if (nav.focusSection) root.querySelector(`[data-partner-section="${nav.focusSection}"]`)?.focus();
+        }
+        return;
+      }
+
       el.partnerBody.innerHTML = '<div class="loading-note">正在翻 ta 的小本子…</div>';
       let memory = { profile: { text: "" }, ledger: [], archive: [], pendingMessages: 0 };
       let topicBook = { topics: [] };
@@ -3793,48 +3973,31 @@
       try { knowing = await api("GET", `knowing/${encodeURIComponent(agentId)}`); } catch { /* 不挡其他设置 */ }
       if (requestSeq !== partnerRequestSeq || currentId !== agentId) return;
 
-      const root = document.createElement("div");
-      root.className = "partner-detail";
-      const hero = document.createElement("div");
-      hero.className = "partner-hero";
-      hero.appendChild(avatar(partner, "large"));
-      const heroCopy = document.createElement("div");
-      heroCopy.className = "partner-hero-copy";
-      const title = document.createElement("h2"); title.textContent = partner.name;
-      const note = document.createElement("p"); note.textContent = "这里只改变茶话会里的相处方式。";
-      heroCopy.append(title, note);
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "remove-link";
-      remove.textContent = "移出 / 删除";
-      remove.addEventListener("click", () => {
-        pendingRemoveId = agentId;
-        document.getElementById("remove-copy").textContent = `要把「${partner.name}」从茶话会移出去吗？选一种方式。`;
-        openModal("remove-modal");
-      });
-      hero.append(heroCopy, remove);
-      root.appendChild(hero);
-
-      const detailNav = document.createElement("nav");
-      detailNav.className = "detail-tabs";
       const detailPanels = {};
-      // 标签收到两个字：六格了，中文再长就会被压成两行
-      const labels = [["contact", "联系"], ["action", "动作"], ["personality", "性格"], ["memory", "记忆"], ["model", "模型"], ["room", "场景"]];
-      const switchDetail = (name) => {
-        for (const [key, panel] of Object.entries(detailPanels)) panel.hidden = key !== name;
-        detailNav.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.detail === name));
-      };
-      for (const [id, label] of labels) {
-        const button = document.createElement("button"); button.type = "button"; button.dataset.detail = id; button.textContent = label;
-        button.addEventListener("click", () => switchDetail(id));
-        detailNav.appendChild(button);
-        const panel = document.createElement("section"); panel.className = "detail-panel"; panel.hidden = id !== detailTab;
-        detailPanels[id] = panel;
+      for (const group of PARTNER_SECTIONS) {
+        for (const [id] of group.rows) {
+          const panel = document.createElement("section");
+          panel.className = "detail-panel";
+          panel.hidden = true;
+          detailPanels[id] = panel;
+        }
       }
-      root.appendChild(detailNav);
-      labels.forEach(([id]) => root.appendChild(detailPanels[id]));
+      {
+        // 子页：只留一个「返回」，其余全是这一页自己的内容。
+        const back = document.createElement("button");
+        back.type = "button";
+        back.className = "soft-button partner-back";
+        back.textContent = "‹ 返回";
+        back.addEventListener("click", () => openPartner(agentId, "directory", { focusSection: detailTab }));
+        root.appendChild(back);
+      }
+      for (const panel of Object.values(detailPanels)) root.appendChild(panel);
 
       const s = partner.settings ?? {};
+
+      // 城市与日常、伙伴管理各占一个子页；和其它页一起建好，切页只显隐。
+      mountPartnerCitySettings(agentId, partner, detailPanels.city, () => currentId === agentId && requestSeq === partnerRequestSeq);
+      mountPartnerManage(agentId, partner, detailPanels.manage);
 
       // ── 起跑线：她跟这位伙伴在别处早就是熟人，不该因为换了个应用又装初次见面 ──
       //
@@ -3884,7 +4047,7 @@
             await api("PUT", `knowing/${encodeURIComponent(agentId)}/seed`, { mode: choice.id });
             const done = choice.id === "auto" ? "回到按痕迹算的那份" : choice.id === "zero" ? "记下了：就从这儿开始" : `记下了：${choice.label}`;
             say(done, "ok");
-            if (currentId === agentId) await openPartner(agentId, "contact");
+            if (currentId === agentId) await openPartner(agentId, "relation");
           } catch (error) {
             say(`没换过来：${error.message}`, "err");
             button.disabled = false;
@@ -3893,7 +4056,7 @@
         seedList.appendChild(button);
       }
       seedCard.appendChild(seedList);
-      detailPanels.contact.appendChild(seedCard);
+      detailPanels.relation.appendChild(seedCard);
       if (!seed && knowing.seedMeasuring) {
         // 刚量上，等它一秒半再拉一次；量不出来就算了，不强求
         setTimeout(async () => {
@@ -4672,7 +4835,7 @@
         if (tally?.changed) say(`聊完了，这回改了 ta ${tally.changed} 处，已经存着了`, "ok");
         else if (tally?.pending) say(`聊完了，还有 ${tally.pending} 条没落，这轮没改动 ta`, "err");
         else say("聊完了，这次没改动 ta");
-        if (currentId === state.agentId) await openPartner(state.agentId, "personality");
+        if (currentId === state.agentId) await openPartner(state.agentId, "relation");
       }
 
       async function openHistory(agentId) {
@@ -4741,7 +4904,7 @@
           await apiLong("POST", `persona-review/${encodeURIComponent(agentId)}/revert`, { at });
           closeModal("history-modal");
           say("已经换回去了，刚才那版还在历史里", "ok");
-          if (currentId === agentId) await openPartner(agentId, "personality");
+          if (currentId === agentId) await openPartner(agentId, "relation");
         } catch (error) {
           button.disabled = false;
           button.dataset.armed = "0";
@@ -4817,7 +4980,7 @@
         growth.hidden = true;
         footerNote.hidden = true;
       }
-      detailPanels.personality.appendChild(personCard);
+      detailPanels.relation.appendChild(personCard);
 
       // ── 设定文件用量：超预算的那部分到底被砍在哪，写卡的人以前完全看不到 ──
       const usageCard = detailCard(
@@ -4837,7 +5000,7 @@
       usageQuiet.textContent = "还没找到 ta 的设定文件。";
       usageQuiet.hidden = true;
       usageCard.appendChild(usageQuiet);
-      detailPanels.personality.appendChild(usageCard);
+      detailPanels.relation.appendChild(usageCard);
       void (async () => {
         try {
           const res = await api("GET", `persona-usage/${encodeURIComponent(agentId)}`);
@@ -5062,7 +5225,7 @@
         });
         adaptationCard.appendChild(item);
       }
-      detailPanels.memory.appendChild(adaptationCard);
+      detailPanels.relation.appendChild(adaptationCard);
 
       const profileCard = detailCard("ta 眼里的你", "料有两份：主对话框那边记着的关于你的事，和这儿聊出来的印象。压缩以后可能记偏，你可以直接校对。");
       const area = document.createElement("textarea"); area.value = memory.profile?.text ?? ""; area.placeholder = "聊久了，这里会慢慢长出一份关系档案。";
@@ -5453,10 +5616,18 @@
       if (requestSeq !== partnerRequestSeq || currentId !== agentId) return;
       el.partnerBody.replaceChildren(root);
       dressSelects(root);
-      switchDetail(detailTab);
+      // 目录页一块都不显示；子页只显示自己那一块。
+      const activePanel = detailPanels[detailTab];
+      if (activePanel) activePanel.hidden = false;
+      if (activeSetting !== "partners") return;
       if (keepScrollY > 0) {
-        requestAnimationFrame(() => { window.scrollTo(0, keepScrollY); });
+        requestAnimationFrame(() => {
+          if (activeSetting === "partners" && requestSeq === partnerRequestSeq) window.scrollTo(0, keepScrollY);
+        });
+      } else {
+        window.scrollTo(0, 0);
       }
+      if (nav.focus) pageTitle?.focus({ preventScroll: true });
     }
 
     document.getElementById("confirm-reset").addEventListener("click", async () => {
@@ -5643,7 +5814,7 @@
         if (currentId && !partners.some((p) => p.id === currentId)) currentId = partners[0]?.id ?? null;
         paintGlobal();
         paintPartnerList();
-        if (currentId) await openPartner(currentId);
+        if (currentId) await openPartner(currentId, currentDetailTab);
         else el.partnerBody.replaceChildren();
         // 伙伴那一侧的皮肤跟人走：换人之后再把那句说明重写一遍
         paintPartnerSkinNote();
