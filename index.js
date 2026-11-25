@@ -123,6 +123,7 @@ import {
   effectiveClaimEntries,
   observeAdviceStyle,
   parseGuideReconcileResult,
+  pruneExpiredTemporaryGuides,
 } from "./lib/adaptation.js";
 import { attributeFeedback, buildAdaptationFeedbackRuntime, commitWakeOutcome, consolidateHabitChanges, finalizeWakeReply, resolveDeferredWake, resolveSleepPolicy } from "./lib/plasticity.js";
 import {
@@ -3837,6 +3838,66 @@ export function apply(ctx) {
   }
 
   let legacyFactsMigrationPromise = null;
+
+  /**
+   * 过期临时相处理解的日常清理（2026-11-25，她同意删掉已过期的临时附加记录）。
+   *
+   * 只清“已经确定过期”的 life-day / until / current-turn；长期（含建议复核）、
+   * 仍在有效期内的临时、撤回/被取代的历史、聊天与其他记忆、反馈账一笔不动。
+   * 缺字段、时间解不开、当天内的 current-turn 都当作“还不能确定”，留着。
+   *
+   * 节奏：启动一次 + 每六小时一次（跟 dayKey 同源边界，不追着四点对齐：
+   * 清的是已经过期的东西，早一点晚一点不影响当下是否生效）。
+   * 全同步、只写真有变化的账本；与专注/陪读无关，也不会叫模型。
+   */
+  const ADAPTATION_TEMPORARY_PRUNE_MS = 6 * 3600_000;
+  function pruneExpiredAdaptations({ reason = "timer", now = new Date() } = {}) {
+    const lifeDay = dayKey(now);
+    const report = { reason, lifeDay, wide: 0, partners: 0, guides: 0 };
+    // 全局那一本：被清掉的若有伙伴账引用，交给同一套失效路径收尾。
+    try {
+      const userBook = store.getUserAdaptation();
+      const pruned = pruneExpiredTemporaryGuides(userBook, { now, lifeDay });
+      if (pruned.removed.length) {
+        store.saveUserAdaptation({
+          ...pruned.book,
+          pendingInvalidationGuideIds: [...new Set([...(userBook.pendingInvalidationGuideIds ?? []),
+            ...pruned.removed.map((row) => row.id).filter(Boolean)])],
+        });
+        report.wide = pruned.removed.length;
+        diagnostics({ event: "adaptation.temporary.pruned", scope: "user-wide", count: pruned.removed.length,
+          reasons: pruned.removed.map((row) => row.reason).slice(0, 8) });
+      }
+    } catch (error) {
+      diagnostics({ event: "adaptation.temporary.prune.failed", scope: "user-wide", error: describeError(error) });
+    }
+    // 伙伴各自的账：扫 app 自己的目录，不靠宿主名单（伙伴被移出也要清）。
+    const agentIds = store.listPartnerAdaptationIds();
+    for (const agentId of Array.isArray(agentIds) ? agentIds : []) {
+      try {
+        const book = store.getPartnerAdaptation(agentId);
+        const pruned = pruneExpiredTemporaryGuides(book, { now, lifeDay });
+        if (!pruned.removed.length) continue;
+        store.savePartnerAdaptation(agentId, pruned.book);
+        report.partners += 1;
+        report.guides += pruned.removed.length;
+        diagnostics({ event: "adaptation.temporary.pruned", agentId, count: pruned.removed.length,
+          reasons: pruned.removed.map((row) => row.reason).slice(0, 8) });
+      } catch (error) {
+        diagnostics({ event: "adaptation.temporary.prune.failed", agentId, error: describeError(error) });
+      }
+    }
+    if (report.wide || report.guides) diagnostics({ event: "adaptation.temporary.prune", ...report });
+    return report;
+  }
+  // 启动扫一次；之后定时。unref：不因为这个计时器把进程的命运拖住。
+  try { pruneExpiredAdaptations({ reason: "startup" }); } catch { /* 清理失败不影响装载 */ }
+  try {
+    const pruneTimer = setInterval(() => {
+      try { pruneExpiredAdaptations({ reason: "timer" }); } catch { /* 单次失败下一轮再试 */ }
+    }, ADAPTATION_TEMPORARY_PRUNE_MS);
+    pruneTimer?.unref?.();
+  } catch { /* 宿主没有计时器就只靠启动那一次 */ }
 
   async function migrateLegacyFactsOnce() {
     store.repairPendingUserAdaptationInvalidations();

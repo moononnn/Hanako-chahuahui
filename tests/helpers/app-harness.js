@@ -281,9 +281,11 @@ export function fakeWavBase64() {
  * 起一个真装载的茶话会：走真的 apply(ctx)，路由是真的，数据目录是临时的。
  * 只有宿主接口是假的（模型、伙伴列表、网络）。
  */
-export async function bootChahuahui({ seed, entryUrl = new URL("../../index.js", import.meta.url), resources = null, partners = null } = {}) {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "chahuahui-routes-"));
-  const store = createStore(dataDir);
+export async function bootChahuahui({ seed, entryUrl = new URL("../../index.js", import.meta.url), resources = null, partners = null, dataDir = null } = {}) {
+  // 传同一个 dataDir 可以拿同一份真账本再启动一次（比如验证启动清理能重复跑）。
+  const dataDirValue = dataDir ? String(dataDir) : fs.mkdtempSync(path.join(os.tmpdir(), "chahuahui-routes-"));
+  fs.mkdirSync(dataDirValue, { recursive: true });
+  const store = createStore(dataDirValue);
   const models = createModelStub();
   const net = createNetworkStub();
   const emittedAppEvents = [];
@@ -296,7 +298,7 @@ export async function bootChahuahui({ seed, entryUrl = new URL("../../index.js",
   // 多位伙伴的用例（比如各自的生活城市）需要两份名单。
   const partnerList = Array.isArray(partners) && partners.length ? partners : [partner];
   const ctx = {
-    dataDir,
+    dataDir: dataDirValue,
     routes: { register(callback) { callback(host.app); } },
     logger: { info() {}, warn() {}, error() {} },
     bus: {
@@ -343,7 +345,7 @@ export async function bootChahuahui({ seed, entryUrl = new URL("../../index.js",
   apply(ctx);
 
   const request = (method, url, options) => host.dispatch(method, url, options);
-  return { dataDir, store, models, net, ctx, request, host, emittedAppEvents, serviceCalls, serviceHandlers };
+  return { dataDir: dataDirValue, store, models, net, ctx, request, host, emittedAppEvents, serviceCalls, serviceHandlers };
 }
 
 /** 临时目录下的真账本读回：证明写进去的是文件里的东西，不是内存里的残留。 */
