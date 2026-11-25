@@ -2056,6 +2056,11 @@ test("图进气泡的同时就撤掉待发送条，不等 POST 回包", () => {
   assert.doesNotMatch(panel, /clearPendingQuote\(\);[\s\S]{0,200}?clearPendingImage\(\)/);
 });
 
+test("图片发送回执到手后，原气泡上的图立刻能走右键菜单", () => {
+  assert.match(panel, /const sentImageNode = appendInlineImage\(renderedUser, image\);/);
+  assert.match(panel, /if \(current !== agentId \|\| turnSeq !== threadViewSeq\) return;\s*if \(started\.messageId\) \{[^{}]*?if \(sentImageNode && started\.attachmentId\) \{\s*sentImageNode\.dataset\.attachmentId = started\.attachmentId;\s*sentImageNode\.dataset\.attachmentOwner = agentId;\s*sentImageNode\.dataset\.senderRole = "user";/);
+});
+
 test("POST 没被接受就把图放回待发送区，原样保留 clientMessageId", () => {
   assert.match(panel, /function restorePendingImage\(image\)/);
   assert.match(panel, /if \(!image\?\.data \|\| pendingImage\) return;/);

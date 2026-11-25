@@ -10929,10 +10929,12 @@ export function apply(ctx) {
           diagnostics({ event: "action.answer.cancelled", agentId });
         }
 
+        const receipt = { ok: true, messageId: stored.id,
+          ...(stored.attachment?.id ? { attachmentId: stored.attachment.id } : {}) };
         if (duringFocus && focusCompanion.active()?.companionId === agentId) {
           // 陪读伙伴只发合并后的提醒，不再另生成一段闲聊；正常关系记账仍保留。
           cancelScheduledReply(agentId);
-          return c.json({ ok: true, messageId: stored.id, mode: 'focus', recall: recallEligibility(stored) });
+          return c.json({ ...receipt, mode: 'focus', recall: recallEligibility(stored) });
         }
 
         // 模型这会儿用不了：消息已经存下来了，这一轮不安排回复。
@@ -10940,7 +10942,7 @@ export function apply(ctx) {
         // 这里不硬塞一个延迟重试：那时候兴许她已经睡了，或者压根没人再去点那张图。
         if (visionNotice) {
           diagnostics({ event: "turn.unavailable", agentId, messageId: stored.id, kind: visionNotice.kind });
-          return c.json({ ok: true, messageId: stored.id, mode: "unavailable", notice: visionNotice, recall: recallEligibility(stored) });
+          return c.json({ ...receipt, mode: "unavailable", notice: visionNotice, recall: recallEligibility(stored) });
         }
 
         // 手机在不在ta手里是ta自己的事，不看她；这里只把ta那份状态推进到现在
@@ -10979,7 +10981,7 @@ export function apply(ctx) {
           // 清空/重置后的旧车道尚在退场时，新消息也得有恢复凭证。
           if (!store.getPendingReply(agentId)) scheduleReplyAt(agentId, Date.now() + 500, "queued", stored.id);
           diagnostics({ event: "turn.queued", agentId, reason: "response-in-flight", messageId: stored.id });
-          return c.json({ ok: true, messageId: stored.id, mode: "queued", queued: true, recall: recallEligibility(stored) });
+          return c.json({ ...receipt, mode: "queued", queued: true, recall: recallEligibility(stored) });
         }
 
         // 面对面（醒着、手机在手）和打盹都演实时那套——打盹只是演得慢：
@@ -10989,7 +10991,7 @@ export function apply(ctx) {
         if (!live || !watching) {
           scheduleReply(agentId, { plan, messageId: stored.id });
           diagnostics({ event: "turn.queued", agentId, mode: plan.mode, watching });
-          return c.json({ ok: true, messageId: stored.id, mode: plan.mode, watching });
+          return c.json({ ...receipt, mode: plan.mode, watching });
         }
 
         const turn = {
@@ -11053,9 +11055,8 @@ export function apply(ctx) {
         readTimer.unref?.();
 
         return c.json({
-          ok: true,
+          ...receipt,
           turnId: turn.id,
-          messageId: stored.id,
           readAfterMs,
           mode: plan.mode,
           /* 她这一句是不是明确要了语音。要丁的话等待态从发送那一刻就走「在说」，

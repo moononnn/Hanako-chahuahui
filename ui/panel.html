@@ -5385,6 +5385,7 @@
       imageNode.src = image.data;
       imageNode.loading = "lazy";
       appendImageToBubble(rendered.bubble, imageNode);
+      return imageNode;
     }
 
     /** 图挂进气泡：泡里已经有文字才断行，纯图别拿空 <br> 撑出一行空白。 */
@@ -5455,7 +5456,7 @@
         renderedUser = bubble("user", piece, null, new Date().toISOString());
         optimisticRows.push(renderedUser.row);
       }
-      appendInlineImage(renderedUser, image);
+      const sentImageNode = appendInlineImage(renderedUser, image);
       // 引用当场就摆出来：消息送出去了、界面还没回包的那几秒里，
       // 她也得看得见自己指的是哪一条，不能等回包才补上。
       if (renderedUser?.col && quote) attachQuote(renderedUser.col, quote);
@@ -5503,6 +5504,11 @@
         if (started.messageId) {
           seenIds.add(started.messageId);
           registerTick(started.messageId, tickEl);
+          if (sentImageNode && started.attachmentId) {
+            sentImageNode.dataset.attachmentId = started.attachmentId;
+            sentImageNode.dataset.attachmentOwner = agentId;
+            sentImageNode.dataset.senderRole = "user";
+          }
           // 占位气泡升级成正式身份：从这一刻起它就是这条消息，轮询不再另画一份。
           for (const optimisticRow of optimisticRows) {
             delete optimisticRow.dataset.pendingClientId;

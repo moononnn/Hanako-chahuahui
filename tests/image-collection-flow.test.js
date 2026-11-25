@@ -72,7 +72,8 @@ async function pendingCall(app, match, what = "模型调用") {
 /** 她发一张图，并等到这一轮回复走完（收藏就是在那时补认的）。 */
 async function sendImage(app, id, text, clientMessageId) {
   const sent = await app.request("POST", "/turns", { json: { agentId: id, text, image: { data: PNG.toString("base64"), mimeType: "image/png" }, watching: true, clientMessageId } });
-  const row = await waitFor(app, id, (item) => item.role === "user" && item.attachment?.id, "用户那条图");
+  const row = await waitFor(app, id, (item) => item.id === sent.body.messageId && item.role === "user" && item.attachment?.id, "用户那条图");
+  assert.equal(sent.body.attachmentId, row.attachment.id, "发送成功时就要返回原图编号，右键不必等回复");
   await waitFor(app, id, (item) => item.role === "assistant", "伙伴那条回复");
   return { attachmentId: row.attachment.id, messageId: sent.body.messageId };
 }
