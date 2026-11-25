@@ -95,7 +95,7 @@ test("候选说明讲清两件事：不是刚拍的，以及怎么用", () => {
 /* ── 集成 ── */
 
 async function boot(t, {
-  prep = true, review = true, vision = true, answer = "[不回]", verdicts = ["pass"], city = "成都",
+  prep = true, review = true, vision = true, answer = "[不回]", verdicts = ["pass"], city = "成都", withSource = true,
 } = {}) {
   const mediaCalls = [], prompts = [], reviewRequests = [];
   let lastTick = null;
@@ -127,12 +127,12 @@ async function boot(t, {
       nextDueAt: time(-HOUR), lastSentAt: time(-HOUR),
       interestLearning: { curiosity: { startedAt: time(0), thresholdMs: 7 * 24 * HOUR } },
       topicSeeds: { lastGrowAt: time(0), seeds: [] },
-      newsBook: { lastFetchAt: time(0), lastDomainId: "", history: [], items: [{
+      newsBook: { lastFetchAt: time(0), lastDomainId: "", history: [], items: withSource ? [{
         id: "local_fixture", domainId: "local-city", domainName: "同城发现",
         localCity: city, localCityCode: "city-test-code",
         title: `${city}街区的巷道与院落`, snippet: `${city}街区导览介绍了窄巷和青砖院落的布局。`,
         url: SOURCE_URL, publishedAt: time(0), createdAt: time(0), expiresAt: time(48 * HOUR), sharedAt: time(0),
-      }] },
+      }] : [] },
     });
     store.appendMessage(AGENT, { role: "user", text: CHAT_LINE, at: time(-2 * HOUR) });
     store.appendMessage(AGENT, { role: "assistant", text: "我一会儿也去冲一杯", at: time(-2 * HOUR + 1000) });
@@ -178,7 +178,7 @@ test("开关默认关：后台不备稿，也不占额度", OPTIONS, async t => 
   await app.tick();
   assert.equal(app.mediaCalls.length, 0);
   assert.deepEqual(app.store.getPendingShares(AGENT), []);
-  assert.ok(app.diagnostics().some(row => row.event === "pending-share.failed" || row.event === "proactive.tick.no-partners") || true);
+  assert.equal(app.diagnostics().some(row => row.event === "pending-share.gate"), false);
 });
 
 test("开关开着、审图可用、有出处：后台备出一件带出处的稿子", OPTIONS, async t => {
@@ -203,6 +203,16 @@ test("审图不可用就不备稿：画出来没人审的一律不备", OPTIONS,
   await app.tick();
   assert.equal(app.mediaCalls.length, 0, "没人审就不画");
   assert.deepEqual(app.store.getPendingShares(AGENT), []);
+  const gate = app.diagnostics().find(row => row.event === "pending-share.gate");
+  const { at, ts, ...fields } = gate ?? {};
+  assert.deepEqual(fields, { event: "pending-share.gate", reason: "no-review" });
+});
+
+test("没有合格来源时记下跳过原因，不触发生图", OPTIONS, async t => {
+  const app = await boot(t, { withSource: false });
+  await app.tick();
+  assert.equal(app.mediaCalls.length, 0);
+  assert.ok(app.diagnostics().some(row => row.event === "pending-share.gate" && row.reason === "no-source"));
 });
 
 test("审图不通过：这张稿不算库存", OPTIONS, async t => {

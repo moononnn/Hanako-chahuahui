@@ -5443,7 +5443,12 @@ export function apply(ctx) {
 
   async function runProactiveTickInternal({ force = false } = {}) {
     try { await focusCompanion.sync(); } catch { /* 可用的现有约定仍有效 */ }
-    if (focusCompanion.active()) return { ok: true, reason: 'focus', report: [] };
+    if (focusCompanion.active()) {
+      if (store.getGlobalSettings().backgroundSharePrepEnabled === true) {
+        diagnostics({ event: "pending-share.gate", reason: "focus" });
+      }
+      return { ok: true, reason: 'focus', report: [] };
+    }
     // 账本读到坏文件时，store 会把坏的挪走留档。这里把记录捞进诊断，别让它静默发生。
     for (const row of store.takeCorruptLog()) {
       diagnostics({ event: "store.corrupt", file: row.file, moved: row.dest });
@@ -6257,8 +6262,9 @@ export function apply(ctx) {
     // 生成一张图要几十秒，摆在前面会把 ta 想找她说话这件事拖住——先说话，后备稿。
     // 一轮最多备一位伙伴的稿子：低频补货，不用一次叫一堆模型。
     if (store.getGlobalSettings().backgroundSharePrepEnabled === true) {
-      for (const partner of partners) {
-        if (!isSettled(partner.id)) continue;
+      const eligible = partners.filter((partner) => isSettled(partner.id));
+      if (!eligible.length) diagnostics({ event: "pending-share.gate", reason: "no-eligible-partner" });
+      for (const partner of eligible) {
         const prepared = await maybePreparePendingShare(partner.id, now).catch((error) => {
           diagnostics({ event: "pending-share.failed", agentId: partner.id, error: describeError(error) });
           return { prepared: 0, reason: "error" };
@@ -6266,6 +6272,10 @@ export function apply(ctx) {
         if (prepared.prepared > 0) {
           diagnostics({ event: "pending-share.tick", agentId: partner.id, prepared: prepared.prepared, kind: prepared.kind ?? "" });
           break;
+        }
+        // 只留下跳过原因，不写素材或提示词，不重复记录已有的失败事件。
+        if (prepared.reason && !["declined", "generate-failed", "error"].includes(prepared.reason)) {
+          diagnostics({ event: "pending-share.gate", reason: prepared.reason });
         }
       }
     }
@@ -6960,7 +6970,8 @@ export function apply(ctx) {
     if (list.length >= PENDING_SHARE_CAP) return { prepared: 0, reason: "full" };
     // 审图不可用就不备：没人审的稿不算库存。
     if (global.imageReviewEnabled !== true || !imageReviewReady(agentId)) return { prepared: 0, reason: "no-review" };
-    if (!chatImageServiceReady || imageQuota?.available(agentId) !== true) return { prepared: 0, reason: "no-quota" };
+    if (!chatImageServiceReady) return { prepared: 0, reason: "image-service-unavailable" };
+    if (imageQuota?.available(agentId) !== true) return { prepared: 0, reason: "no-quota" };
     const state = store.getProactiveState(agentId);
     const pendingState = state.pendingShares && typeof state.pendingShares === "object" ? state.pendingShares : {};
     const filledAt = Date.parse(String(pendingState.lastFilledAt ?? "") || "") || 0;
