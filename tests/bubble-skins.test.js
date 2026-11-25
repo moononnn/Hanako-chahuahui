@@ -26,15 +26,15 @@ function freshStore() {
 
 test("气泡装扮只认白名单里那几套，认不出的一律回原味", () => {
   assert.deepEqual(BUBBLE_SKINS.map((skin) => skin.id), [
-    "plain", "celadon", "outline",
-    "jelly", "sakura", "bear", "marshmallow",
+    "plain", "outline", "sakura", "polka",
     "ill-croc", "ill-fox", "ill-berry", "ill-whale",
-    "rainbow", "polka", "holo", "star", "neon", "rain", "pixel",
-    "art-rabbit", "art-capybara", "art-chick",
-    "art-jellyfish", "art-letter", "art-aquarium",
-    "art-cloud", "art-pixel",
+    "art-rabbit", "art-capybara", "art-chick", "art-jellyfish", "art-cloud",
+    "rainbow", "holo", "neon", "art-pixel",
   ]);
   assert.equal(normalizeBubbleSkin("sakura"), "sakura");
+  for (const id of ["celadon", "jelly", "bear", "marshmallow", "star", "rain", "pixel", "art-letter", "art-aquarium"]) {
+    assert.equal(normalizeBubbleSkin(id), "plain", `${id} 已下架`);
+  }
   // 老数据里手改过的、已经下架的（删掉的磨砂、抑或这轮删的十二套），都回原味，不凭空造一个样式
   assert.equal(normalizeBubbleSkin("glass"), "plain");
   assert.equal(normalizeBubbleSkin("cream"), "plain");
@@ -60,8 +60,10 @@ test("分组只给设置页分段用，每套都得落在已有的那个组里",
 test("装扮存进全局设置，读出来还是认得的那套", () => {
   const { store } = freshStore();
   assert.equal(store.getGlobalSettings().bubbleSkin, "plain");
+  store.setGlobalSettings({ bubbleSkin: "neon" });
+  assert.equal(store.getGlobalSettings().bubbleSkin, "neon");
   store.setGlobalSettings({ bubbleSkin: "star" });
-  assert.equal(store.getGlobalSettings().bubbleSkin, "star");
+  assert.equal(store.getGlobalSettings().bubbleSkin, "plain");
   // 手改的坏值：读的时候归一回原味，不让它带着走进界面
   store.setGlobalSettings({ bubbleSkin: "nope" });
   assert.equal(store.getGlobalSettings().bubbleSkin, "plain");
@@ -227,8 +229,8 @@ test("伙伴只能挑写了心情的那几套，原味不在池子里", () => {
 });
 
 test("心情查得到对应的皮肤，查不到就回空——不硬塞", () => {
-  assert.ok(skinsForMood("happy").includes("jelly"));
-  assert.ok(skinsForMood("calm").includes("celadon"));
+  assert.ok(skinsForMood("happy").includes("sakura"));
+  assert.ok(skinsForMood("calm").includes("outline"));
   // 「委屈」「生气」由新画廊那两款认领了：十三格心情从此都有能穿上的款。
   assert.ok(skinsForMood("hurt").includes("art-rabbit"));
   assert.ok(skinsForMood("angry").includes("art-pixel"));
@@ -250,8 +252,10 @@ test("moods 里写的都得是心情日盘里真有的格子", async () => {
 test("伙伴的皮肤账单独存一本，不混进心情账", () => {
   const { store } = freshStore();
   assert.equal(store.getPartnerSkinBook("agent-a").skin, null);
-  store.savePartnerSkinBook("agent-a", { skin: "star", moodId: "calm", dayKey: "2026-10-28", pickedAt: "2026-10-28T12:00:00.000Z" });
-  assert.equal(store.getPartnerSkinBook("agent-a").skin, "star");
+  store.savePartnerSkinBook("agent-a", { skin: "outline", moodId: "calm", dayKey: "2026-10-28", pickedAt: "2026-10-28T12:00:00.000Z" });
+  assert.equal(store.getPartnerSkinBook("agent-a").skin, "outline");
+  store.savePartnerSkinBook("agent-a", { skin: "star", moodId: "calm", dayKey: "2026-10-28" });
+  assert.equal(store.getPartnerSkinBook("agent-a").skin, null);
   // 坏值读的时候归一，不带着走进界面
   store.savePartnerSkinBook("agent-a", { skin: "nope", moodId: "calm", dayKey: "2026-10-28" });
   assert.equal(store.getPartnerSkinBook("agent-a").skin, null);

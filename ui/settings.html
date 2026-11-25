@@ -803,7 +803,7 @@
     import { hana as localHana } from "./assets/sdk.js";
     import { PROFILES, DEFAULT_PROFILE_ID, ensureAudio, normalizeSettings, play as playMessageSound } from "./assets/message-sound.js";
     import { mountMobileSettings } from "./assets/mobile-settings.js";
-    import { mountPartnerImageSettings } from "./assets/image-settings.js?v=20261124.3";
+    import { mountPartnerImageSettings } from "./assets/image-settings.js?v=20261125.1";
 
     // 嵌在聊天卡里时复用外层宿主桥；单独打开时仍保留原来的 SDK 兜底。
     const hana = window.parent !== window && window.parent.__chahuahuiHana ? window.parent.__chahuahuiHana : localHana;
@@ -821,7 +821,7 @@
 
     // 这一页自己的版本号：后端读同一个文件里的这一行，两边对不上就说明她眼前是旧的。
     // （以前用文件哈希当戳，但那个值是后端给的，页面旧了它照样显示新值，等于没测。）
-    const UI_BUILD = "20261124.3";
+    const UI_BUILD = "20261125.1";
 
     const el = {
       status: document.getElementById("status"),
@@ -2548,7 +2548,7 @@
       if (!host) return;
       const current = globalSettings.bubbleSkin ?? "plain";
       host.replaceChildren();
-      // 二十几套平铺一长条，找起来像在划菜单。分组标题铺满一整行，三个小类各起一段。
+      // 目录按组连续排列，分组标题铺满一整行。
       const groupNames = new Map(bubbleSkinGroups.map((group) => [group.id, group.label]));
       let lastGroup = null;
       for (const skin of bubbleSkinCatalog) {

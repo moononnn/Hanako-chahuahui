@@ -26,9 +26,11 @@ test("水母月牙的金色轮廓完全留在固定右下角，两侧镜像都�
   assert.equal(galleryCss.match(new RegExp(`--art-slices: ${top} ${right} ${bottom} ${left};`, "gu"))?.length, 2);
 });
 
-test("新画廊八款都在清单里，分组落在已有的三个组上", () => {
+const ACTIVE_ART_SKIN_IDS = ART_SKIN_IDS.filter(id => !["art-letter", "art-aquarium"].includes(id));
+
+test("在售插画与像素款都分在对应组", () => {
   const ids = new Set(BUBBLE_SKIN_GROUPS.map((group) => group.id));
-  for (const id of ART_SKIN_IDS) {
+  for (const id of ACTIVE_ART_SKIN_IDS) {
     const skin = bubbleSkinById(id);
     assert.ok(skin, `${id} 没登记进清单`);
     assert.ok(ids.has(skin.group), `${id} 的分组 ${skin.group} 不在已有分组里`);
@@ -40,10 +42,10 @@ test("新画廊八款都在清单里，分组落在已有的三个组上", () =>
   }
 });
 
-test("新画廊八款写的心情都在心情日盘那十三格里，也都进得了伙伴自选池", async () => {
+test("仍保留的画廊款有合法心情，且进得了伙伴自选池", async () => {
   const { MOOD_GRID } = await import("../lib/mood-daily.js");
   const known = new Set(MOOD_GRID.map((mood) => mood.id));
-  for (const id of ART_SKIN_IDS) {
+  for (const id of ACTIVE_ART_SKIN_IDS) {
     const skin = bubbleSkinById(id);
     assert.ok(Array.isArray(skin.moods) && skin.moods.length, `${id} 得写清楚什么心情下成立`);
     for (const mood of skin.moods) assert.ok(known.has(mood), `${id} 写了不存在的心情 ${mood}`);

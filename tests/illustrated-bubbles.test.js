@@ -98,7 +98,7 @@ test("四款插画气泡在白名单里：分组、名字、说明都在", () =>
   for (const row of ILL) {
     const skin = bubbleSkinById(row.id);
     assert.ok(skin, `${row.id} 不在清单里`);
-    assert.equal(skin.group, "cute", `${row.id} 该归在可爱那一组`);
+    assert.equal(skin.group, "illustrated", `${row.id} 该归在插画装饰组`);
     assert.equal(skin.label, row.label);
     // 说明得说清动作是什么、而且动一阵歇一阵
     assert.match(skin.hint, /动/, `${row.id} 的说明没写动作`);
@@ -106,7 +106,7 @@ test("四款插画气泡在白名单里：分组、名字、说明都在", () =>
     assert.ok(Array.isArray(skin.moods) && skin.moods.length, `${row.id} 没写心情，伙伴挑不到它`);
   }
   // 清单里仍然是「原来那十四套 + 新四套」，顺序别乱
-  assert.equal(BUBBLE_SKINS.length, OLD_IDS.length + ILL.length + 8);
+  assert.equal(BUBBLE_SKINS.length, 17);
 });
 
 test("四款能存进设置、读出来还是它；不认得的照旧回原味", () => {

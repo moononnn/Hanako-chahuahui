@@ -592,7 +592,7 @@ textarea { min-height: 104px; resize: vertical; line-height: 1.6; }
 .persona-usage-cut { margin: -6px 0 0; color: var(--ink-soft); font-size: 12.5px; line-height: 1.6; overflow-wrap: anywhere; }
 
 /* ── 气泡装扮：一排可选的框，每一格里画两枚小气泡当样张 ── */
-.skin-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; margin-top: 14px; }
+.skin-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr)); gap: 8px; margin-top: 14px; }
 /* 分组标题铺满整行，把二十几套分成三段 */
 .skin-group-title {
   grid-column: 1 / -1;
