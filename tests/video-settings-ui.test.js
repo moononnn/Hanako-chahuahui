@@ -6,7 +6,7 @@ import vm from "node:vm";
 const html = fs.readFileSync(new URL("../ui/settings.html", import.meta.url), "utf8");
 const client = html.match(/<script type="module">([\s\S]*?)<\/script>/)[1];
 const loginCode = client.slice(client.indexOf("    // 扫码登录局部状态"), client.indexOf('    document.getElementById("msg-avatars-switch").addEventListener'));
-const partnerCode = client.slice(client.indexOf("    function partnerVideoField("), client.indexOf("    // ── 城市与日常："));
+const partnerCode = client.slice(client.indexOf("    // ── 城市与日常："), client.indexOf("    async function openPartner("));
 const plain = (value) => JSON.parse(JSON.stringify(value));
 function element() {
   const classes = new Set();
@@ -113,7 +113,7 @@ test("普通API仍为8秒超时，apiWith按调用方传入超时", async () => 
   assert.equal(requests[2][1].body, '{"id":"test-qr"}');
 });
 
-const sharingCode = client.slice(client.indexOf("    function paintVideoSharing()"), client.indexOf("    function paintGlobalChoices()"));
+const sharingCode = client.slice(client.indexOf("    function paintVideoShareEffective()"), client.indexOf("    function paintGlobalChoices()"));
 function sharingHarness(api, draft = null) {
   const nodes = Object.fromEntries(["video-share-partners", "video-share-options", "video-share-save", "video-share-status"].map((id) => [id, element()]));
   const status = element(); status.dataset.videoPartnerId = "yes";
@@ -121,6 +121,8 @@ function sharingHarness(api, draft = null) {
     { id: "unset", name: "未设置", settings: {} }, { id: "string", name: "非布尔", settings: { videoSharingEnabled: "true" } }];
   const context = vm.createContext({ api, partners: rows, globalSettings: { videoShareMaxPerDay: 2 },
     videoShareDraft: draft, videoShareSaving: false, videoShareNotice: "", globalSaveChain: Promise.resolve(), say() {},
+    // reloadSettings 那段切片也会碰递小东西的名单：这里给它一份空的，省得它报错。
+    partnerFeedDraft: null,
     VIDEO_SHARE_CHOICES: plain(vm.runInNewContext(client.match(/const VIDEO_SHARE_CHOICES = (\[.*\]);/)[1])),
     document: { createElement: element, getElementById: (id) => nodes[id], querySelectorAll: (selector) => selector === "[data-video-partner-id]" ? [status] : nodes["video-share-options"].children },
   });
@@ -188,7 +190,7 @@ test("明确保存一次原子PUT，保存中锁定相关选择并去重，回�
   assert.deepEqual(plain(h.run("globalSettings")), { videoShareMaxPerDay: 3, other: "server" });
   assert.deepEqual(h.rows.map((p) => p.settings.videoSharingEnabled), [false, true, false]);
   assert.equal(h.rows[0].settings.other, "keep");
-  assert.equal(h.status.textContent, "不参与B站分享");
+  assert.equal(h.status.textContent, "", "伙伴页不再回写B站状态了：那份名单只在主设置里");
   assert.deepEqual(plain(h.run("videoShareDraft")), { maxPerDay: 3, partnerIds: ["unset"] });
   assert.equal(h.nodes["video-share-save"].disabled, false);
   assert.match(h.nodes["video-share-status"].textContent, /已保存/);
@@ -268,7 +270,7 @@ test("非B站伙伴设置慢回包保留集中保存的新参与字段，返回�
     assert.equal(result.videoSharingEnabled, after);
     assert.equal(result.tier, "often");
     assert.equal(calls.length, 2);
-    assert.equal(h.status.textContent, after ? "参与B站分享" : "不参与B站分享");
+    assert.equal(h.status.textContent, "", "伙伴页不再回写B站状态了：那份名单只在主设置里");
   }
 });
 
@@ -349,7 +351,7 @@ test("reload的慢旧GET与集中保存共用队列，两个调用顺序都不�
     assert.deepEqual(calls.map(([method]) => method), first === "reload" ? ["GET", "PUT"] : ["PUT", "GET"]);
     assert.equal(h.run("globalSettings.videoShareMaxPerDay"), 4);
     assert.equal(h.run('partners.find((p) => p.id === "yes").settings.videoSharingEnabled'), false);
-    assert.equal(h.status.textContent, "不参与B站分享");
+    // 伙伴页那句状态不再跟着回包变（那句回写已经收掉了，另一条用例钉着）。
     const expectedIds = first === "reload" ? ["unset", "restored"] : ["unset"];
     assert.deepEqual(putBodies, [{ maxPerDay: 4, partnerIds: expectedIds }], "PUT使用前序GET合并后的草稿，同时保留旧伙伴的勾选和取消");
     assert.equal(h.run('partners.find((p) => p.id === "unset").settings.videoSharingEnabled'), true);
@@ -574,24 +576,17 @@ test("离开时的慢轮询终态不回写新界面", async () => {
   assert.match(h.nodes["video-login-status"].textContent, /已暂停/); assert.equal(h.timers.size, 0);
 });
 
-test("伙伴页仅显示已保存参与状态，严格true，入口切到主设置卡片且不另行PUT", () => {
-  for (const value of [undefined, false, "true", 1, true]) {
-    const created = []; const tabs = []; let paints = 0;
-    const card = element(); const save = element();
-    const context = vm.createContext({ document: {
-      createElement() { const node = element(); created.push(node); return node; },
-      getElementById(id) { assert.ok(["video-share-card", "video-share-save"].includes(id)); return id === "video-share-card" ? card : save; },
-    }, field(label, status) { const row = element(); row.appendChild(status); row.labelText = label; return row; },
-    setTab: (name) => tabs.push(name), paintVideoSharing() { paints++; }, settings: { videoSharingEnabled: value } });
-    vm.runInContext(partnerCode, context);
-    const row = vm.runInContext('partnerVideoField("existing-partner", settings)', context);
-    assert.equal(created[0].textContent, value === true ? "参与B站分享" : "不参与B站分享");
-    assert.equal(created[0].dataset.videoPartnerId, "existing-partner");
-    assert.equal(created[0].attrs.role, "status");
-    assert.equal(row.children.length, 2);
-    created[1].click();
-    assert.deepEqual(tabs, ["proactive"]); assert.equal(paints, 1); assert.equal(card.scrolled, true); assert.equal(save.focused, true);
-  }
-  assert.doesNotMatch(partnerCode, /savePartner|saveGlobal|api\(|aria-checked|role", "switch|!== false/);
-  assert.match(client, /contactCard.appendChild\(partnerVideoField\(agentId, s\)\)/);
+test("B站分享只在主设置里管：伙伴页不再有入口，也不再回写那句状态", () => {
+  // 伙伴页彻底没了这份名单：入口、跳转、那句回写都收掉了。
+  assert.doesNotMatch(client, /function partnerVideoField\(/);
+  assert.doesNotMatch(client, /contactCard\.appendChild\(partnerVideoField\(/);
+  assert.doesNotMatch(client, /前往主设置管理B站分享/);
+  assert.doesNotMatch(client, /data-video-partner-id/);
+  assert.doesNotMatch(client, /video-partner-note/);
+  // 主设置自己那一张卡还在：名单、次数、保存入口都在那儿。
+  assert.match(html, /id="video-share-card"/);
+  assert.match(html, /id="video-share-partners"/);
+  assert.match(html, /id="video-share-save"/);
+  assert.match(client, /function paintVideoSharing\(\)/);
+  assert.match(client, /api\("PUT", "settings\/video-sharing", payload\)/);
 });

@@ -137,10 +137,23 @@ test("伙伴投喂：撤回的 message 不进模型上下文", () => {
   assert.match(prompt, /const partnerFeedText = row\.recalled \? "" : formatPartnerFeed\(visibleFeed\)/);
 });
 
-test("伙伴投喂：设置页有单独开关，默认开", () => {
-  assert.match(settings, /const feedSw = document\.createElement\("button"\)/);
-  assert.match(settings, /s\.partnerFeedEnabled === false \? "不投喂" : "可以投喂"/);
-  assert.match(settings, /savePartner\(agentId, \{ partnerFeedEnabled: next \}/);
+test("伙伴投喂：集中在主设置的「主动联系」里挑伙伴，伙伴页不再单开一个开关", () => {
+  // 名单在总设置那一页，跟B站分享那份名单一个路数。
+  assert.match(settings, /id="partner-feed-card"/);
+  assert.match(settings, /id="partner-feed-partners"/);
+  assert.match(settings, /id="partner-feed-save"/);
+  assert.match(settings, /api\("PUT", "settings\/partner-feed", \{ partnerIds: \[\.\.\.partnerFeedDraft\] \}\)/);
+  // 初始值按每位伙伴自己的现值来（默认开着），不用另存一份名单。
+  assert.match(settings, /partners\.filter\(\(p\) => p\.settings\?\.partnerFeedEnabled !== false\)\.map\(\(p\) => p\.id\)/);
+  // 不新增总开关：只有「挑哪些伙伴」这一件事。
+  assert.doesNotMatch(settings, /partner-feed-switch|partnerFeedEnabled: true/);
+  // 伙伴页那个开关没了，只留一句指路的话。
+  assert.doesNotMatch(settings, /const feedSw = document\.createElement\("button"\)/);
+  assert.doesNotMatch(settings, /s\.partnerFeedEnabled === false \? "不投喂" : "可以投喂"/);
+  assert.doesNotMatch(settings, /savePartner\(agentId, \{ partnerFeedEnabled: next \}/);
+  assert.match(settings, /在主设置的「主动联系」里统一管/);
+  // 还没读到名单时不许画成“都不递”。
+  assert.match(settings, /伙伴名单还没读到，这里先空着——不是“都不递”。/);
 });
 
 test("伙伴列表支持拖动排序，并通过后端持久化", () => {

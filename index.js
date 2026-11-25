@@ -337,7 +337,7 @@ import { canAnswerPoke } from "./lib/poke.js";
 import { badgeGuide, badgeText, fallbackBadge, normalizeBadge, parseBadgeMarker } from "./lib/badges.js";
 import {
   classifyVisionFailure,
-  effectiveVisionConfig,
+  globalVisionConfig,
   imageBytesMatchMime,
   isStrictBase64,
   normalizeVisionConfig,
@@ -802,10 +802,19 @@ export function apply(ctx) {
     return videoLoginNoticeDue(login, store.getGlobalRuntime().videoLoginNotice, now);
   }
   function videoQuota(now = new Date()) {
-    const shared = videoShareLimit(store.getGlobalSettings().videoShareMaxPerDay);
     // __LAB_BUDGET_20261028__ 实验期取「用户设置」与配比表里较小的那个，她自己调低照样生效。
-    const limit = LAB_BUDGET.enabled ? Math.min(shared, LAB_BUDGET.video) : shared;
+    const limit = videoShareEffectiveMaxPerDay(store.getGlobalSettings().videoShareMaxPerDay);
     return videoQuotaAvailable(store.getGlobalRuntime().videoShares, limit, dayKey(now));
+  }
+  /**
+   * B站分享每天真正能发几条（2026-11-25）。
+   *
+   * 与实际执行同源：用户自己设的上限、配比表里的条数，取小的那个。
+   * 设置页拿到的就是这个值——页面显示的条数与真发出去的条数必须一致。
+   */
+  function videoShareEffectiveMaxPerDay(setting = store.getGlobalSettings().videoShareMaxPerDay) {
+    const shared = videoShareLimit(setting);
+    return LAB_BUDGET.enabled ? Math.min(shared, LAB_BUDGET.video) : shared;
   }
   /**
    * 新闻每天的天（2026-10-20）。跟视频分开记：视频一天最多 5 条是「她想刷就刷」，
@@ -837,6 +846,16 @@ export function apply(ctx) {
   function effectiveCityFor(agentId) {
     const partner = agentId ? store.getPartnerSettings(agentId) : {};
     return effectiveLifeCity(partner, store.getGlobalSettings());
+  }
+  /**
+   * 辅助识图配置只认全局这一份（2026-11-25）。
+   *
+   * 伙伴自己那份旧的还留在数据里，但不生效、也不覆盖全局；
+   * 更不会在全局空着的时候被偷偷提升成全局——全局没配就是没配。
+   * 原生看图那条路不归这里管：伙伴自己的聊天模型能不能看图，仍按聊天模型目录算。
+   */
+  function globalVision() {
+    return globalVisionConfig(store.getGlobalSettings().vision);
   }
   // 三档“变没变”：只有真变了才动对应的旧东西，别为了保险把不相干的一并撤掉。
   function cityDiscoveryChanged(before, after) {
@@ -1043,6 +1062,8 @@ export function apply(ctx) {
         usageThisMonth: usageCount(global.searchEnhancement?.usage),
         usageByEngine: global.searchEnhancement?.usageByEngine || {},
       },
+      // B站分享今天真正能发几条：与实际执行同一个口径（用户设置与配比表取小的）。
+      videoShareEffectiveMaxPerDay: videoShareEffectiveMaxPerDay(global.videoShareMaxPerDay),
       effectiveUserName: USER_NAME,
       myActionTail: actionTailFromTemplate(readMyTemplateEntry(global)),
     };
@@ -1262,7 +1283,7 @@ export function apply(ctx) {
           return { isError: true, text: inbound.unsupported ? VIDEO_TOOL_UNSUPPORTED_TEXT : VIDEO_TOOL_EMPTY_TEXT };
         }
         const enhanced = await videoUnderstanding.enhance(inbound.materials, {
-          vision: effectiveVisionConfig(store.getGlobalSettings().vision, store.getPartnerSettings(agentId).vision),
+          vision: globalVision(),
           cookie, allowNewRequest: visualAttemptAvailable, canContinue: () => !signal?.aborted,
         });
         if (enhanced.attempted) visualAttemptAvailable = false;
@@ -1337,7 +1358,7 @@ export function apply(ctx) {
     // 生活城市：跟天气各算各的。城市她自己填；真实街景另有一个明确的授权开关。
     "lifeCity", "lifeCityCode", "lifeCityStreetView", "lifeCityDiscoveries", "lifeCityIllustrations",
   ]);
-  const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "vision", "voice", "partnerFeedEnabled", "videoSharingEnabled", "imageTier",
+  const PARTNER_SETTING_KEYS = new Set(["tier", "proactiveEnabled", "model", "voice", "partnerFeedEnabled", "videoSharingEnabled", "imageTier",
     // 伙伴各自的生活城市（2026-11-24）：扁平五个字段，没设过的沿用全局。
     "lifeCity", "lifeCityCode", "lifeCityDiscoveries", "lifeCityIllustrations", "lifeCityStreetView"]);
 
@@ -1491,6 +1512,12 @@ export function apply(ctx) {
 
   /** 伙伴设置里只挑形状对的模型透进去，别把脏东西写进账本。 */
   function normalizePartnerSettingsPatch(body) {
+    // 辅助识图配置已经退役到全局（2026-11-25）：伙伴那份不再能写。
+    // 旧值留在账本里不动（不删也不覆盖），但也不能再从这儿改——
+    // 要改就去主设置改全局那一份。
+    if (body && typeof body === "object" && !Array.isArray(body) && Object.prototype.hasOwnProperty.call(body, "vision")) {
+      throw new Error("辅助识图配置是全局的，伙伴不再单独配；请到主设置里改");
+    }
     const patch = pickSettingsPatch(body, PARTNER_SETTING_KEYS, "伙伴设置");
     if (Object.prototype.hasOwnProperty.call(patch, "imageTier")) patch.imageTier = normalizeImageTier(patch.imageTier);
     // 伙伴各自的城市：城市名归一；行政代码只认字符串或 null（null＝明确取消这座城市），
@@ -2034,7 +2061,7 @@ export function apply(ctx) {
       for (const match of row.content.matchAll(new RegExp(MARK_RE.source, "gu"))) ids.add(match[1]);
     }
     if (!ids.size) return 0;
-    const vision = effectiveVisionConfig(store.getGlobalSettings().vision, store.getPartnerSettings(agentId).vision);
+    const vision = globalVision();
     const ref = normalizeModelRef(vision.model);
     if (!ref || vision.status !== "verified") {
       diagnostics({ event: "vision.degrade.skip", agentId, reason: "no-vision-model", images: ids.size });
@@ -2069,7 +2096,7 @@ export function apply(ctx) {
       try {
         const stored = readAttachment(attachmentId, agentId);
         if (!stored?.data || stored.description) return;
-        const vision = effectiveVisionConfig(store.getGlobalSettings().vision, store.getPartnerSettings(agentId).vision);
+        const vision = globalVision();
         const ref = (vision.model && vision.status === "verified") ? vision.model : await chatModelRefOf(agentId);
         if (!ref) return;
         const described = await describeImageWithFallback(ref, stored, said);
@@ -2704,7 +2731,7 @@ export function apply(ctx) {
    * 没有就不画：画出来也没人审，白花一次生图额度。
    */
   function imageReviewReady(agentId) {
-    const vision = effectiveVisionConfig(store.getGlobalSettings().vision, store.getPartnerSettings(agentId).vision);
+    const vision = globalVision();
     const ref = normalizeModelRef(vision.model);
     return Boolean(ref && vision.status === "verified");
   }
@@ -2719,7 +2746,7 @@ export function apply(ctx) {
    */
   async function reviewGeneratedImage(agentId, { bytes, mimeType, intent = "", kind = "chat" } = {}) {
     if (!imageReviewReady(agentId)) return { verdict: "unavailable", reason: "no-vision-model" };
-    const vision = effectiveVisionConfig(store.getGlobalSettings().vision, store.getPartnerSettings(agentId).vision);
+    const vision = globalVision();
     const ref = normalizeModelRef(vision.model);
     if (!ref || !bytes) return { verdict: "unavailable", reason: "no-vision-model" };
     const requestId = `chahuahui_review_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -3042,7 +3069,7 @@ export function apply(ctx) {
       .filter((row) => row?.role === "user" && row?.attachment?.id && !row.visionNote && !row.recalled)
       .slice(-2);
     if (!targets.length) return 0;
-    const vision = effectiveVisionConfig(store.getGlobalSettings().vision, store.getPartnerSettings(agentId).vision);
+    const vision = globalVision();
     if (!vision.model || vision.status !== "verified") return 0;
     let filled = 0;
     for (const row of targets) {
@@ -7253,7 +7280,7 @@ export function apply(ctx) {
             let materials = await collectVideoMaterials(fetcher, result.bvid, { cookie: login.cookie, requireSubtitle: false });
             if (!canContinue()) return retryLater("video-exploration-stale");
             const enhanced = await videoUnderstanding.enhance(materials, {
-              vision: effectiveVisionConfig(store.getGlobalSettings().vision, store.getPartnerSettings(agentId).vision),
+              vision: globalVision(),
               cookie: login.cookie, allowNewRequest: visualAttemptAvailable, canContinue,
             });
             if (enhanced.attempted) visualAttemptAvailable = false;
@@ -10065,7 +10092,7 @@ export function apply(ctx) {
             // 徽章算法抽成 partnerBadgeFor（手机那两条读路径用同一份），行为不变：
             // 她自己设过的先用她的，否则按睡眠/忙/未读/手机在不在手/最近聊过做兜底。
             const { badge, unread, lastMessage: last } = partnerBadgeFor(row.id, { thread, settings });
-            const vision = effectiveVisionConfig(globalSettings.vision, settings.vision);
+            const vision = globalVisionConfig(globalSettings.vision);
             return {
               ...row,
               unread,
@@ -10077,9 +10104,13 @@ export function apply(ctx) {
                 // 两条路都算数：自己的聊天模型能看图，或者配好的识图模型测过了。
                 allowed: Boolean((vision.model && vision.status === "verified") || nativeVisionIds.has(row.id)),
                 native: nativeVisionIds.has(row.id),
+                // 辅助识图只有全局这一份（2026-11-25）：source 恒为 global。
                 source: vision.source,
                 status: vision.status,
                 error: vision.error,
+                // 全局还没配：明说「要配」，别让页面猜是不是伙伴自己那份顶上了。
+                configured: Boolean(vision.model),
+                needsSetup: !vision.model,
               },
               lastMessage: last
                 ? { text: String(last.text ?? "").slice(0, 60), at: last.at, role: last.role }
@@ -10813,7 +10844,7 @@ export function apply(ctx) {
         let visionVia = "";
         let visionNotice = null;
         if (isImage) {
-          const vision = effectiveVisionConfig(store.getGlobalSettings().vision, store.getPartnerSettings(agentId).vision);
+          const vision = globalVision();
           // 存图和识图分两步，失败的处理完全不同：
           // 存不下是真的收不了（图片太大、格式不对），这时候回错误、整条不落；
           // 存下了却没看清（图在，ta 这会儿看不见），消息照落、气泡照摆，只欠 ta 一句交代。
@@ -11274,6 +11305,11 @@ export function apply(ctx) {
       app.post("/vision/test", async (c) => {
         let body;
         try { body = await c.req.json(); } catch { return c.json({ ok: false, error: { message: "测试参数没读懂" } }, 400); }
+        // 辅助识图只认全局（2026-11-25）：伙伴自己那份已经退役，不再单独配、也不再单独测。
+        // 这里不留后门：带 agentId 的调用当场说清楚，不去改全局。
+        if (String(body?.agentId ?? "").trim()) {
+          return c.json({ ok: false, error: { message: "辅助识图配置是全局的，伙伴不再单独配；请到主设置里测" } }, 400);
+        }
         const ref = normalizeModelRef(body?.model);
         if (!ref) return c.json({ ok: false, error: { message: "请先选择识图模型" } }, 400);
         const result = await testVisionModel(ref);
@@ -11283,14 +11319,8 @@ export function apply(ctx) {
           testedAt: new Date().toISOString(),
           error: result.ok ? null : result.error?.message,
         });
-        if (String(body?.agentId ?? "").trim()) {
-          const agentId = String(body.agentId).trim();
-          if (!isValidPartnerId(agentId)) return c.json({ ok: false, error: { code: "INVALID_PARTNER_ID", message: "伙伴 ID 不合法" } }, 400);
-          store.setPartnerSettings(agentId, { vision });
-        } else {
-          store.setGlobalSettings({ vision });
-        }
-        diagnostics({ event: "vision.test", agentId: body?.agentId ?? null, provider: ref.provider, model: ref.model, ok: result.ok, error: result.error?.code ?? null });
+        store.setGlobalSettings({ vision });
+        diagnostics({ event: "vision.test", provider: ref.provider, model: ref.model, ok: result.ok, error: result.error?.code ?? null });
         return c.json({ ok: result.ok, vision, error: result.ok ? null : result.error });
       });
 
@@ -11407,6 +11437,39 @@ export function apply(ctx) {
           const visible = (await listAllPartners()).filter((row) => !store.isPartnerHidden(row.id));
           const saved = store.setVideoSharingSettings(patch, visible.map((row) => row.id));
           return c.json({ ok: true, global: globalSettingsView(), partners: saved.partners });
+        } catch (error) {
+          return c.json({ ok: false, error: describeError(error) }, 400);
+        }
+      });
+
+      /**
+       * 「给你递小东西」的集中名单（2026-11-25）。
+       *
+       * 与 B站那份名单同形：一次落盘，不会一位改成了、一位没改。
+       * 契约：
+       * - 请求：{ partnerIds: [...] }；这份名单就是「谁会递小东西」。
+       * - 只动当前可见的伙伴：在名单里的记 true，没在名单里的记 false；
+       *   已经被移出（隐藏）的伙伴不在可见名单里，保持原值，不写。
+       * - 入参形状不对（不是数组、不是字符串、不是合法伙伴编号），或名单里有不存在的伙伴：
+       *   整批拒绝，一个字也不写（宁可让她重新选一次，也不半存半不存）。
+       * - 回：{ ok: true, partners: [{ id, partnerFeedEnabled }] }，给的是当前可见伙伴的生效值。
+       */
+      app.put("/settings/partner-feed", async (c) => {
+        try {
+          const body = await c.req.json();
+          const partnerIds = Array.isArray(body?.partnerIds) ? body.partnerIds : null;
+          if (!partnerIds || partnerIds.some((id) => typeof id !== "string" || !isValidPartnerId(id))) {
+            return c.json({ ok: false, error: { message: "请选择要投喂的伙伴" } }, 400);
+          }
+          const all = await listAllPartners();
+          const known = new Set(all.map((row) => row.id));
+          const unknownIds = [...new Set(partnerIds)].filter((id) => !known.has(id));
+          if (unknownIds.length) {
+            return c.json({ ok: false, error: { message: "名单里有不存在的伙伴，请重新打开设置后选择" } }, 400);
+          }
+          const visible = all.filter((row) => !store.isPartnerHidden(row.id));
+          const saved = store.setPartnerFeedSettings({ partnerIds: [...new Set(partnerIds)] }, visible.map((row) => row.id));
+          return c.json({ ok: true, partners: saved.partners });
         } catch (error) {
           return c.json({ ok: false, error: describeError(error) }, 400);
         }

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import {
   canUnderstandImages,
   classifyVisionFailure,
-  effectiveVisionConfig,
+  globalVisionConfig,
   imageBytesMatchMime,
   isStrictBase64,
   modelSupportsImage,
@@ -23,17 +23,16 @@ test("视觉配置没有模型时一律未验证", () => {
   });
 });
 
-test("伙伴视觉配置覆盖全局，未验证时不放行", () => {
+test("辅助识图只认全局那一份：伙伴旧的配置不再顶替它", () => {
   const global = { model: { provider: "gemini", model: "gemini-flash-latest" }, status: "verified" };
-  const partner = { model: { provider: "x", model: "y" }, status: "unverified" };
-  assert.equal(effectiveVisionConfig(global, partner).source, "partner");
-  assert.equal(canUnderstandImages(global, partner), false);
-});
-
-test("没有伙伴配置时使用已验证的全局模型", () => {
-  const global = { model: { provider: "gemini", model: "gemini-flash-latest" }, status: "verified" };
-  assert.equal(effectiveVisionConfig(global, null).source, "global");
-  assert.equal(canUnderstandImages(global, null), true);
+  const config = globalVisionConfig(global);
+  assert.equal(config.source, "global");
+  assert.equal(config.model.provider, "gemini");
+  assert.equal(canUnderstandImages(global), true);
+  // 全局没配就是没配：不拿谁那份旧的来顶（2026-11-25 起伙伴那份不再生效）。
+  assert.equal(canUnderstandImages(undefined), false);
+  assert.equal(globalVisionConfig(undefined).model, null);
+  assert.equal(globalVisionConfig(undefined).source, "global");
 });
 
 test("图片数据必须是真实文件头且 base64 严格合法", () => {
@@ -77,7 +76,8 @@ test("已配的识图模型不在目录里时，下拉不能把它默默拨成�
   assert.match(html, /keep:\$\{currentRef\.provider\}\//, "超出目录的原配置得有个名字待在下拉里");
   assert.match(html, /key\.startsWith\("keep:"\)/, "保存时得能把原值还回去");
   assert.match(html, /buildVisionSelect\(visionKeyOf\(vision\), vision\.model\)/);
-  assert.match(html, /buildVisionSelect\(visionKeyOf\(s\.vision\), s\.vision\?\.model\)/);
+  // 伙伴自己那份识图配置已经退役（2026-11-25）：页面不再提供这一项，
+  // 服务端也不再接受伙伴级的写入——所以这里不再钉住伙伴那份下拉。
 });
 
 test("识图预算给的是「思考 + 描述」，空正文在同路加预算重试一次", () => {

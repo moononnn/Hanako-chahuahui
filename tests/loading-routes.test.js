@@ -116,7 +116,10 @@ test("伙伴列表路由：未读、忙碌和背景共用已读快照，不再�
     PARTNER_SKIN_IDS: [], partnerSkinFor: () => null,
     store: storeStub, partnerBadgeFor,
     dozingNow, advancePhone, normalizeBadge, fallbackBadge, isAwaitingThread,
-    badgeText: () => "忙着", effectiveVisionConfig: () => ({}),
+    badgeText: () => "忙着", globalVisionConfig: () => ({}),
+    // 伙伴各自的生活城市（2026-11-24）：这份用例只要人读与背景，静态值就够。
+    effectiveCityFor: () => ({ city: "", code: null, discoveries: false, illustrations: false, streetView: false, cleared: false }),
+    partnerCityOverride: () => ({}),
     ACTION_STYLES: [], describeError: (error) => ({ message: error.message }),
   });
   const result = await handler({ json: (value) => value });

@@ -88,7 +88,8 @@ test('目录只是导航：老入口、setTab 副作用和面板懒加载都还�
   assert.match(settings, /if \(name === "partners" && !currentId && partners\.length\) void openPartner\(partners\[0\]\.id\)/, '伙伴页照旧自己挑一位');
   assert.match(settings, /if \(name === "usage"\) void loadUsage\(\)/, '用量账本照旧进了再读');
   assert.match(settings, /if \(name === "mobile"\) void mobilePanel\?\.refresh\(\)/, '手机页照旧进了再刷');
-  assert.match(settings, /setTab\("proactive"\)/, '伙伴页跳 B站分享那条老路还在');
+  assert.match(settings, /id="video-share-card"/, 'B站分享那张卡在主设置里');
+  assert.doesNotMatch(settings, /前往主设置管理B站分享/, '伙伴页不再有跳B站分享那条老路');
   // 目录页与面板页来回切：目录藏起来、分类栏亮起来。
   assert.match(settings, /function showIndex\(\)/);
   assert.match(settings, /indexNode\.hidden = true;/);

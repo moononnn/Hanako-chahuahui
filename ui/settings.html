@@ -24,8 +24,6 @@
     #video-login-status:empty { display: none; }
     #video-qrcode-countdown { font-variant-numeric: tabular-nums; }
     #video-qrcode { display: block; width: min(224px, 100%); height: auto; aspect-ratio: 1; margin-top: 16px; padding: 12px; background: #fff; border: 1px solid var(--line-soft); border-radius: var(--r-md); }
-    .video-partner-note { display: block; overflow-wrap: anywhere; }
-    .video-partner-note:empty { display: none; }
     .ui-stamp { margin: 4px 0 0; color: #8d8578; font-size: 11px; }
     .ui-stamp a { color: #5b8f78; }
   .ui-stamp .ui-stale { padding: 0 7px; border-radius: 999px; background: var(--blossom-soft); color: var(--blossom); font-weight: 600; }
@@ -242,10 +240,10 @@
 
     <section id="panel-image" data-settings-panel hidden>
       <div class="section-head"><h2>照片</h2></div>
-      <article class="setting-card">
-        <div class="setting-copy"><h3>聊天照片的每日总上限</h3><p>所有伙伴一起用的额度。默认关闭；打开后还需在具体伙伴里选择档位。</p></div>
+      <article class="setting-card" id="image-global-tier-card">
+        <div class="setting-copy"><h3>聊天照片的每日总上限</h3><p>所有伙伴合起来的一份额度。关着时下面只留选择，伙伴自己那份档位也还留着，开回来就照旧。</p></div>
         <div id="image-global-tier" class="seg image-tier-options" role="group" aria-label="聊天生图每日总上限"></div>
-        <small class="detail-field-note">关闭／每天最多4张／8张／32张，本地时间零点更新。生成成功才计入已出张数；等待结果的请求先占名额，超时不自动重试，结果未明时保留到次日。失败也可能产生上游费用。</small>
+        <small class="detail-field-note" id="image-global-tier-note">正在读生效上限…</small>
       </article>
       <article class="setting-card" id="image-model-card">
         <div class="setting-copy">
@@ -277,7 +275,7 @@
           <button class="switch" id="image-review-switch" type="button" role="switch" aria-checked="false">
             <span class="track"><span></span></span><span class="switch-label">关闭</span>
           </button>
-          <small class="detail-field-note" id="image-review-note">只拦明显多出或缺失的肢体、脸崩、画面明显跑题、贴纸动作不明；Q 版、简笔、故意遮挡一律不挑。明确不通过时最多重画一次并再审一次（多花一次生图额度）；审图那头用不了时宁可不发图，只留文字。复核用你已经配好的识图模型，不换模型、不新加服务商。</small>
+          <small class="detail-field-note" id="image-review-note">只拦明显多出或缺失的肢体、脸崩、画面明显跑题、贴纸动作不明；Q 版、简笔、故意遮挡一律不挑。明确不通过时最多重画一次并再审一次（多花一次生图额度）；审图那头用不了时宁可不发图，只留文字。复核用「模型 → 全局辅助识图」那一份（全局只有这一份），不换模型、不新加服务商。</small>
         </div>
       </article>
       <article class="setting-card image-switch-row" id="background-share-card">
@@ -290,7 +288,7 @@
           <button class="switch" id="background-share-switch" type="button" role="switch" aria-checked="false">
             <span class="track"><span></span></span><span class="switch-label">关闭</span>
           </button>
-          <small class="detail-field-note" id="background-share-note">每位伙伴最多留 6 件未发草稿，照片和自制表情共用；发出后可以补新的。备出来的稿子只在 ta 自己想说的时候才发，不会硬塞给你，也不会进共享图库。自制表情可以从你们聊过的表情里找灵感，见下面「表情」一节。</small>
+          <small class="detail-field-note" id="background-share-note">每位伙伴最多留 6 件未发草稿，照片和自制表情共用；发出后可以补新的。备出来的稿子只在 ta 自己想说的时候才发，不会硬塞给你，也不会进共享图库。备稿走的是生图那份额度，也要过生成后审图那一关：全局辅助识图没配好时同样不会备。自制表情可以从你们聊过的表情里找灵感，见下面「表情」一节。</small>
         </div>
       </article>
       <div class="section-head roomy">
@@ -453,7 +451,7 @@
         <small class="detail-field-note" id="global-recognition-model-note"></small>
       </article>
       <article class="setting-card">
-        <div class="card-title"><div><h3>全局辅助识图</h3><p>聊天模型看不懂图片时，先由这位模型看一眼。配好之后，看不懂图的伙伴也能收图。测试过通才算配置可用；没配或没测过，图还是照收，只是这次看不清，她会补一句交代。</p></div></div>
+        <div class="card-title"><div><h3>全局辅助识图</h3><p>全局只这一份。聊天模型自己看得懂图片的照旧用它自己的，不受这里影响；看不懂图的那几位、还有生成之后审图那一张，用的都是这一份。测试过通才算配置可用；没配或没测过，图还是照收，只是这回看不清，她会补一句交代。</p></div></div>
         <div class="detail-field" id="global-vision-host"></div>
         <div class="detail-actions"><button class="soft-button" id="global-vision-test" type="button">测试识图</button></div>
         <small class="detail-field-note" id="global-vision-note"></small>
@@ -562,6 +560,20 @@
           </div>
         </div>
       </article>
+      <article class="setting-card" id="partner-feed-card">
+        <div class="setting-copy">
+          <h3>给你递小东西</h3>
+          <p>伙伴偶尔会给你递一件自己的小东西（一张图，或一条她挑的链接）。只在下面选中的伙伴身上发生，一天最多两次，并且只挂在她真的读过的那条上。没有总开关：每一位伙伴单独留着各自的开或关。</p>
+        </div>
+        <div class="choice-block">
+          <span class="choice-label" id="partner-feed-label">哪些伙伴会递</span>
+          <div class="seg" id="partner-feed-partners" role="group" aria-labelledby="partner-feed-label"></div>
+        </div>
+        <small class="detail-field-note" id="partner-feed-status" role="status" aria-live="polite">正在读取…</small>
+        <div class="detail-actions">
+          <button class="primary-button" id="partner-feed-save" type="button" disabled>保存</button>
+        </div>
+      </article>
       <article class="setting-card" id="video-share-card">
         <div class="setting-copy">
           <h3>B站视频分享</h3>
@@ -576,6 +588,7 @@
           <span class="choice-label" id="video-share-label">所有参与伙伴合计，一天最多分享几条</span>
           <div class="seg" id="video-share-options" role="group" aria-labelledby="video-share-label" aria-describedby="video-share-copy"></div>
         </div>
+        <small class="detail-field-note" id="video-share-effective" role="status" aria-live="polite">正在读取实际生效上限…</small>
         <small class="detail-field-note" id="video-share-status" role="status" aria-live="polite">正在读取B站分享设置…</small>
         <div class="detail-actions">
           <button class="primary-button" id="video-share-save" type="button" disabled>保存B站分享设置</button>
@@ -783,6 +796,9 @@
     // （以前用文件哈希当戳，但那个值是后端给的，页面旧了它照样显示新值，等于没测。）
     const UI_BUILD = "20261125.2";
 
+    // 全局生图档位那一段说明：生效上限会拼在前面，这段是不变的部分。
+    const GLOBAL_IMAGE_TIER_NOTE = "关闭／每天最多4张／8张／32张，本地时间零点更新。这是全体共用的一份额度；每位伙伴自己还有一档，两边都要有余额才出图——任一边关着就不发。生成成功才计入已出张数；等待结果的请求先占名额，超时不自动重试，结果未明时保留到次日。失败也可能产生上游费用。";
+
     const el = {
       status: document.getElementById("status"),
       backToChat: document.getElementById("back-to-chat"),
@@ -912,7 +928,7 @@
     const PARTNER_SECTIONS = [
       { group: "怎么相处", rows: [["contact", "联系与消息"], ["relation", "关系与性格"], ["action", "小动作"]] },
       { group: "她的日常", rows: [["city", "城市与日常"], ["room", "聊天场景"]] },
-      { group: "管理", rows: [["model", "模型与识图"], ["memory", "记忆"], ["manage", "伙伴管理"]] },
+      { group: "管理", rows: [["model", "聊天模型"], ["memory", "记忆"], ["manage", "伙伴管理"]] },
     ];
 
     /** 这一块叫什么：目录行上的名字。 */
@@ -1563,6 +1579,14 @@
         try { await saveGlobal({ imageTier: value }, "聊天生图总上限已保存"); }
         finally { paintImageModel(); }
       });
+      // 现在到底生效多少：照实写出来，别让她自己换算（关着就是 0）。
+      const tierNote = document.getElementById("image-global-tier-note");
+      if (tierNote) {
+        const limit = { off: 0, less: 4, normal: 8, more: 32 }[globalSettings.imageTier || "off"];
+        const head = limit === 0 ? "现在生效：关闭，所有伙伴都不发聊天照片（各自那份档位还留着）。"
+          : `现在生效：所有伙伴合起来一天最多${limit}张（各自那档还要另算）。`;
+        tierNote.textContent = `${head} ${GLOBAL_IMAGE_TIER_NOTE}`;
+      }
       const cfg = globalSettings.imageModel || {};
       const select = document.getElementById("image-model-select");
       if (!select) return;
@@ -2283,9 +2307,9 @@
         }
       };
       if (!visionModelCatalog.length) note.textContent = "Hana 没有把可识图模型列出来，暂时不能配置。";
-      else if (!vision.model) note.textContent = "没配置全局识图模型：自己的模型就能看图的伙伴不受影响，其余的收得下图但看不清。";
+      else if (!vision.model) note.textContent = "没配置全局识图模型：聊天模型自己能看图的照旧能看；其余的收得下图但看不清，生成后审图也用不了（那一项会挡着不发图）。";
       else if (!visionKeyOf(vision)) note.textContent = "这个模型眼下不在可识图名单里，但配置还留着——点「测试识图」能确认它到底看不看得见图。";
-      else if (vision.status === "verified") note.textContent = "已通过测试，未单独配置识图模型的伙伴可以使用。";
+      else if (vision.status === "verified") note.textContent = "已通过测试：看不懂图的聊天模型、还有生成后审图，都用这一份。";
       else if (vision.status === "failed") note.textContent = `上次测试没通过：${vision.error || "模型暂时不可用"}`;
       else note.textContent = "模型已选，但还没通过测试。";
     }
@@ -2381,6 +2405,104 @@
       }
     }
 
+    // 给你递小东西：集中在这里管，跟B站分享那份名单一样是「挑哪些伙伴」。
+    // partnerFeedDraft 是 null 时表示还没读到——这时候不画名单（空名单看着像“都不递”）。
+    let partnerFeedDraft = null;
+    let partnerFeedSaving = false;
+    let partnerFeedNotice = "";
+    let partnerFeedRequest = 0;
+
+    function paintPartnerFeed() {
+      const host = document.getElementById("partner-feed-partners");
+      if (!host) return;
+      host.replaceChildren();
+      const locked = !partnerFeedDraft || partnerFeedSaving;
+      if (!partnerFeedDraft) {
+        // 还没读到：不画名单，也不画成“都不递”。
+        host.textContent = "正在读取伙伴名单…";
+      } else {
+        for (const partner of partners) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = partner.name || partner.id;
+          const selected = partnerFeedDraft.includes(partner.id);
+          button.className = selected ? "on" : "";
+          button.setAttribute("aria-pressed", String(selected));
+          button.disabled = locked;
+          button.addEventListener("click", () => {
+            if (!partnerFeedDraft || partnerFeedSaving) return;
+            partnerFeedDraft = selected
+              ? partnerFeedDraft.filter((id) => id !== partner.id)
+              : [...partnerFeedDraft, partner.id];
+            partnerFeedNotice = "尚未保存";
+            paintPartnerFeed();
+          });
+          host.appendChild(button);
+        }
+        if (!partners.length) host.textContent = "还没有可选的伙伴。";
+      }
+      const save = document.getElementById("partner-feed-save");
+      if (save) {
+        save.disabled = locked;
+        save.textContent = partnerFeedSaving ? "正在保存…" : "保存";
+      }
+      const status = document.getElementById("partner-feed-status");
+      if (status) {
+        status.textContent = !partnerFeedDraft
+          ? "伙伴名单还没读到，这里先空着——不是“都不递”。"
+          : `${partnerFeedDraft.length} 位伙伴会递小东西（每位伙伴各自记着）。${partnerFeedSaving ? "正在保存…" : partnerFeedNotice}`;
+      }
+    }
+
+    async function savePartnerFeed() {
+      if (!partnerFeedDraft || partnerFeedSaving) return;
+      partnerFeedSaving = true;
+      const request = ++partnerFeedRequest;
+      paintPartnerFeed();
+      try {
+        const data = await api("PUT", "settings/partner-feed", { partnerIds: [...partnerFeedDraft] });
+        // 回包只认这一项：别的设置不许被这一条回包盖掉。
+        const saved = Array.isArray(data?.partners) ? data.partners : [];
+        if (!partners.every((row) => typeof saved.find((item) => item?.id === row.id)?.partnerFeedEnabled === "boolean")) {
+          throw new Error("递小东西的名单没回显完整");
+        }
+        // 晚到的旧回包直接丢掉：不许盖掉更新的那一版。
+        if (request !== partnerFeedRequest) return;
+        for (const row of partners) {
+          const hit = saved.find((item) => item?.id === row.id);
+          row.settings ??= {};
+          row.settings.partnerFeedEnabled = hit.partnerFeedEnabled === true;
+        }
+        partnerFeedDraft = partners.filter((row) => row.settings?.partnerFeedEnabled !== false).map((row) => row.id);
+        partnerFeedNotice = "已保存";
+        say("递小东西的名单已保存", "ok");
+      } catch (error) {
+        partnerFeedNotice = "没存上，草稿留着，请再保存一次。";
+        say(`没存上：${error.message}`, "err");
+      } finally {
+        partnerFeedSaving = false;
+        paintPartnerFeed();
+      }
+    }
+    document.getElementById("partner-feed-save")?.addEventListener("click", savePartnerFeed);
+
+    /**
+     * B站实际生效上限：后端算好的那个数（所有参与伙伴合起来一天真能发多少）。
+     * 读不到就照实说读不到，绝不拿 0 顶替——0 看着像“全关了”。
+     */
+    function paintVideoShareEffective() {
+      const node = document.getElementById("video-share-effective");
+      if (!node) return;
+      const effective = globalSettings.videoShareEffectiveMaxPerDay;
+      if (!Number.isInteger(effective) || effective < 0) {
+        node.textContent = "实际生效上限还没读到（读不到就不报数，免得看着像全关了）。";
+        return;
+      }
+      node.textContent = effective === 0
+        ? "现在实际生效：已暂停，参与名单还留着。"
+        : `现在实际生效：所有参与伙伴合计一天最多${effective}条。`;
+    }
+
     function paintVideoSharing() {
       const locked = !videoShareDraft || videoShareSaving;
       const host = document.getElementById("video-share-partners");
@@ -2419,6 +2541,7 @@
       save.textContent = videoShareSaving ? "正在保存…" : "保存B站分享设置";
       document.getElementById("video-share-status").textContent = !videoShareDraft ? "正在读取B站分享设置…"
         : `${videoShareDraft.maxPerDay === 0 ? "全部暂停，参与名单保留" : `所有参与伙伴合计每日最多${videoShareDraft.maxPerDay}条`}。${videoShareSaving ? "正在保存…" : videoShareNotice}`;
+      paintVideoShareEffective();
     }
 
     async function saveVideoSharing() {
@@ -2447,10 +2570,6 @@
             maxPerDay: globalSettings.videoShareMaxPerDay,
             partnerIds: partners.filter((p) => p.settings?.videoSharingEnabled === true).map((p) => p.id),
           };
-          document.querySelectorAll("[data-video-partner-id]").forEach((node) => {
-            const row = partners.find((p) => p.id === node.dataset.videoPartnerId);
-            node.textContent = row?.settings?.videoSharingEnabled === true ? "参与B站分享" : "不参与B站分享";
-          });
           videoShareNotice = "已保存";
           say("B站分享设置已保存", "ok");
         } catch {
@@ -2468,6 +2587,8 @@
 
     function paintGlobalChoices() {
       paintVideoSharing();
+      paintVideoShareEffective();
+      paintPartnerFeed();
       choiceGroup(document.getElementById("gate-gap-options"), GAP_CHOICES, globalSettings.globalGate?.minGapMinutes ?? 30, async (value) => {
         if (await saveGlobal({ globalGate: { minGapMinutes: Number(value) } }, "主动消息间隔已调整")) paintGlobalChoices();
       });
@@ -3691,27 +3812,6 @@
       return card;
     }
 
-    function partnerVideoField(agentId, settings) {
-      const status = document.createElement("small");
-      status.className = "detail-field-note video-partner-note";
-      status.dataset.videoPartnerId = agentId;
-      status.setAttribute("role", "status");
-      status.textContent = settings.videoSharingEnabled === true ? "参与B站分享" : "不参与B站分享";
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "soft-button";
-      button.textContent = "前往主设置管理B站分享";
-      button.addEventListener("click", () => {
-        setTab("proactive");
-        paintVideoSharing();
-        const card = document.getElementById("video-share-card");
-        card.scrollIntoView({ block: "start" });
-        document.getElementById("video-share-save").focus({ preventScroll: true });
-      });
-      const row = field("B站分享", status);
-      row.appendChild(button);
-      return row;
-    }
 
     // ── 城市与日常：每位伙伴自己的城；三个开关各自记在她自己身上 ──
 
@@ -4084,24 +4184,14 @@
           if (currentId === agentId) openPartner(agentId, "contact");
         }
       })));
-      // 投喂：ta 也可以给你递个小东西。只在三个时刻发生（被冷处理、说中她的兴趣、你分享了什么），
-      // 一天最多两次，并且只挂在她真的读过的那条上。
-      const feedSw = document.createElement("button");
-      feedSw.type = "button";
-      feedSw.className = `switch${s.partnerFeedEnabled === false ? "" : " on"}`;
-      feedSw.setAttribute("role", "switch");
-      feedSw.setAttribute("aria-checked", String(s.partnerFeedEnabled !== false));
-      feedSw.innerHTML = `<span class="track"><span></span></span><span class="switch-label">${s.partnerFeedEnabled === false ? "不投喂" : "可以投喂"}</span>`;
-      feedSw.addEventListener("click", async () => {
-        const next = s.partnerFeedEnabled === false;
-        if (await savePartner(agentId, { partnerFeedEnabled: next }, next ? "ta 可以给你递小东西了" : "ta 不再递小东西了")) {
-          if (currentId === agentId) openPartner(agentId, "contact");
-        }
-      });
-      contactCard.appendChild(field("给你递小东西", feedSw));
-      contactCard.appendChild(partnerVideoField(agentId, s));
+      // 投喂（给你递小东西）不在伙伴页：它集中到主设置的「主动联系」那一页，
+      // 跟B站分享那份名单摆在同一处。这里只留一句指路的话。
+      const feedNote = document.createElement("small");
+      feedNote.className = "detail-field-note";
+      feedNote.textContent = "在主设置的「主动联系」里统一管：哪些伙伴会递小东西，在那儿一次选好。";
+      contactCard.appendChild(feedNote);
 
-      const voiceCard = detailCard("偶尔用声音说话", "这一位的语音只会在短回复、合适的情境里低频出现；长回复仍然发文字。");
+      const voiceCard = detailCard("偶尔用声音说话", "这一位的语音只会在短回复、合适的情境里低频出现；长回复仍然发文字。全局「语音」总闸关着时，ta 不会自动发语音，这里开着也没用；手动点播的规则照旧。");
       const voiceSwitch = document.createElement("button");
       voiceSwitch.type = "button";
       voiceSwitch.className = `switch${s.voice?.enabled ? " on" : ""}`;
@@ -4115,6 +4205,13 @@
         }
       });
       voiceCard.appendChild(field("语音开关", voiceSwitch));
+      // 总闸的状态要摆出来：不然这里的「允许」看着像就管用了，其实全局关着时 ta 不会自动发。
+      const voiceGlobalNote = document.createElement("small");
+      voiceGlobalNote.className = "detail-field-note";
+      voiceGlobalNote.textContent = globalSettings.voiceEnabled === false
+        ? "全局「语音」总闸现在是关着的：ta 不会自动发语音（手动点播照旧）。"
+        : "全局「语音」总闸现在是开着的：ta 才会自己发语音（手动点播照旧）。";
+      voiceCard.appendChild(voiceGlobalNote);
       const profileId = voiceProfileId();
       // 这条必须能改：音色存下去以后，下面那个「试听这位伙伴的声音」要拿的正是它。
       // 原来写成 const，保存完只挪了高亮，试听还发的是切换前那一个音色，
@@ -5300,7 +5397,7 @@
       detailPanels.memory.appendChild(topicsCard);
 
       // ── 模型：这位伙伴单独用哪个（不选就跟 ta 在 Hana 里的模型）──
-      const modelCard = detailCard("ta 说话用哪个模型", "不选就跟 ta 在 Hana 里给自己配的模型；连那个也读不到，才落到上面那条默认。");
+      const modelCard = detailCard("ta 说话用哪个模型", "不选就跟 ta 在 Hana 里给自己配的模型；连那个也读不到，才落到上面那条默认。ta 自己的模型能看图时照旧能看；看不清图、或者生成之后要审图，用的是全局那一份辅助识图。");
       const modelHost = document.createElement("div");
       modelHost.className = "detail-field";
       const partnerSel = buildModelSelect(modelKeyOf(s.model));
@@ -5340,59 +5437,6 @@
         modelCard.appendChild(modelHint);
       }
       detailPanels.model.appendChild(modelCard);
-
-      const visionCard = detailCard("ta 的识图模型", "不选就跟全局辅助识图。ta 自己的模型能看图时用不上这一项；没配好也不挡发图，只是这回看不清。");
-      const visionHost = document.createElement("div");
-      visionHost.className = "detail-field";
-      const visionSel = buildVisionSelect(visionKeyOf(s.vision), s.vision?.model);
-      visionSel.setAttribute("aria-label", `${partner.name}的识图模型`);
-      visionHost.appendChild(visionSel);
-      visionCard.appendChild(visionHost);
-      const visionActions = document.createElement("div");
-      visionActions.className = "detail-actions";
-      const visionTest = document.createElement("button");
-      visionTest.type = "button";
-      visionTest.className = "soft-button";
-      visionTest.textContent = "测试识图";
-      visionActions.appendChild(visionTest);
-      visionCard.appendChild(visionActions);
-      const visionNote = document.createElement("small");
-      visionNote.className = "detail-field-note";
-      visionCard.appendChild(visionNote);
-      const paintPartnerVision = () => {
-        const currentVision = s.vision ?? {};
-        visionTest.disabled = !currentVision.model;
-        if (!currentVision.model) visionNote.textContent = globalSettings.vision?.status === "verified" ? "当前跟随全局辅助识图。" : "没配置可用识图模型：图照收，只是这回看不清。";
-        else if (!visionKeyOf(currentVision)) visionNote.textContent = "这个模型眼下不在可识图名单里，但配置还留着——点「测试识图」能确认它到底看不看得见图。";
-        else if (currentVision.status === "verified") visionNote.textContent = "这位伙伴的识图测试已通过。";
-        else if (currentVision.status === "failed") visionNote.textContent = `上次测试没通过：${currentVision.error || "模型暂时不可用"}`;
-        else visionNote.textContent = "模型已选，但还没通过测试。";
-      };
-      visionSel.addEventListener("change", async () => {
-        const model = visionRefFromKey(visionSel.value);
-        const saved = await savePartner(agentId, { vision: { model, status: "unverified", testedAt: null, error: null } }, model ? "已选识图模型，请先测试" : "已改回跟随全局识图");
-        if (saved && currentId === agentId) {
-          s.vision = saved.vision;
-          paintPartnerVision();
-        }
-      });
-      visionTest.addEventListener("click", async () => {
-        if (!s.vision?.model) return;
-        visionTest.disabled = true;
-        visionTest.textContent = "正在测试…";
-        try {
-          const result = await apiWith("POST", "vision/test", { agentId, model: s.vision.model }, 90000);
-          s.vision = result.vision;
-          say(result.ok ? "这位伙伴的识图测试通过" : `识图测试没通过：${result.error?.message || "模型暂时不可用"}`, result.ok ? "ok" : "err");
-        } catch (error) {
-          say(`识图测试没跑完：${error.message}`, "err");
-        } finally {
-          visionTest.textContent = "测试识图";
-          paintPartnerVision();
-        }
-      });
-      paintPartnerVision();
-      detailPanels.model.appendChild(visionCard);
 
       // ── 场景：每位伙伴独立选择聊天背景，共享同一个背景图库 ──
       //
@@ -5785,6 +5829,17 @@
         const previousVisibleIds = new Set(partners.map((p) => p.id));
         partners = data.partners ?? [];
         hiddenPartners = data.hiddenPartners ?? [];
+        // 递小东西的名单：第一次读到才按各自现值起头（默认开着）；
+        // 之后只跟着保存回包走，新出现的伙伴按它自己的现值补进来。
+        if (!partnerFeedDraft) {
+          partnerFeedDraft = partners.filter((p) => p.settings?.partnerFeedEnabled !== false).map((p) => p.id);
+        } else {
+          const known = new Set(partnerFeedDraft);
+          partnerFeedDraft = [
+            ...partnerFeedDraft.filter((id) => partners.some((p) => p.id === id)),
+            ...partners.filter((p) => !known.has(p.id) && p.settings?.partnerFeedEnabled !== false).map((p) => p.id),
+          ];
+        }
         globalSettings = data.global ?? {};
         styleCatalog = data.styles ?? [];
         bubbleSkinCatalog = data.bubbleSkins ?? [];

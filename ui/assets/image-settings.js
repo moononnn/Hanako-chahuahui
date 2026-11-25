@@ -14,7 +14,7 @@ export function mountPartnerImageSettings(host, { agentId, api, apiWith, fetchIm
   const alive = () => !disposed && isCurrent();
   const encoded = encodeURIComponent(agentId);
   const tiers = node("div", "seg image-tier-options");
-  const tierHint = node("small", "detail-field-note", "关闭／每天最多1张／2张／8张，本地时间零点更新；同时受全局总上限限制。图片生成成功后即记次数，等待期间新话使照片作废也会计入。");
+  const tierHint = node("small", "detail-field-note", "关闭／每天最多1张／2张／8张，本地时间零点更新；这是这位伙伴自己的一档，全局总上限（照片与表情那页）关着时，这里留着也不发。图还要过生成后审图那一关（照片与表情页的「生成后先自查一遍」）：审不过就不发，审图那头用不了时也不发，只留文字。图片生成成功后即记次数，等待期间新话使照片作废也会计入。");
   const usage = node("p", "detail-field-note", "正在读取照片设置…");
   const note = node("p", "detail-field-note image-operation-note"); note.setAttribute("role", "status");
   const preview = node("div", "reference-preview");
