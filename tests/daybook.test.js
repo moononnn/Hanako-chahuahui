@@ -336,7 +336,7 @@ test("来源声明只随实际内容出现：所问片段缺失时不冒充已�
 
 // ── 接进系统提示 ──
 
-test("系统提示：日子那段跟在时间后面、人格前面，没料时不占位", () => {
+test("系统提示：日子跟随时间收在末尾，人格在前，没料时不占位", () => {
   const daybookText = buildDaybookText(SNAPSHOT, "hanako", { userName: "阿舟" });
   const withDaybook = buildSystemPrompt({
     partnerName: "小花",
@@ -347,9 +347,10 @@ test("系统提示：日子那段跟在时间后面、人格前面，没料时�
     daybookText,
   });
   assert.ok(withDaybook.includes("【今天】"));
-  assert.ok(withDaybook.indexOf("【现在】") < withDaybook.indexOf("【今天】"));
-  assert.ok(withDaybook.indexOf("【今天】") < withDaybook.indexOf("人格设定正文"));
-  // 名牌搬到了最前面（名字是上下文里最容易被别的名字带走的东西），时间/日子仍在人格前
+  // 2026-11-25：两者都是每轮/每天会变的块，收进易变段末尾，免得切掉前面的人设前缀
+  assert.ok(withDaybook.indexOf("人格设定正文") < withDaybook.indexOf("【今天】"));
+  assert.ok(withDaybook.indexOf("【今天】") < withDaybook.indexOf("【现在】"), "日子比时间变得慢，排在时间前面");
+  // 名牌仍在最前面（名字是上下文里最容易被别的名字带走的东西）
   assert.ok(withDaybook.indexOf("你就是「小花」本人") < withDaybook.indexOf("【现在】"));
   assert.ok(withDaybook.indexOf("你就是「小花」本人") < withDaybook.indexOf("人格设定正文"));
 

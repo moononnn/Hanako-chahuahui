@@ -10,9 +10,13 @@ function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "chahuahui-usage-book-"));
 }
 
+// 账本只留 31 天，写死日期会过期；用例统一用「跑测试这一刻」当基准，
+// 别的用例要固定时点就显式传 at 和 now，不靠吃默认值。
+const BASE_AT = new Date().toISOString();
+
 const row = (change = {}) => ({
   requestId: "chahuahui_stream_1_abc",
-  at: "2026-10-25T20:00:00.000Z",
+  at: BASE_AT,
   agentId: "hanako",
   kind: "chat",
   ...change,

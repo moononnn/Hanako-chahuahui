@@ -74,18 +74,19 @@ test("无效皮肤即便记了今天也不阻止首次选用合法样式", () =>
 test("真apply读接口会保存新样式且重读不再换，不碰自己一侧或别的伙伴，不调模型", async t => {
   const app = await bootChahuahui({ seed(store) {
     const now = new Date();
-    store.setGlobalSettings({ bubbleSkin: "star" });
+    store.setGlobalSettings({ bubbleSkin: "neon" });
     store.savePartnerMood("nova", { moodId: "calm", date: dayKey(now), settledAt: now.toISOString() });
     store.savePartnerSkinBook("nova", { skin: "polka", moodId: "calm", dayKey: dayKey(now), pickedAt: new Date(now.getTime() - 8 * DAY).toISOString() });
-    store.savePartnerSkinBook("other", { skin: "bear", moodId: "calm", dayKey: dayKey(now), pickedAt: now.toISOString() });
+    store.savePartnerSkinBook("other", { skin: "sakura", moodId: "calm", dayKey: dayKey(now), pickedAt: now.toISOString() });
   } });
   t.after(() => fs.rmSync(app.dataDir, { recursive: true, force: true }));
   const result = await app.request("GET", "/bubble-skin/partner/nova");
   assert.equal(result.status, 200); assert.notEqual(result.body.skin, "polka");
   assert.equal((await app.request("GET", "/bubble-skin/partner/nova")).body.skin, result.body.skin);
   assert.equal(app.store.getPartnerSkinBook("nova").skin, result.body.skin);
-  assert.equal(app.store.getPartnerSkinBook("other").skin, "bear");
-  assert.equal(app.store.getGlobalSettings().bubbleSkin, "star");
+  // 别的伙伴那一侧不被带动（bear 已随下拉的 9 款下架，换一款还在的做陪衬）
+  assert.equal(app.store.getPartnerSkinBook("other").skin, "sakura");
+  assert.equal(app.store.getGlobalSettings().bubbleSkin, "neon");
   assert.equal(app.models.calls.length, 0); assert.equal("moodId" in result.body, false);
 });
 test("真apply会持久化旧账的计时补齐，后续轮询不会不断重置起点", async t => {

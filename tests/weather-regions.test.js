@@ -26,6 +26,18 @@ test("省级：表里出现过的省份，去重保序", () => {
   assert.equal(new Set(provinces).size, provinces.length, "同一个省不该出现两次");
 });
 
+test("台湾省：进得了省份下拉，一路能选到区县（与港澳同为省级单条）", () => {
+  assert.ok(provinceOptions().includes("台湾省"));
+  assert.deepEqual(cityOptions("台湾省"), ["台湾省"]);
+  const districts = districtOptions("台湾省", "台湾省");
+  assert.equal(districts.length, 1);
+  assert.equal(districts[0].code, "710000");
+  const region = getAdministrativeRegion("710000");
+  assert.ok(Number.isFinite(region.latitude) && Number.isFinite(region.longitude));
+  // 港澳在表里是 810000/820000，台湾也该跟它们同一档
+  assert.ok(getAdministrativeRegion("810000") && getAdministrativeRegion("820000"));
+});
+
 test("生活城市候选：按市去重，附省份标签而不返回区县或坐标", () => {
   const choices = lifeCityOptions();
   const matches = choices.filter(row => row.city === "成都市");
@@ -64,6 +76,17 @@ test("regionOptions 按参数给对层级", () => {
 test("地名拼法：省市区三段，认得出来的就是它", () => {
   const region = getAdministrativeRegion("510107");
   assert.equal(formatAdministrativeRegion(region), "四川省 成都市 武侯区");
+});
+
+test("地名拼法：省市县同名只留一层（台港澳在国标上只有省级一条）", () => {
+  assert.equal(formatAdministrativeRegion(getAdministrativeRegion("710000")), "台湾省");
+  assert.equal(formatAdministrativeRegion(getAdministrativeRegion("810000")), "香港特别行政区");
+  assert.equal(formatAdministrativeRegion(getAdministrativeRegion("820000")), "澳门特别行政区");
+  assert.equal(
+    formatAdministrativeRegion({ province: "北京市", city: "北京市", district: "东城区" }),
+    "北京市 东城区",
+  );
+  assert.equal(formatAdministrativeRegion(null), "");
 });
 
 test("index 接了这条路由，且认得的代码由后端改写成表里的地名", () => {

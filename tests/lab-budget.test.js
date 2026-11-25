@@ -20,9 +20,11 @@ test("配比实验：四类配额都写在同一个常量块里，改一行就�
 });
 
 test("配比实验：视频与新闻的配额取用户设置和配比表里较小的那个", () => {
-  assert.match(app, /function videoQuota\(now = new Date\(\)\) \{\s*const shared = videoShareLimit\(store\.getGlobalSettings\(\)\.videoShareMaxPerDay\);/,
-    "视频配额先读用户设置");
-  assert.match(app, /const limit = LAB_BUDGET\.enabled \? Math\.min\(shared, LAB_BUDGET\.video\) : shared;/,
+  assert.match(app, /function videoQuota\(now = new Date\(\)\) \{[\s\S]{0,200}?videoShareEffectiveMaxPerDay\(store\.getGlobalSettings\(\)\.videoShareMaxPerDay\);/,
+    "视频配额以用户设置为输入");
+  assert.match(app, /function videoShareEffectiveMaxPerDay\(setting = store\.getGlobalSettings\(\)\.videoShareMaxPerDay\) \{\s*const shared = videoShareLimit\(setting\);/,
+    "取用户设置与配比表里较小的那个");
+  assert.match(app, /return LAB_BUDGET\.enabled \? Math\.min\(shared, LAB_BUDGET\.video\) : shared;/,
     "实验开着才压上限，她自己调低照样生效");
   assert.match(app, /const shared = newsShareLimit\(store\.getGlobalSettings\(\)\.newsShareMaxPerDay\);/,
     "新闻配额同样以用户设置为准");

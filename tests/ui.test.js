@@ -1627,7 +1627,7 @@ test("时间感是茶话会自己带的，不靠别的插件", () => {
   assert.match(app, /currentMessageId: currentMessageId \|\| repliedTo/, "普通回复要锚定正在接的话");
   assert.match(app, /messages: store\.getThread\(agentId\)\.messages/, "拿的是这个人自己的聊天记录");
   assert.match(app, /timeText,/, "得递进提示词");
-  assert.match(promptSrc, /if \(timeText && timeText\.trim\(\)\) blocks\.push/, "时间算「当下」，排在人设前面");
+  assert.match(promptSrc, /if \(timeText && timeText\.trim\(\)\) live\.push/, "时间算「当下」，收在易变段末尾");
   // 时间不是一个数字报出来就行，得把「距上次多久、今天她说没说话」一并递过去
   assert.match(app, /userName: USER_NAME/);
   // 困不困按ta自己那份作息算，不另设一套
